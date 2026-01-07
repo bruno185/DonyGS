@@ -1,0 +1,542 @@
+/* OLD CODE from GS3Dp.cc */
+
+
+/* Archived: fitModelToView (removed from GS3Dp.cc)
+ * void fitModelToView(Model3D* model, ObserverParams* params, float target_max_dim, float margin, float percentile, int center_flag)
+ *
+ * Archived here per request. This copy preserves the behavior that computes a centroid
+ * and stores it in the model struct without modifying vertex coordinates or params->distance.
+ */
+void fitModelToView(Model3D* model, ObserverParams* params, float target_max_dim, float margin, float percentile, int center_flag) {
+    if (model == NULL || params == NULL) return;
+    VertexArrays3D* vtx = &model->vertices;
+    int n = vtx->vertex_count; if (n <= 0) return;
+
+    double cx = 0.0, cy = 0.0, cz = 0.0; int count = 0;
+    for (int i = 0; i < n; ++i) {
+        Fixed32 xi = model->orig_x ? model->orig_x[i] : vtx->x[i];
+        Fixed32 yi = model->orig_y ? model->orig_y[i] : vtx->y[i];
+        Fixed32 zi = model->orig_z ? model->orig_z[i] : vtx->z[i];
+        cx += FIXED_TO_FLOAT(xi); cy += FIXED_TO_FLOAT(yi); cz += FIXED_TO_FLOAT(zi);
+        count++;
+    }
+    if (count > 0) {
+        cx /= (double)count; cy /= (double)count; cz /= (double)count;
+        model->auto_center_x = FLOAT_TO_FIXED((float)cx);
+        model->auto_center_y = FLOAT_TO_FIXED((float)cy);
+        model->auto_center_z = FLOAT_TO_FIXED((float)cz);
+        model->auto_centered = 0; // original implementation did not mark coords as modified
+    }
+}
+
+
+/**
+ * painter_newell_sanchaV2 -- Variant using optimized bubble sort
+ * --------------------------------------------------------------
+ * Behavior:
+ *  - Semantically identical to `painter_newell_sancha()` but uses an optimized
+ *    bubble-sort style outer loop (decreasing upper bound + early exit on sorted)
+ *    as requested (see pseudo-code in the change request).
+ *  - The pairwise comparison performed for deciding swaps is the same sequence of
+ *    tests (1..7) used by the original algorithm (depth, bbox X/Y, plane tests).
+ *
+ * Rationale:
+ *  - This variant attempts to minimize the number of pair tests by reducing the
+ *    inner loop range as larger elements bubble toward the end of the array; it
+ *    also exits early if no swaps occur in a pass.
+ */
+void painter_newell_sanchaV2(Model3D* model, int face_count) {
+    if (use_float_painter) { painter_newell_sancha_float(model, face_count); return; }
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int i, j;
+    Fixed32* face_zmean = faces->z_mean;
+    if (!face_zmean) return; // safety
+
+    // Step 1: initial ordering by z_mean (descending stable sort on visible subset)
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i]) faces->sorted_face_indices[visible_count++] = i;
+        }
+        int tail = visible_count;
+        for (i = 0; i < face_count; ++i) {
+            if (!faces->display_flag[i]) faces->sorted_face_indices[tail++] = i;
+        }
+    } else {
+        for (i = 0; i < face_count; ++i) faces->sorted_face_indices[i] = i;
+    }
+    qsort_faces_ptr_for_cmp = faces;
+    qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
+    qsort_faces_ptr_for_cmp = NULL;
+
+    // Prepare caches and diagnostic buffers (same strategy as V1)
+    typedef struct { int face1; int face2; } OrderedPair;
+    int ordered_pairs_capacity = face_count * 4;
+    OrderedPair* ordered_pairs = NULL;
+    if (ordered_pairs_capacity > 0) {
+        ordered_pairs = (OrderedPair*)malloc(ordered_pairs_capacity * sizeof(OrderedPair));
+        if (!ordered_pairs) ordered_pairs_capacity = 0;
+    }
+    int ordered_pairs_count = 0;
+
+    if (inconclusive_pairs) { free(inconclusive_pairs); inconclusive_pairs = NULL; }
+    inconclusive_pairs_capacity = face_count * 4;
+    if (inconclusive_pairs_capacity > 0) {
+        inconclusive_pairs = (InconclusivePair*)malloc(inconclusive_pairs_capacity * sizeof(InconclusivePair));
+        if (!inconclusive_pairs) inconclusive_pairs_capacity = 0;
+    }
+    inconclusive_pairs_count = 0;
+
+    // Optimized bubble-like passes: outer bound decreases each pass, early exit when sorted
+    int swap_count = 0;
+    for (int pass = visible_count - 1; pass >= 1; --pass) {
+        int tableau_trie = 1; // true: no swaps so far in this pass
+        for (j = 0; j <= pass - 1; ++j) {
+            int f1 = faces->sorted_face_indices[j];
+            int f2 = faces->sorted_face_indices[j+1];
+
+            // Skip pairs already declared ordered
+            int already_ordered = 0;
+            for (int p = 0; p < ordered_pairs_count; ++p) {
+                if ((ordered_pairs[p].face1 == f1 && ordered_pairs[p].face2 == f2) ||
+                    (ordered_pairs[p].face1 == f2 && ordered_pairs[p].face2 == f1)) { already_ordered = 1; break; }
+            }
+            if (already_ordered) continue;
+
+            // --- Test 1: Depth overlap (cheap) ---
+            if (faces->z_max[f2] <= faces->z_min[f1]) continue;
+            if (faces->z_max[f1] <= faces->z_min[f2]) {
+                // definite swap
+                int tmp = faces->sorted_face_indices[j]; faces->sorted_face_indices[j] = faces->sorted_face_indices[j+1]; faces->sorted_face_indices[j+1] = tmp;
+                tableau_trie = 0; swap_count++;
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) { ordered_pairs[ordered_pairs_count].face1 = f2; ordered_pairs[ordered_pairs_count].face2 = f1; ordered_pairs_count++; }
+                continue;
+            }
+
+            // --- Test 2: X bbox separation ---
+            int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+            int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+            if (maxx1 <= minx2 || maxx2 <= minx1) continue;
+
+            // --- Test 3: Y bbox separation ---
+            if (maxy1 <= miny2 || maxy2 <= miny1) continue;
+
+            // --- Tests 4..7: plane-based robust checks (copied from painter_newell_sancha) ---
+            int n1 = faces->vertex_count[f1];
+            int n2 = faces->vertex_count[f2];
+            int offset1 = faces->vertex_indices_ptr[f1];
+            int offset2 = faces->vertex_indices_ptr[f2];
+            int k;
+            Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+            Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
+            Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+
+            int obs_side1 = 0; int obs_side2 = 0; int side; int all_same_side; int all_opposite_side;
+
+            // Test 4
+            obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else goto skipT4V2;
+            all_same_side = 1;
+            for (k=0; k<n2; k++) {
+                int v = faces->vertex_indices_buffer[offset2+k]-1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d1;
+                if  (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+                if (obs_side1 != side) { all_same_side = 0; break; }
+            }
+            if (all_same_side) continue;
+            skipT4V2: ;
+
+            // Test 5
+            obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else goto skipT5V2;
+            all_opposite_side = 1;
+            for (k=0; k<n1; k++) {
+                int v = faces->vertex_indices_buffer[offset1+k]-1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d2;
+                if  (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+                if (obs_side2 == side) { all_opposite_side = 0; break; }
+            }
+            if (all_opposite_side) continue;
+            skipT5V2: ;
+
+            // Test 6
+            obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else goto skipT6V2;
+            all_opposite_side = 1;
+            for (k=0; k<n2; k++) {
+                int v = faces->vertex_indices_buffer[offset2+k]-1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d1;
+                if  (acc > (Fixed64)epsilon) side = 1; else if  (acc < -(Fixed64)epsilon) side = -1; else continue;
+                if (obs_side1 == side) { all_opposite_side = 0; break; }
+            }
+            if (all_opposite_side) {
+                // swap
+                int tmp = faces->sorted_face_indices[j]; faces->sorted_face_indices[j] = faces->sorted_face_indices[j+1]; faces->sorted_face_indices[j+1] = tmp;
+                tableau_trie = 0; swap_count++;
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) { ordered_pairs[ordered_pairs_count].face1 = f2; ordered_pairs[ordered_pairs_count].face2 = f1; ordered_pairs_count++; }
+                continue;
+            }
+            skipT6V2: ;
+
+            // Test 7
+            obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else goto skipT7V2;
+            all_same_side = 1;
+            for (k=0; k<n1; k++) {
+                int v = faces->vertex_indices_buffer[offset1+k]-1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d2;
+                if  (acc > (Fixed64)epsilon) side = 1; else if  (acc < -(Fixed64)epsilon) side = -1; else continue;
+                if (obs_side2 != side) { all_same_side = 0; break; }
+            }
+            if (all_same_side) {
+                int tmp = faces->sorted_face_indices[j]; faces->sorted_face_indices[j] = faces->sorted_face_indices[j+1]; faces->sorted_face_indices[j+1] = tmp;
+                tableau_trie = 0; swap_count++;
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) { ordered_pairs[ordered_pairs_count].face1 = f2; ordered_pairs[ordered_pairs_count].face2 = f1; ordered_pairs_count++; }
+                continue;
+            }
+            skipT7V2: ;
+
+            // Non-conclusive: record and avoid re-testing
+            if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) {
+                inconclusive_pairs[inconclusive_pairs_count].face1 = f1; inconclusive_pairs[inconclusive_pairs_count].face2 = f2; inconclusive_pairs_count++;
+            }
+            if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) { ordered_pairs[ordered_pairs_count].face1 = f2; ordered_pairs[ordered_pairs_count].face2 = f1; ordered_pairs_count++; }
+
+        } // end inner for j
+        if (tableau_trie) break; // early exit, already sorted
+    } // end passes
+    printf("inconclusive pairs: %d, total swaps: %d\n", inconclusive_pairs_count, swap_count);
+    keypress();
+
+    if (ordered_pairs) free(ordered_pairs);
+}
+
+
+
+/**
+ * painter_newell_sanchaV3 -- Variant using all-pairs double loop
+ * ---------------------------------------------------------------
+ * Behavior:
+ *  - Same semantics as `painter_newell_sancha()` but the correction phase is performed
+ *    by comparing each face to *all* subsequent faces using a nested double loop
+ *    (for i=0..N-2, for j=i+1..N-1). This implements a full pairwise pass instead
+ *    of adjacent-only bubble swaps.
+ *
+ * Rationale & tradeoffs:
+ *  - This approach can be more thorough (it directly compares distant elements),
+ *    but it does more pair tests (O(N^2) comparisons) and may be slower on large
+ *    models unless pruned by early rejection tests (depth/bbox) — the same tests
+ *    1..7 are used as in V1 for conclusive decisions.
+ *  - The function preserves diagnostic behavior: ordered_pairs and inconclusive_pairs
+ *    are used to avoid re-testing and to record ambiguous pairs.
+ */
+void painter_newell_sanchaV3(Model3D* model, int face_count) {
+    if (use_float_painter) { painter_newell_sancha_float(model, face_count); return; }
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int i, j;
+    Fixed32* face_zmean = faces->z_mean;
+    if (!face_zmean) return; // safety
+
+    // Initial ordering by z_mean (same as V1/V2)
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (i = 0; i < face_count; ++i) if (faces->display_flag[i]) faces->sorted_face_indices[visible_count++] = i;
+        int tail = visible_count;
+        for (i = 0; i < face_count; ++i) if (!faces->display_flag[i]) faces->sorted_face_indices[tail++] = i;
+    } else {
+        for (i = 0; i < face_count; ++i) faces->sorted_face_indices[i] = i;
+    }
+    qsort_faces_ptr_for_cmp = faces;
+    qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
+    qsort_faces_ptr_for_cmp = NULL;
+
+    // Prepare ordered_pairs cache and inconclusive buffer (same strategy as V1)
+    typedef struct { int face1; int face2; } OrderedPair;
+    int ordered_pairs_capacity = face_count * 4;
+    OrderedPair* ordered_pairs = NULL;
+    if (ordered_pairs_capacity > 0) {
+        ordered_pairs = (OrderedPair*)malloc(ordered_pairs_capacity * sizeof(OrderedPair));
+        if (!ordered_pairs) ordered_pairs_capacity = 0;
+    }
+    int ordered_pairs_count = 0;
+
+    if (inconclusive_pairs) { free(inconclusive_pairs); inconclusive_pairs = NULL; }
+    inconclusive_pairs_capacity = face_count * 4;
+    if (inconclusive_pairs_capacity > 0) {
+        inconclusive_pairs = (InconclusivePair*)malloc(inconclusive_pairs_capacity * sizeof(InconclusivePair));
+        if (!inconclusive_pairs) inconclusive_pairs_capacity = 0;
+    }
+    inconclusive_pairs_count = 0;
+
+    int swap_count = 0;
+
+    // All-pairs comparison: for each face i compare to all faces j > i
+    for (i = 0; i < visible_count - 1; ++i) {
+        for (j = i + 1; j < visible_count; ++j) {
+            int f1 = faces->sorted_face_indices[i];
+            int f2 = faces->sorted_face_indices[j];
+
+            // Skip if already known
+            int already_ordered = 0;
+            for (int p = 0; p < ordered_pairs_count; ++p) {
+                if ((ordered_pairs[p].face1 == f1 && ordered_pairs[p].face2 == f2) ||
+                    (ordered_pairs[p].face1 == f2 && ordered_pairs[p].face2 == f1)) { already_ordered = 1; break; }
+            }
+            if (already_ordered) continue;
+
+            // Quick rejects / accepts (Tests 1..3)
+            if (faces->z_max[f2] <= faces->z_min[f1]) continue; // f1 before f2, OK
+            if (faces->z_max[f1] <= faces->z_min[f2]) {
+                // definitive: f2 before f1 -> swap positions
+                int tmp = faces->sorted_face_indices[i]; faces->sorted_face_indices[i] = faces->sorted_face_indices[j]; faces->sorted_face_indices[j] = tmp;
+                swap_count++;
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) { ordered_pairs[ordered_pairs_count].face1 = f2; ordered_pairs[ordered_pairs_count].face2 = f1; ordered_pairs_count++; }
+                continue;
+            }
+            int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+            int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+            if (maxx1 <= minx2 || maxx2 <= minx1) continue;
+            if (maxy1 <= miny2 || maxy2 <= miny1) continue;
+
+            // Plane-based tests (4..7) copied from V1/V2
+            int n1 = faces->vertex_count[f1];
+            int n2 = faces->vertex_count[f2];
+            int offset1 = faces->vertex_indices_ptr[f1];
+            int offset2 = faces->vertex_indices_ptr[f2];
+            int k;
+            Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+            Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
+            Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+
+            int obs_side1 = 0; int obs_side2 = 0; int side; int all_same_side; int all_opposite_side;
+
+            // Test 4
+            obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else goto skipT4V3;
+            all_same_side = 1;
+            for (k = 0; k < n2; ++k) {
+                int v = faces->vertex_indices_buffer[offset2+k]-1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d1;
+                if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+                if (obs_side1 != side) { all_same_side = 0; break; }
+            }
+            if (all_same_side) continue;
+            skipT4V3: ;
+
+            // Test 5
+            obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else goto skipT5V3;
+            all_opposite_side = 1;
+            for (k = 0; k < n1; ++k) {
+                int v = faces->vertex_indices_buffer[offset1+k]-1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d2;
+                if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+                if (obs_side2 == side) { all_opposite_side = 0; break; }
+            }
+            if (all_opposite_side) continue;
+            skipT5V3: ;
+
+            // Test 6
+            obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else goto skipT6V3;
+            all_opposite_side = 1;
+            for (k = 0; k < n2; ++k) {
+                int v = faces->vertex_indices_buffer[offset2+k]-1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d1;
+                if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+                if (obs_side1 == side) { all_opposite_side = 0; break; }
+            }
+            if (all_opposite_side) {
+                // swap
+                int tmp = faces->sorted_face_indices[i]; faces->sorted_face_indices[i] = faces->sorted_face_indices[j]; faces->sorted_face_indices[j] = tmp;
+                swap_count++;
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) { ordered_pairs[ordered_pairs_count].face1 = f2; ordered_pairs[ordered_pairs_count].face2 = f1; ordered_pairs_count++; }
+                continue;
+            }
+            skipT6V3: ;
+
+            // Test 7
+            obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else goto skipT7V3;
+            all_same_side = 1;
+            for (k = 0; k < n1; ++k) {
+                int v = faces->vertex_indices_buffer[offset1+k]-1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d2;
+                if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+                if (obs_side2 != side) { all_same_side = 0; break; }
+            }
+            if (all_same_side) {
+                int tmp = faces->sorted_face_indices[i]; faces->sorted_face_indices[i] = faces->sorted_face_indices[j]; faces->sorted_face_indices[j] = tmp;
+                swap_count++;
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) { ordered_pairs[ordered_pairs_count].face1 = f2; ordered_pairs[ordered_pairs_count].face2 = f1; ordered_pairs_count++; }
+                continue;
+            }
+            skipT7V3: ;
+
+            // Non-conclusive: record and avoid re-testing
+            if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) { inconclusive_pairs[inconclusive_pairs_count].face1 = f1; inconclusive_pairs[inconclusive_pairs_count].face2 = f2; inconclusive_pairs_count++; }
+            if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) { ordered_pairs[ordered_pairs_count].face1 = f2; ordered_pairs[ordered_pairs_count].face2 = f1; ordered_pairs_count++; }
+
+        }
+    }
+
+    if (ordered_pairs) free(ordered_pairs);
+}
+
+
+        /* Smoke-test mode: run a small non-interactive test to validate auto-fit and key behavior */
+        if (argc > 1 && strcmp(argv[1], "--smoke-test") == 0) {
+            printf("Running smoke test...\n");
+            /* Create a minimal OBJ file */
+            const char* testfile = "smoke_test.obj";
+            FILE* tf = fopen(testfile, "w");
+            if (tf == NULL) {
+                printf("Failed to create %s\n", testfile);
+                return 1;
+            }
+            fputs("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", tf);
+            fclose(tf);
+
+            int res = loadModel3D(model, testfile);
+            if (res != 0) {
+                printf("loadModel3D failed (%d)\n", res);
+                return 1;
+            }
+            printf("auto_fit_ready=%d\n", model->auto_fit_ready);
+            printf("auto_suggested_distance=%.4f\n", FIXED_TO_FLOAT(model->auto_suggested_distance));
+            printf("auto_suggested_proj_scale=%.2f\n", FIXED_TO_FLOAT(model->auto_suggested_proj_scale));
+
+            /* Simulate the '+' handler */
+            Fixed32 cur = s_global_proj_scale_fixed;
+            Fixed32 mulp = FLOAT_TO_FIXED(1.1f);
+            Fixed32 plus_scale = FIXED_MUL_64(cur, mulp);
+            printf("scale_before=%.2f scale_after_plus=%.2f\n", FIXED_TO_FLOAT(cur), FIXED_TO_FLOAT(plus_scale));
+
+            /* Simulate the '-' handler */
+            Fixed32 mulm = FLOAT_TO_FIXED(0.9f);
+            Fixed32 minus_scale = FIXED_MUL_64(cur, mulm);
+            printf("scale_after_minus=%.2f\n", FIXED_TO_FLOAT(minus_scale));
+
+            /* Simulate A/Z on distance */
+            Fixed32 dcur = model->auto_suggested_distance;
+            Fixed32 d_a = dcur - (dcur / 10); // A (decrease by 10%)
+            Fixed32 d_z = dcur + (dcur / 10); // Z (increase by 10%)
+            printf("distance_before=%.4f distance_A=%.4f distance_Z=%.4f\n", FIXED_TO_FLOAT(dcur), FIXED_TO_FLOAT(d_a), FIXED_TO_FLOAT(d_z));
+
+            printf("Smoke test completed.\n");
+            return 0;
+        }
+
+
+        
+// Lightweight wireframe processing: only transform & project vertices, set face visibility
+// No per-face depth calculations or sorting performed here for maximum speed in wireframe mode
+segment "code11";
+void processModelWireframe(Model3D* model, ObserverParams* params, const char* filename) {
+    int i, j;
+    Fixed32 cos_h, sin_h, cos_v, sin_v, cos_w, sin_w;
+    Fixed32 x, y, z, zo, xo, yo;
+    Fixed32 inv_zo, x2d_temp, y2d_temp;
+
+    cos_h = cos_deg_int(params->angle_h);
+    sin_h = sin_deg_int(params->angle_h);
+    cos_v = cos_deg_int(params->angle_v);
+    sin_v = sin_deg_int(params->angle_v);
+    cos_w = cos_deg_int(params->angle_w);
+    sin_w = sin_deg_int(params->angle_w);
+
+    const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
+    const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
+    const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
+    const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
+    Fixed32 scale = s_global_proj_scale_fixed;
+    const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
+    const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
+    const Fixed32 distance = params->distance;
+
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 *x_arr = vtx->x, *y_arr = vtx->y, *z_arr = vtx->z;
+    Fixed32 *xo_arr = vtx->xo, *yo_arr = vtx->yo, *zo_arr = vtx->zo;
+    int *x2d_arr = vtx->x2d, *y2d_arr = vtx->y2d;
+    int vcount = vtx->vertex_count;
+
+    // Local copies for speed
+    FaceArrays3D* faces = &model->faces;
+    int *vertex_indices_buffer = faces->vertex_indices_buffer;
+    int *vertex_indices_ptr = faces->vertex_indices_ptr;
+    int *face_vertex_count = faces->vertex_count;
+
+    for (i = 0; i < vcount; i++) {
+        x = x_arr[i];
+        y = y_arr[i];
+        z = z_arr[i];
+        Fixed32 term1 = FIXED_MUL_64(x, cos_h_cos_v);
+        Fixed32 term2 = FIXED_MUL_64(y, sin_h_cos_v);
+        Fixed32 term3 = FIXED_MUL_64(z, sin_v);
+        zo = FIXED_ADD(FIXED_SUB(FIXED_SUB(FIXED_NEG(term1), term2), term3), distance);
+        if (zo > 0) {
+            // compute projected xy directly into x2d/y2d and store intermediate observer coords for depth tests
+            Fixed32 xo_local = FIXED_ADD(FIXED_NEG(FIXED_MUL_64(x, sin_h)), FIXED_MUL_64(y, cos_h));
+            Fixed32 yo_local = FIXED_ADD(FIXED_SUB(FIXED_NEG(FIXED_MUL_64(x, cos_h_sin_v)), FIXED_MUL_64(y, sin_h_sin_v)), FIXED_MUL_64(z, cos_v));
+            inv_zo = FIXED_DIV_64(scale, zo);
+            Fixed32 tmp_x = FIXED_ADD(FIXED_MUL_64(xo_local, inv_zo), centre_x_f);
+            Fixed32 tmp_y = FIXED_SUB(centre_y_f, FIXED_MUL_64(yo_local, inv_zo));
+            // apply screen rotation and round
+            x2d_arr[i] = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_SUB(FIXED_MUL_64(cos_w, FIXED_SUB(tmp_x, centre_x_f)), FIXED_MUL_64(sin_w, FIXED_SUB(centre_y_f, tmp_y))), centre_x_f));
+            y2d_arr[i] = FIXED_ROUND_TO_INT(FIXED_SUB(centre_y_f, FIXED_ADD(FIXED_MUL_64(sin_w, FIXED_SUB(tmp_x, centre_x_f)), FIXED_MUL_64(cos_w, FIXED_SUB(centre_y_f, tmp_y)))));
+            // Store observer-space coordinates so subsequent face tests see valid values
+            zo_arr[i] = zo;
+            xo_arr[i] = xo_local;
+            yo_arr[i] = yo_local;
+        } else {
+            // negative zo (behind camera) — mark as invalid projection and store zo<=0
+            zo_arr[i] = zo;
+            xo_arr[i] = 0;
+            yo_arr[i] = 0;
+            x2d_arr[i] = -1;
+            y2d_arr[i] = -1;
+        }
+    }
+
+    // Set simple visibility flag per face: visible if any vertex projected on-screen (x2d != -1)
+    for (i = 0; i < faces->face_count; ++i) {
+        int offset = vertex_indices_ptr[i];
+        int vcount_face = face_vertex_count[i];
+        int *indices_base = &vertex_indices_buffer[offset];
+        int visible = 0;
+        for (j = 0; j < vcount_face; ++j) {
+            int vi = indices_base[j] - 1;
+            if (vi >= 0 && vi < vcount && x2d_arr[vi] != -1) { visible = 1; break; }
+        }
+        faces->display_flag[i] = visible;
+        faces->sorted_face_indices[i] = i; // identity order; no sorting required
+    }
+}
