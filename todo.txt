@@ -1,9 +1,13 @@
 
+TODO:
 
 probleme de overlap : 
-avion, 110,20,0 (+ zoom) : o => 45 et 2 : overlap = NO : erreur !
+avion, 90,20,0 (+ zoom) : o => 45 et 2 : overlap = NO : erreur !
 avion, 110,20,0 (+ zoom) : o => 45 et 3 : overlap = YES : erreur !
 Enregistrer dans un fichier les coordonnees des faces du modele ?
 
 
+
+fixed:
 probleme fil de fer : à voir... solution provisoire : dans bigloop, faire un processModelFast(model, &params, filename);
+Solution  ==> modification de processModelFast : if framePolyOnly : pas de tri des faces. Et bigloop quand framePolyOnly = 0.

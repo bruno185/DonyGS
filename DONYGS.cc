@@ -2424,7 +2424,8 @@ void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char
     faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
 
     MoveTo(5, 195);
-    printf("Press any key to return\n");
+    
+    printf(" %d and %d overlap: %s", f1, f2, ov ? "YES" : "NO");
     keypress();
     endgraph();
     DoText();
