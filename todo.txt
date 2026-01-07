@@ -1,11 +1,9 @@
 
-TODO:
-
+fixed:
 probleme de overlap : 
 avion, 90,20,0 (+ zoom) : o => 45 et 2 : overlap = NO : erreur !
 avion, 110,20,0 (+ zoom) : o => 45 et 3 : overlap = YES : erreur !
 Enregistrer dans un fichier les coordonnees des faces du modele ?
-
 
 
 fixed:

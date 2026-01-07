@@ -86,6 +86,9 @@ static int framePolyOnly = 0; // Toggle: 1 = frame-only, 0 = fill+frame (default
 // - Drawing still checks `display_flag` and will skip culled faces; toggling happens at runtime
 //   via the `B` key in the UI when interacting with the program.
 static int cull_back_faces = 1; // default: enabled
+// 2D panning offsets (pixels) - used by drawing routines (frame-only, drawPolygons, drawFace)
+static int pan_dx = 0;
+static int pan_dy = 0;
 #define PAINTER_MODE_FAST 0
 #define PAINTER_MODE_FIXED 1
 #define PAINTER_MODE_FLOAT 2
@@ -2530,8 +2533,8 @@ void display_model_face_ids(Model3D* model, ObserverParams* params, const char* 
         if (min_x <= max_x && min_y <= max_y) {
             int center_x = (min_x + max_x) / 2;
             int center_y = (min_y + max_y) / 2;
-            int screenCx = screenScale * center_x;
-            int screenCy = center_y;
+            int screenCx = screenScale * (center_x + pan_dx);
+            int screenCy = center_y + pan_dy;
 
             char tmp[32];
             int len = snprintf(tmp, sizeof(tmp), "%d", f);
@@ -3880,35 +3883,35 @@ void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
     int first_vi = indices_base[0] - 1;
     int px = x2d[first_vi];
     int py = y2d[first_vi];
-    poly->polyPoints[0].h = mode / 320 * px;
-    poly->polyPoints[0].v = py;
+    poly->polyPoints[0].h = mode / 320 * (px + pan_dx);
+    poly->polyPoints[0].v = py + pan_dy;
     int min_x = px, max_x = px, min_y = py, max_y = py;
 
     for (int j = 1; j < vcount_face; ++j) {
         int vi = indices_base[j] - 1;
         px = x2d[vi];
         py = y2d[vi];
-        poly->polyPoints[j].h = mode / 320 * px;
-        poly->polyPoints[j].v = py;
+        poly->polyPoints[j].h = mode / 320 * (px + pan_dx);
+        poly->polyPoints[j].v = py + pan_dy;
         if (px < min_x) min_x = px;
         if (px > max_x) max_x = px;
         if (py < min_y) min_y = py;
         if (py > max_y) max_y = py;
     }
 
-    poly->polyBBox.h1 = min_x;
-    poly->polyBBox.v1 = min_y;
-    poly->polyBBox.h2 = max_x;
-    poly->polyBBox.v2 = max_y;
+    poly->polyBBox.h1 = min_x + pan_dx;
+    poly->polyBBox.v1 = min_y + pan_dy;
+    poly->polyBBox.h2 = max_x + pan_dx;
+    poly->polyBBox.v2 = max_y + pan_dy;
 
     int screenScale = mode / 320;
     int screenW = screenScale * (CENTRE_X * 2);
     int screenH = screenScale * (CENTRE_Y * 2);
 
-    int sc_min_x = screenScale * min_x;
-    int sc_max_x = screenScale * max_x;
-    int sc_min_y = screenScale * min_y;
-    int sc_max_y = screenScale * max_y;
+    int sc_min_x = screenScale * (min_x + pan_dx);
+    int sc_max_x = screenScale * (max_x + pan_dx);
+    int sc_min_y = (min_y + pan_dy);
+    int sc_max_y = (max_y + pan_dy);
     if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) {
         // Off-screen; nothing to draw
     } else {
@@ -4035,8 +4038,8 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
             int first_vi = indices_base[0] - 1;
             int x = x2d[first_vi];
             int y = y2d[first_vi];
-            poly->polyPoints[0].h = screenScale * x;
-            poly->polyPoints[0].v = y;
+            poly->polyPoints[0].h = screenScale * (x + pan_dx);
+            poly->polyPoints[0].v = y + pan_dy;
             min_x = max_x = x;
             min_y = max_y = y;
 
@@ -4045,24 +4048,24 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
                 int vi = indices_base[j] - 1;
                 x = x2d[vi];
                 y = y2d[vi];
-                poly->polyPoints[j].h = screenScale * x;
-                poly->polyPoints[j].v = y;
+                poly->polyPoints[j].h = screenScale * (x + pan_dx);
+                poly->polyPoints[j].v = y + pan_dy;
                 if (x < min_x) min_x = x;
                 if (x > max_x) max_x = x;
                 if (y < min_y) min_y = y;
                 if (y > max_y) max_y = y;
             }
 
-            poly->polyBBox.h1 = min_x;
-            poly->polyBBox.v1 = min_y;
-            poly->polyBBox.h2 = max_x;
-            poly->polyBBox.v2 = max_y;
+            poly->polyBBox.h1 = min_x + pan_dx;
+            poly->polyBBox.v1 = min_y + pan_dy;
+            poly->polyBBox.h2 = max_x + pan_dx;
+            poly->polyBBox.v2 = max_y + pan_dy;
 
-            // Bounding-box culling (convert to screen pixels)
-            int sc_min_x = screenScale * min_x;
-            int sc_max_x = screenScale * max_x;
-            int sc_min_y = screenScale * min_y;
-            int sc_max_y = screenScale * max_y;
+            // Bounding-box culling (convert to screen pixels, apply pan)
+            int sc_min_x = screenScale * (min_x + pan_dx);
+            int sc_max_x = screenScale * (max_x + pan_dx);
+            int sc_min_y = (min_y + pan_dy);
+            int sc_max_y = (max_y + pan_dy);
             if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) {
                 // Off-screen; skip drawing
             } else {
@@ -4149,16 +4152,16 @@ void frameInconclusivePairs(Model3D* model) {
             int first_vi = indices_base[0] - 1;
             int px = vtx->x2d[first_vi];
             int py = vtx->y2d[first_vi];
-            poly->polyPoints[0].h = screenScale * px;
-            poly->polyPoints[0].v = py;
+            poly->polyPoints[0].h = screenScale * (px + pan_dx);
+            poly->polyPoints[0].v = py + pan_dy;
             int min_x = px, max_x = px, min_y = py, max_y = py;
 
             for (int j = 1; j < vcount_face; ++j) {
                 int vi = indices_base[j] - 1;
                 px = vtx->x2d[vi];
                 py = vtx->y2d[vi];
-                poly->polyPoints[j].h = screenScale * px;
-                poly->polyPoints[j].v = py;
+                poly->polyPoints[j].h = screenScale * (px + pan_dx);
+                poly->polyPoints[j].v = py + pan_dy;
                 if (px < min_x) min_x = px;
                 if (px > max_x) max_x = px;
                 if (py < min_y) min_y = py;
@@ -4294,6 +4297,11 @@ static void show_help_pager(void) {
         "D: Inspect face ordering BEFORE selected face (misplaced faces shown in orange)",
         "S: Inspect faces AFTER selected face that should be BEFORE it (misplaced shown in pink)",
         "O: Check projected polygon overlap for two faces",
+        "E/e: Pan left (2D screen offset, 5 px)",
+        "R/r: Pan right (2D screen offset, 5 px)",
+        "T/t: Pan up (2D screen offset, 5 px)",
+        "Y/y: Pan down (2D screen offset, 5 px)",
+        "0: Reset pan to (0,0)",
         "L: Show model with face IDs centered on each face (label mode)",
         "F: Dump face equations to equ.csv (debug)",
         "N: Load new model",
@@ -4520,6 +4528,7 @@ segment "code22";
                 else if (painter_mode == PAINTER_MODE_FIXED) printf("    Painter mode: NORMAL (Fixed32/64)\n");
                 else printf("    Painter mode: FLOAT (float-based)\n\n");
                 printf("    Back-face culling: %s\n", cull_back_faces ? "ON" : "OFF");
+                printf("    Pan offset: (%d, %d)\n", pan_dx, pan_dy);
                 printf ("Processing time: %d ticks (1/60 sec.)\n", last_process_time_end - last_process_time_start);
                 printf("===================================\n");
                 printf("\n");
@@ -4527,10 +4536,11 @@ segment "code22";
                 keypress();
                 goto loopReDraw;
 
-            case 82:  // 'R' - revert auto-scale / auto-fit
+            case 82:  // 'R' - pan right (was revert; revert disabled)
             case 114: // 'r'
-                /* Revert disabled: no action performed on 'r'/'R' */
-                goto bigloop;
+                pan_dx += 10; // move right by 10 pixels
+                printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
+                goto loopReDraw;
 
             case 43:  // '+' - increase projection scale by 10% (applies to current scale)
             case 61:  // '=' also acts as '+' on some keyboards
@@ -4613,6 +4623,30 @@ segment "code22";
             case 120: // 'x'
                 params.angle_w = normalize_deg(params.angle_w - 10);
                 goto bigloop;
+
+            /* 2D panning: E=left, R=right (R replaced revert), T=up, Y=down (and lowercase) */
+            case 69: /* 'E' */
+            case 101: /* 'e' */
+                pan_dx -= 10; /* pan left */
+                printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
+                goto loopReDraw;
+
+            case 84: /* 'T' */
+            case 116: /* 't' */
+                pan_dy -= 10; /* pan up = decrease Y */
+                printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
+                goto loopReDraw;
+
+            case 89: /* 'Y' */
+            case 121: /* 'y' */
+                pan_dy += 10; /* pan down = increase Y */
+                printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
+                goto loopReDraw;
+
+            case 48: /* '0' - reset pan */
+                pan_dx = 0; pan_dy = 0;
+                printf("Pan reset -> (%d,%d)\n", pan_dx, pan_dy);
+                goto loopReDraw;
         
             case 67:  // 'C' - toggle color palette display
             case 99:  // 'c'
@@ -4708,6 +4742,8 @@ case 98:  // 'b'
             case 110: // 'n'
                 // Reset painter mode to FAST when loading a new model
                 painter_mode = PAINTER_MODE_FAST;
+                // Reset 2D pan offsets when loading a new model
+                pan_dx = 0; pan_dy = 0;
                 destroyModel3D(model);
                 goto newmodel;
 
