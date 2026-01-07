@@ -10,3 +10,21 @@ fixed:
 probleme fil de fer : à voir... solution provisoire : dans bigloop, faire un processModelFast(model, &params, filename);
 Solution  ==> modification de processModelFast : if framePolyOnly : pas de tri des faces. Et bigloop quand framePolyOnly = 0.
 
+TODO:
+avec les angle 350 / 50, avion, les faces 3 et 44 sont en overlap, et sont inversées suivant le test after.
+
+IA : 
+ourquoi (brièvement) 💡
+Si tu compares A,B et B,C avec des tests décisifs (→ A<B et B<C), puis A vs C est inconclusif et tu appliques Zmin pour trancher, tu peux obtenir C<A par Zmin.
+Résultat : A<B, B<C, C<A → cycle (non‑transitif).
+Autrement dit, mélanger des relations « décidées » et des tie‑breakers locaux ne garantit pas la transitivité du comparateur global.
+Solution recommandée 🔧
+Construire d’abord un graphe dirigé à partir des relations décisives (arêtes f1→f2 quand test dit « f1 avant f2 »).
+Tenter un tri topologique (Kahn) sur ce graphe :
+si acyclique → ordre compatible avec toutes relations décisives ;
+si cycle détecté → résoudre le cycle en orientant/arbitrant les arêtes du cycle selon Zmin (ou une heuristique déterministe), puis relancer le topo.
+Ceci garantit qu’on respecte prioritairement les relations décidées et qu’on n’introduit pas d’ordre contradictoire arbitraire.
+Proposition d’implémentation
+J’implémente le pipeline : construire graphe → topo → detection de cycles → résolution par Zmin → topo final, avec logs (mode debug).
+Optionnel : un mode « agressif » qui applique ensuite swaps adjacents pour rapprocher/corriger l’ordre effectif dans la structure existante.
+Tu veux que je commence par l’implémentation du tri

@@ -758,9 +758,7 @@ void painter_newell_sancha_fast(Model3D* model, int face_count) {
     qsort_faces_ptr_for_cmp = faces;
     qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
     qsort_faces_ptr_for_cmp = NULL;
-
 }
-
 
 void debug_two_faces(Model3D* model, int f1, int f2) {
     startgraph(mode);
@@ -918,6 +916,11 @@ void painter_newell_sancha(Model3D* model, int face_count) {
             debug_two_faces(model, f1, f2);
             }
 
+            if ((f1 == 3 && f2 == 44) || (f1 == 44 && f2 == 3)) {
+                printf("Debug breakpoint on faces 3 and 44\n");
+                keypress();
+            }
+
             // Skip pairs already declared ordered by previous swaps or tests.
             // ordered_pairs stores definitive relations discovered earlier in the pass to
             // avoid repeated work (e.g., if we previously determined f2 < f1 we won't re-evaluate).
@@ -960,13 +963,7 @@ void painter_newell_sancha(Model3D* model, int face_count) {
             // Similarly, if separated on Y, faces do not overlap and no swap is needed.
             if (maxy1 <= miny2 || maxy2 <= miny1) continue; // separated on Y
 
-            /* Fast 2D overlap test (strict: touching = NON-overlap)
-             * Replace inline logic with call to the existing helper. If the
-             * projected polygons do NOT overlap, skip plane tests and continue. */
-            if (!projected_polygons_overlap(model, f1, f2)) { 
-                //if (!PERFORMANCE_MODE) printf("[DEBUG] painter_newell_sancha: faces %d and %d have no 2D overlap -> skipping pair\n", f1, f2); 
-                continue; }
-                //else printf("[DEBUG] painter_newell_sancha: faces %d and %d have 2D overlap -> continuing tests\n", f1, f2);
+
 
             // Use cached plane normals and d terms computed in calculateFaceDepths
             int n1 = faces->vertex_count[f1];
