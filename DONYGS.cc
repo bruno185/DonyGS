@@ -2099,10 +2099,10 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
         }
     }
 
-    printf("%d \"before\" faces checked : bbox_skipped=%d ; SHOULD_BE_BEFORE(-1): %d ;  SHOULD_BE_AFTER(+1): %d (misplaced: %d) ; INCONCLUSIVE: %d\n",
-           checked, bbox_skipped, rel_neg, rel_pos, misplaced_count, rel_zero);
+    printf("%d \"before\" faces (total): checked=%d ; bbox_skipped=%d ; should_be_before(-1): %d ;  should_be_after(+1): %d (misplaced: %d) ; inconclusive: %d\n",
+           pos, checked, bbox_skipped, rel_neg, rel_pos, misplaced_count, rel_zero);
 
-    printf("==> %d misplaced faces relative to face %d : ", misplaced_count, target_face);
+    printf("%d misplaced faces relative to face %d : ", misplaced_count, target_face);
     for (int i = 0; i < misplaced_count; ++i) {
         int f = misplaced[i];
         // Find position of the misplaced face in the sorted list (1-based for readability)
@@ -2114,7 +2114,27 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
         else printf("%d (pos=?)", f);
         if (i < misplaced_count - 1) printf(",");
     }
-    printf("\n\n");
+    /* Report overlapping subset among misplaced faces (global summary) */
+    int overlap_count = 0;
+    int *overlaps = NULL;
+    if (misplaced_count > 0) {
+        overlaps = (int*)malloc(sizeof(int) * misplaced_count);
+        for (int i = 0; i < misplaced_count; ++i) {
+            int f = misplaced[i];
+            if (projected_polygons_overlap(model, f, target_face)) overlaps[overlap_count++] = f;
+        }
+    }
+    printf("\n");
+    if (overlap_count > 0) {
+        printf("Overlap with target: %d face(s):", overlap_count);
+        for (int i = 0; i < overlap_count; ++i) printf(" %d", overlaps[i]);
+        printf("\n");
+    } else {
+        printf("Overlap with target: none\n");
+    }
+    if (overlaps) free(overlaps);
+
+    printf("\n");
     keypress();
 
     // For each misplaced face, evaluate tests 1..7 and display which succeeded/failed/inconclusive
@@ -2170,7 +2190,7 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
         if (incon_count == 0) strncpy(incon_list, "(none)", sizeof(incon_list));
 
         printf("Face %d: BEFORE tests: %s; AFTER tests: %s; inconclusive: %s\n", f, before_list, after_list, incon_list);
-
+        
         // Conclusion lines (keep existing style)
         if (after_count == 0 && before_count == 0) {
             printf("  Overall: inconclusive (no decisive tests)\n");
@@ -2208,7 +2228,7 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     drawFace(model, target_face, 10, 1);
 
     MoveTo(5, 195);
-    printf("%d face(s) should be before face %d\n", misplaced_count, target_face);
+    printf("%d face(s) should be after face %d\n", misplaced_count, target_face);
     keypress();
     endgraph();
     DoText();
@@ -2260,7 +2280,7 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     for (int i = 0; i < face_count; ++i) if (faces->sorted_face_indices[i] == target_face) { pos = i; break; }
     if (pos < 0) { printf("Selected face is not in sorted list\n"); cull_back_faces = old_cull; return; }
 
-    int* after_list = (int*)malloc(face_count * sizeof(int)); int after_count = 0;
+    int* misplaced = (int*)malloc(face_count * sizeof(int)); int misplaced_count = 0;
     int checked = 0, rel_neg = 0, rel_pos = 0, rel_zero = 0, bbox_skipped = 0;
     for (int i = pos + 1; i < face_count; ++i) {
         int f = faces->sorted_face_indices[i];
@@ -2273,26 +2293,49 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
         checked++;
         if (rel == -1) rel_neg++; else if (rel == 1) rel_pos++; else rel_zero++;
         if (rel == -1) { // f should be before target -> misplaced
-            after_list[after_count++] = f;
+            misplaced[misplaced_count++] = f;
         }
     }
-    printf("Summary (after): checked %d faces, bbox_skipped=%d. Tests => SHOULD_BE_BEFORE(-1, misplaced:%d): %d, SHOULD_BE_AFTER(+1): %d, INCONCLUSIVE: %d\n", checked, bbox_skipped, after_count, rel_neg, rel_pos, rel_zero);
 
-    if (after_count == 0) {
-        printf("No misplaced faces found after face %d\n", target_face);
-        printf("Press any key to continue\n");
-        keypress();
-        free(after_list);
-        cull_back_faces = old_cull;
-        return;
+    printf("%d \"before\" faces (total): checked=%d ; bbox_skipped=%d ; should_be_before(-1): %d ;  should_be_after(+1): %d (misplaced: %d) ; inconclusive: %d\n",
+           pos, checked, bbox_skipped, rel_neg, rel_pos, misplaced_count, rel_zero);
+
+    printf("%d misplaced faces relative to face %d : ", misplaced_count, target_face);
+    for (int i = 0; i < misplaced_count; ++i) {
+        int f = misplaced[i];
+        int pos_in_sorted = -1;
+        for (int si = 0; si < faces->face_count; ++si) {
+            if (faces->sorted_face_indices[si] == f) { pos_in_sorted = si; break; }
+        }
+        if (pos_in_sorted >= 0) printf("%d (pos=%d)", f, pos_in_sorted + 1);
+        else printf("%d (pos=?)", f);
+        if (i < misplaced_count - 1) printf(",");
     }
+    printf("\n");
 
-    printf("==> %d faces after face %d that should be BEFORE it: ", after_count, target_face);
-    for (int i = 0; i < after_count; ++i) { printf(" %d", after_list[i]); if (i < after_count - 1) printf(","); }
-    printf("\n\n");
+    /* Report overlapping subset among the misplaced list (global summary) */
+    int overlap_count = 0;
+    int *overlaps = NULL;
+    if (misplaced_count > 0) {
+        overlaps = (int*)malloc(sizeof(int) * misplaced_count);
+        for (int i = 0; i < misplaced_count; ++i) {
+            int f = misplaced[i];
+            if (projected_polygons_overlap(model, f, target_face)) overlaps[overlap_count++] = f;
+        }
+    }
+    if (overlap_count > 0) {
+        printf("Overlap with target: %d face(s):", overlap_count);
+        for (int i = 0; i < overlap_count; ++i) printf(" %d", overlaps[i]);
+        printf("\n");
+    } else {
+        printf("Overlap with target: none\n");
+    }
+    if (overlaps) free(overlaps);
+    printf("\n");
+    keypress();
 
-    for (int ai = 0; ai < after_count; ++ai) {
-        int f = after_list[ai];
+    for (int ai = 0; ai < misplaced_count; ++ai) {
+        int f = misplaced[ai];
         // Quick bbox rejection: if separated on X or Y, skip detailed tests
         if (faces->maxx[f] <= faces->minx[target_face] || faces->maxx[target_face] <= faces->minx[f]
             || faces->maxy[f] <= faces->miny[target_face] || faces->maxy[target_face] <= faces->miny[f]) {
@@ -2337,8 +2380,8 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
         }
     }
 
-    // Always offer a preview (even if no misplaced faces found)
-    printf("Press a key to preview model with highlight selected and misplaced faces (if any).\n");
+    // Offer a preview (always, as in inspect_faces_before)
+    printf("\nPress a key to preview model with highlight selected and misplaced faces (if any).\n");
     keypress();
     startgraph(mode);
 
@@ -2350,16 +2393,17 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     // Wireframe preview: handled via the `framePolyOnly` flag and `drawPolygons()` (no separate `processModelWireframe()` function)
     drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
 
-    for (int i = 0; i < after_count; ++i) {
-        int f = after_list[i];
+    for (int i = 0; i < misplaced_count; ++i) {
+        int f = misplaced[i];
         faces->display_flag[f] = 1;
         drawFace(model, f, 12, 0);
     }
     faces->display_flag[target_face] = 1;
     drawFace(model, target_face, 10, 1);
 
+
     MoveTo(5, 195);
-    printf("Press any key to return\n");
+    printf("%d face(s) should be before face %d\n", misplaced_count, target_face);
     keypress();
     endgraph();
     DoText();
@@ -2367,7 +2411,7 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     framePolyOnly = old_frame;
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
-    free(after_list);
+    free(misplaced);
     cull_back_faces = old_cull;
 }
 
