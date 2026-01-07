@@ -1893,15 +1893,22 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     /* Containment tests: only check if candidate point lies inside the other's bbox first
      * (cheap) before doing the full ray-cast in point_in_poly_int. This skips expensive
      * loops for points obviously outside the other polygon's bbox. */
-    int v1 = faces->vertex_indices_buffer[off1] - 1;
-    int px = vtx->x2d[v1], py = vtx->y2d[v1];
-    if (!(px < minx2 || px > maxx2 || py < miny2 || py > maxy2)) {
+    // Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
+    // This avoids missing a containment when the polygon's first vertex lies on a shared
+    // boundary point (touching) which is treated as outside.
+    for (int ii = 0; ii < n1; ++ii) {
+        int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
+        if (vid < 0 || vid >= vtx->vertex_count) continue;
+        int px = vtx->x2d[vid], py = vtx->y2d[vid];
+        if (px < minx2 || px > maxx2 || py < miny2 || py > maxy2) continue;
         if (point_in_poly_int(px, py, faces, vtx, f2, n2)) return 1;
     }
 
-    int v2 = faces->vertex_indices_buffer[off2] - 1;
-    px = vtx->x2d[v2]; py = vtx->y2d[v2];
-    if (!(px < minx1 || px > maxx1 || py < miny1 || py > maxy1)) {
+    for (int jj = 0; jj < n2; ++jj) {
+        int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
+        if (vid < 0 || vid >= vtx->vertex_count) continue;
+        int px = vtx->x2d[vid], py = vtx->y2d[vid];
+        if (px < minx1 || px > maxx1 || py < miny1 || py > maxy1) continue;
         if (point_in_poly_int(px, py, faces, vtx, f1, n1)) return 1;
     }
     return 0;
@@ -2371,6 +2378,7 @@ segment "code23";
 void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char* filename) {
     if (!model || !params) return;
     FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
     int face_count = faces->face_count;
     if (face_count <= 0) { printf("No faces in model\n"); return; }
 
@@ -2423,10 +2431,47 @@ void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char
     // restore (though we restore all flags later from backup)
     faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
 
-    MoveTo(5, 195);
-    
-    printf(" %d and %d overlap: %s", f1, f2, ov ? "YES" : "NO");
-    keypress();
+    MoveTo(3, 185);
+    printf("%d and %d overlap: %s\n", f1, f2, ov ? "YES" : "NO");
+    printf("'F' to save overlap.csv, any key to return\n");
+
+    /* Read hardware key directly (same technique used in main loop) */
+    int inspector_key = 0;
+    asm {
+        sep #0x20
+    readloop2:
+        lda >0xC000
+        bpl readloop2
+        and #0x007f
+        sta inspector_key
+        sta >0xC010
+        rep #0x30
+    }
+
+    if (inspector_key == 'F' || inspector_key == 'f') {
+        FILE *of = fopen("overlap.csv", "w");
+        if (of) {
+            fprintf(of, "face1,%d,face2,%d,overlap,%s\n", f1, f2, ov ? "YES" : "NO");
+            fprintf(of, "face_id,vertex_order,vertex_index,x2d,y2d\n");
+            int off1 = faces->vertex_indices_ptr[f1];
+            int n1 = faces->vertex_count[f1];
+            for (int vi = 0; vi < n1; ++vi) {
+                int idx = faces->vertex_indices_buffer[off1 + vi] - 1;
+                if (idx >= 0 && idx < vtx->vertex_count) fprintf(of, "%d,%d,%d,%d,%d\n", f1, vi, idx, vtx->x2d[idx], vtx->y2d[idx]);
+            }
+            int off2 = faces->vertex_indices_ptr[f2];
+            int n2 = faces->vertex_count[f2];
+            for (int vi = 0; vi < n2; ++vi) {
+                int idx = faces->vertex_indices_buffer[off2 + vi] - 1;
+                if (idx >= 0 && idx < vtx->vertex_count) fprintf(of, "%d,%d,%d,%d,%d\n", f2, vi, idx, vtx->x2d[idx], vtx->y2d[idx]);
+            }
+            fclose(of);
+            printf("Saved overlap.csv\n");
+        } else {
+            printf("Error: cannot open overlap.csv for writing\n");
+        }
+    }
+
     endgraph();
     DoText();
 
@@ -4627,7 +4672,7 @@ segment "code22";
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
 
-case 80:  // 'P' - toggle frame-only polygon rendering (was 'F')
+case 80:  // 'P' - toggle frame-only polygon rendering
 case 112: // 'p'
                 framePolyOnly ^= 1;
                 printf("Frame-only polygons: %s\n", framePolyOnly ? "ON" : "OFF");
