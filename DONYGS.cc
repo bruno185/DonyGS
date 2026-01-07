@@ -2208,7 +2208,7 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     drawFace(model, target_face, 10, 1);
 
     MoveTo(5, 195);
-    printf("Press any key to return\n");
+    printf("%d face(s) should be before face %d\n", misplaced_count, target_face);
     keypress();
     endgraph();
     DoText();
