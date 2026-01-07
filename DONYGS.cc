@@ -2099,12 +2099,19 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
         }
     }
 
-    printf("Summary (before): checked %d faces, bbox_skipped=%d. Tests => SHOULD_BE_BEFORE(-1): %d, SHOULD_BE_AFTER(+1): %d (misplaced: %d), INCONCLUSIVE: %d\n",
+    printf("%d \"before\" faces checked : bbox_skipped=%d ; SHOULD_BE_BEFORE(-1): %d ;  SHOULD_BE_AFTER(+1): %d (misplaced: %d) ; INCONCLUSIVE: %d\n",
            checked, bbox_skipped, rel_neg, rel_pos, misplaced_count, rel_zero);
 
     printf("==> %d misplaced faces relative to face %d : ", misplaced_count, target_face);
-    for (int i = 0; i < misplaced_count; ++i) {   
-        printf(" %d", misplaced[i]);
+    for (int i = 0; i < misplaced_count; ++i) {
+        int f = misplaced[i];
+        // Find position of the misplaced face in the sorted list (1-based for readability)
+        int pos_in_sorted = -1;
+        for (int si = 0; si < faces->face_count; ++si) {
+            if (faces->sorted_face_indices[si] == f) { pos_in_sorted = si; break; }
+        }
+        if (pos_in_sorted >= 0) printf("%d (pos=%d)", f, pos_in_sorted + 1);
+        else printf("%d (pos=?)", f);
         if (i < misplaced_count - 1) printf(",");
     }
     printf("\n\n");

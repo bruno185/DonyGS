@@ -9,3 +9,4 @@ Enregistrer dans un fichier les coordonnees des faces du modele ?
 fixed:
 probleme fil de fer : à voir... solution provisoire : dans bigloop, faire un processModelFast(model, &params, filename);
 Solution  ==> modification de processModelFast : if framePolyOnly : pas de tri des faces. Et bigloop quand framePolyOnly = 0.
+
