@@ -92,8 +92,9 @@ static int pan_dy = 0;
 #define PAINTER_MODE_FAST 0
 #define PAINTER_MODE_FIXED 1
 #define PAINTER_MODE_FLOAT 2
+#define PAINTER_MODE_CORRECT 3
 
-static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float (cycle with 'F')
+static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct (set with '4')
 
 // Runtime toggle kept for compatibility; main() may set this and we propagate to painter_mode
 static int use_float_painter = 0;
@@ -1321,6 +1322,105 @@ void painter_newell_sancha(Model3D* model, int face_count) {
 
 /* Float-based painter: reproduces Windows numeric behaviour exactly
    Implemented as non-destructive function; enable via env var USE_FLOAT_PAINTER=1 */
+
+/* painter_correct
+ * ----------------
+ * Deterministically adjust `faces->sorted_face_indices` in-place using the
+ * exact checks performed by `inspect_faces_before` and `inspect_faces_after`.
+ * For each face id `target`:
+ *  - run the "before" test on faces earlier in the list; if one or more
+ *    are misplaced (and overlap), move `target` to be BEFORE the misplaced face
+ *    with the smallest index.
+ *  - then run the "after" test on faces later in the list; if one or more
+ *    are misplaced (and overlap), move `target` to be AFTER the misplaced face
+ *    with the largest index.
+ * No interactive output or previews are performed by this routine.
+ * Returns the number of moves applied.
+ */
+static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx) {
+    if (from < 0 || from >= n) return 0;
+    if (insert_idx < 0) insert_idx = 0;
+    if (insert_idx > n-1) insert_idx = n-1;
+    if (from == insert_idx) return 0;
+    int val = arr[from];
+    /* remove */
+    for (int i = from; i < n-1; ++i) arr[i] = arr[i+1];
+    /* insert at insert_idx in the (n-1)-long array: shift right */
+    for (int i = n-1; i > insert_idx; --i) arr[i] = arr[i-1];
+    arr[insert_idx] = val;
+    return 1;
+}
+
+static int painter_correct(Model3D* model, int face_count, int debug) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (face_count <= 0) return 0;
+
+    /* Prepare sorting state (same helper used by inspectors) */
+    int old_cull = prepare_inspector_sort(model, face_count);
+
+    int moves = 0;
+    /* For each face id (0..face_count-1) treat that as target */
+    for (int target = 0; target < face_count; ++target) {
+        /* Find current position of target in the ordered list */
+        int pos = -1;
+        for (int i = 0; i < face_count; ++i) if (faces->sorted_face_indices[i] == target) { pos = i; break; }
+        if (pos < 0) continue; /* not present for some reason */
+
+        /* 1) BEFORE test: check faces placed before target */
+        int best_before = -1; /* smallest index of misplaced face */
+        for (int i = 0; i < pos; ++i) {
+            int f = faces->sorted_face_indices[i];
+            /* bounding-box quick rejection */
+            if (faces->maxx[f] <= faces->minx[target] || faces->maxx[target] <= faces->minx[f]
+                || faces->maxy[f] <= faces->miny[target] || faces->maxy[target] <= faces->miny[f]) continue;
+            /* require actual projected polygon overlap before considering swap */
+            if (!projected_polygons_overlap(model, f, target)) continue;
+            int rel = pair_order_relation(model, f, target);
+            if (rel == 1) { /* f should be after target -> misplaced */
+                if (best_before == -1 || i < best_before) best_before = i;
+            }
+        }
+        if (best_before != -1) {
+            /* move target to be BEFORE best_before */
+            moves += move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, best_before);
+            /* update pos to new location */
+            pos = best_before;
+        }
+
+        /* 2) AFTER test: check faces placed after target */
+        /* recompute pos if necessary (ensure we have current location) */
+        {
+            int curpos = -1;
+            for (int i = 0; i < face_count; ++i) if (faces->sorted_face_indices[i] == target) { curpos = i; break; }
+            if (curpos < 0) continue; pos = curpos;
+        }
+        int best_after = -1; /* largest index of misplaced face */
+        for (int i = pos + 1; i < face_count; ++i) {
+            int f = faces->sorted_face_indices[i];
+            /* bounding-box quick rejection */
+            if (faces->maxx[f] <= faces->minx[target] || faces->maxx[target] <= faces->minx[f]
+                || faces->maxy[f] <= faces->miny[target] || faces->maxy[target] <= faces->miny[f]) continue;
+            /* require actual projected polygon overlap before considering swap */
+            if (!projected_polygons_overlap(model, f, target)) continue;
+            int rel = pair_order_relation(model, f, target); /* same order as inspect_after */
+            if (rel == -1) { /* f should be before target -> misplaced */
+                best_after = i; /* wants the largest index */
+            }
+        }
+        if (best_after != -1) {
+            /* We want to move target AFTER best_after. Compute insertion index after removal: */
+            int insert_idx;
+            if (best_after < pos) insert_idx = best_after + 1; else insert_idx = best_after; /* as analyzed */
+            /* perform remove and insert */
+            moves += move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, insert_idx);
+        }
+    }
+
+    /* restore state */
+    cull_back_faces = old_cull;
+    if (debug) return moves; else return moves;
+}
 
 void painter_newell_sancha_float(Model3D* model, int face_count) {
     if (!model) return;
@@ -3267,6 +3367,9 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
         painter_newell_sancha_fast(model, model->faces.face_count);
     } else if (painter_mode == PAINTER_MODE_FIXED) {
         painter_newell_sancha(model, model->faces.face_count);
+    } else if (painter_mode == PAINTER_MODE_CORRECT) {
+        /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
+        painter_correct(model, model->faces.face_count, 0);
     } else {
         // PAINTER_MODE_FLOAT
         painter_newell_sancha_float(model, model->faces.face_count);
@@ -3277,7 +3380,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     {
         long elapsed = t_end - t_start;
         double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
-        const char* pname = (painter_mode==PAINTER_MODE_FAST)?"painter_newell_sancha_fast":(painter_mode==PAINTER_MODE_FIXED?"painter_newell_sancha":"painter_newell_sancha_float");
+        const char* pname = (painter_mode==PAINTER_MODE_FAST)?"painter_newell_sancha_fast":(painter_mode==PAINTER_MODE_FIXED?"painter_newell_sancha":(painter_mode==PAINTER_MODE_CORRECT?"painter_correct":"painter_newell_sancha_float"));
         printf("[TIMING] %s: %ld ticks (%.2f ms)\n", pname, elapsed, ms);
         keypress();
     }
@@ -4719,6 +4822,7 @@ segment "code22";
                 inspect_faces_after(model, &params, filename);
                 goto loopReDraw;
 
+
             case 79: // 'O' - check projected polygon overlap
             case 111: // 'o'
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
@@ -4751,6 +4855,11 @@ segment "code22";
                 painter_mode = PAINTER_MODE_FLOAT;
                 printf("Painter mode: FLOAT (float-based painter)\n");
                 inconclusive_pairs_count = 0; // clear inconclusive pairs in float mode
+                if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
+
+            case 52: // '4' - set CORRECT painter (runs painter_correct)
+                painter_mode = PAINTER_MODE_CORRECT;
+                printf("Painter mode: CORRECT (painter_correct)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
 
