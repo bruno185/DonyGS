@@ -37,3 +37,58 @@ Pour chaque face, que j'appelle target :
 1/ faire un test exactement comme inspect_before (sans les output à l'écran). Si tu trouves 1 ou plusieurs faces mal placées ET qui overlap avec target,(qui devraient être après dans la liste), place target dans la liste AVANT le face trouvée aayant le plus petit indice.
 2/ fait un test exactement comme inspect_after (sans les output à l'écran). Si tu trouves 1 ou plusieurs faces mal placées ET qui overlap avec target, (qui devraient être avant dans la liste), place target dans la liste APRES le face trouvée aayant le plus grand indice.
 Fais le  
+
+
+TODO:
+Parfait — je vais analyser rapidement quelles parties de painter_correct sont de bons candidats pour une réécriture en assembleur et proposer un plan sûr.Parfait! Voici une analyse courte et un plan proposé pour décider si (et quoi) réécrire en assembleur. Ma recommandation: mesurer d'abord, optimiser en C quand possible, puis réécrire un petit noyau en assembleur si ça paye.
+
+🔎 Où se trouvent probablement les goulots d'étranglement
+Boucles de balayage (window / full-scan) — itérations sur indices et accès mémoire fréquents. Bon candidat si le travail dans la boucle est très simple (comparaisons, index arithmetic).
+Indexation des caches (f * n + t) — multiplication et accès mémoire répétés; on peut éviter la multiplication par incréments/pointeurs.
+Mise à jour des positions après déplacement (move_element_remove_and_insert) — memmove + boucle de mise à jour de pos_of_face. Un bon candidat pour assembler un déplacement spécial qui met à jour pos_of_face en un seul passage.
+Tests AABB (bbox) — simples comparaisons entières ; micro‑optimisable mais gains modestes.
+projected_polygons_overlap / pair_order_relation — fonctions géométriques lourdes et branchées; possibles gains importants mais coût élevé (complexité, risque) si réécrites en assembleur. Mieux d'optimiser algorithmiquement / en C d'abord.
+✅ Avantages et risques de l'assembleur
+Avantages: possible accélération significative sur petits noyaux très chauds (déplacements, tests simples), utilisation de registres et d'accès mémoire séquentiels optimisés pour la CPU 65C816.
+Risques: code plus complexe, difficile à maintenir/debugger, portabilité nulle, risque d'erreurs subtiles (surtout sur manipulations d'indices ou d'allocations). Gains limités si le vrai coût est dans des tests géométriques coûteux (fuites de cache ou opérations flottantes).
+Plan recommandé (sûr et itératif) 🔧
+Mesurer — remettre brièvement des compteurs/instrumentation (ou utiliser ceux que vous aviez) pour confirmer les hotspots (boucles, memmove, overlap calls).
+Micro-optimisations en C (faible risque) :
+Eviter multiplications répétées en tenant un pointeur / indice de ligne de cache.
+Marquer petites fonctions static inline pour inlining.
+Fusionner la mise à jour memmove + pos_of_face dans une seule boucle C si ce n'est pas déjà fait.
+Prototype assembleur ciblé :
+Commencer par move_element_remove_and_insert en assembleur 65C816 (déplacement optimisé + mise à jour pos_of_face).
+Écrire tests unitaires / cas réels pour valider exactitude et performance.
+Re-mesurer. Si gain suffisant → garder et documenter. Sinon → annuler et évaluer autre cible (p.ex. hot loop d’itération).
+Considérations avancées : si projected_polygons_overlap est le vrai hotspot, d’abord envisager algorithmes alternatifs (caches, bounding hierarchy) avant d’attaquer en assembleur.
+Proposition concrète
+Je peux ajouter rapidement des compteurs légers (si vous le voulez) et lancer un essai avec votre modèle lourd pour confirmer où optimiser.
+Ou je peux implémenter un prototype assembleur pour move_element_remove_and_insert (faible risque, gros potentiel pour les cas où beaucoup de déplacements ont lieu).
+Que préférez-vous :
+
+Je lance la mesure (ajout de compteurs + build + test) ?
+Je prototype l’assembleur sur la fonction de move et je vous fournis le patch + bench ?
+Dites-moi quelle option vous voulez et je m’en occupe.
+
+
+Avant de passer à l'assembleur, on va faire un autre painter (painter_correctV2).
+Voici l'algo :
+
+Créer tout d'abord une fonction before qui prend 2 id de face en argument.
+Cette fonction a pour objectif de déterminer si la 1ère face en argument doit être placée AVANT (ordre de dessin) dans la sorted list.
+Cette fonction fait l'équivalent des tests 4 5 de painter_newell_sancha : si test 4 réussi : return 1, si test 4 échoue, exécute test 7, si test 5 réussit : return 1, si test 5 échoue return -1. Si tous les points testés ont une valeur > -epsilon et <epsilon, alors les 2 faces sont coplanaire, after renvoie 0 
+ 
+Créer tout d'abord une fonction after qui prend 2 id de face en argument.
+Cette fonction a pour objectif de déterminer si la 1ère face en argument doit être placée APRES (ordre de dessin) dans la sorted list.
+Cette fonction fait l'équivalent des tests 6 7 de painter_newell_sancha : si test 6 réussi : return 1, si test 6 échoue, exécute test 7, si test 7 réussit : return 1, si test 5 échoue return -1. Si tous les points testés ont une valeur > -epsilon et <epsilon, alors les 2 faces sont coplanaires, after renvoie 0 
+
+
+Alloué de la mémoire pour une liste d'ID, = nombre de face total de l'objet (sans culling).
+Pour chaque face, que j'appelle target :
+
+1/ établir une liste des faces qui chevauchent target en x ou en y
+2/ Reduire cette liste en supprimant les sans sans overlap avec target.
+3/ Coupe cette liste en 2  : les faces placées avant dans la sorted_list et celles placées après.
+4/ pour les faces placées avant dans la sorted list : appliquer la fonciton before. Si une ou plusieurs face ont -1 en retour de before, place target dans la liste AVANT la face trouvée ayant le plus petit indice.
+5/ pour les faces placées après dans la sorted list : appliquer la fonciton after. Si une ou plusieurs face ont -1 en retour de before, place target dans la liste AVANT la face trouvée ayant le plus petit indice.

@@ -1372,6 +1372,37 @@ static int move_element_remove_and_insert(int *arr, int n, int from, int insert_
     return 1;
 }
 
+/* Optimized variant: performs the same remove+insert but updates an optional
+ * inverse map `pos_of_face` in a single pass to avoid a separate update loop.
+ * If `pos_of_face` is NULL, this behaves like the classic version (but using
+ * explicit loops instead of memmove so we can update positions inline).
+ */
+static int move_element_remove_and_insert_pos(int *arr, int n, int from, int insert_idx, int *pos_of_face) {
+    if (from < 0 || from >= n) return 0;
+    if (insert_idx < 0) insert_idx = 0;
+    if (insert_idx > n-1) insert_idx = n-1;
+    if (from == insert_idx) return 0;
+    int val = arr[from];
+    if (insert_idx < from) {
+        /* shift right region [insert_idx..from-1] -> [insert_idx+1..from] */
+        for (int i = from; i > insert_idx; --i) {
+            arr[i] = arr[i-1];
+            if (pos_of_face) pos_of_face[arr[i]] = i;
+        }
+        arr[insert_idx] = val;
+        if (pos_of_face) pos_of_face[val] = insert_idx;
+    } else {
+        /* shift left region [from+1..insert_idx] -> [from..insert_idx-1] */
+        for (int i = from; i < insert_idx; ++i) {
+            arr[i] = arr[i+1];
+            if (pos_of_face) pos_of_face[arr[i]] = i;
+        }
+        arr[insert_idx] = val;
+        if (pos_of_face) pos_of_face[val] = insert_idx;
+    }
+    return 1;
+}
+
 static int painter_correct(Model3D* model, int face_count, int debug) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
@@ -1397,12 +1428,15 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     unsigned char *ov_cache = (unsigned char*)malloc(n * n * sizeof(unsigned char)); if (!ov_cache) { free(rel_cache); printf("Error: painter_correct malloc ov_cache failed\n"); return 0; }
     for (int i = 0; i < n * n; ++i) ov_cache[i] = 255; /* 255 = unknown, 0=no-overlap, 1=overlap */
 
+    /* Inverse map for quick position lookup: face_id -> index in sorted_face_indices */
+    int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc pos_of_face failed\n"); return 0; }
+    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+
     /* For each face id (0..face_count-1) treat that as target */
     for (int target = 0; target < face_count; ++target) {
-        /* Find current position of target in the ordered list */
-        int pos = -1;
-        for (int i = 0; i < face_count; ++i) if (faces->sorted_face_indices[i] == target) { pos = i; break; }
-        if (pos < 0) continue; /* not present for some reason */
+        /* Find current position of target via inverse map */
+        int pos = pos_of_face[target];
+        if (pos < 0 || pos >= n) continue; /* not present for some reason */
 
         /* 1) BEFORE test: check faces placed before target */
         int best_before = -1; /* smallest index of misplaced face */
@@ -1429,23 +1463,16 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
             }
         }
         if (best_before != -1) {
-            /* move target to be BEFORE best_before
-             * Implementation note: move_element_remove_and_insert uses memmove to
-             * shift a contiguous range rather than manual element-by-element
-             * copies for better performance on average.
-             */
-            moves += move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, best_before);
-            /* update pos to new location */
-            pos = best_before;
+            /* move target to be BEFORE best_before (use optimized variant updating inverse map) */
+            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
+            /* update pos to new location via inverse map */
+            pos = pos_of_face[target];
         }
 
         /* 2) AFTER test: check faces placed after target */
         /* recompute pos if necessary (ensure we have current location) */
-        {
-            int curpos = -1;
-            for (int i = 0; i < face_count; ++i) if (faces->sorted_face_indices[i] == target) { curpos = i; break; }
-            if (curpos < 0) continue; pos = curpos;
-        }
+        pos = pos_of_face[target];
+        if (pos < 0 || pos >= n) continue;
         int best_after = -1; /* largest index of misplaced face */
         for (int i = pos + 1; i < face_count; ++i) {
             int f = faces->sorted_face_indices[i];
@@ -1466,13 +1493,14 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
             /* We want to move target AFTER best_after. Compute insertion index after removal: */
             int insert_idx;
             if (best_after < pos) insert_idx = best_after + 1; else insert_idx = best_after; /* as analyzed */
-            /* perform remove and insert */
-            moves += move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, insert_idx);
+            /* perform remove and insert (use optimized variant to update inverse map) */
+            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
         }
     }
 
     /* restore state */
     cull_back_faces = old_cull;
+    free(rel_cache); free(ov_cache); free(pos_of_face);
     if (debug) return moves; else return moves;
 }
 
