@@ -1343,11 +1343,15 @@ static int move_element_remove_and_insert(int *arr, int n, int from, int insert_
     if (insert_idx > n-1) insert_idx = n-1;
     if (from == insert_idx) return 0;
     int val = arr[from];
-    /* remove */
-    for (int i = from; i < n-1; ++i) arr[i] = arr[i+1];
-    /* insert at insert_idx in the (n-1)-long array: shift right */
-    for (int i = n-1; i > insert_idx; --i) arr[i] = arr[i-1];
-    arr[insert_idx] = val;
+    if (insert_idx < from) {
+        /* shift left region [insert_idx..from-1] right by 1 */
+        memmove(&arr[insert_idx+1], &arr[insert_idx], (from - insert_idx) * sizeof(int));
+        arr[insert_idx] = val;
+    } else {
+        /* insert_idx > from: shift region [from+1..insert_idx] left by 1 */
+        memmove(&arr[from], &arr[from+1], (insert_idx - from) * sizeof(int));
+        arr[insert_idx] = val;
+    }
     return 1;
 }
 
@@ -1360,6 +1364,13 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     int old_cull = prepare_inspector_sort(model, face_count);
 
     int moves = 0;
+    int n = face_count;
+    /* Per-run caches to avoid recomputing expensive tests: */
+    signed char *rel_cache = (signed char*)malloc(n * n * sizeof(signed char)); if (!rel_cache) { printf("Error: painter_correct malloc rel_cache failed\n"); return 0; }
+    for (int i = 0; i < n * n; ++i) rel_cache[i] = 2; /* 2 = unknown, values -1,0,1 valid */
+    unsigned char *ov_cache = (unsigned char*)malloc(n * n * sizeof(unsigned char)); if (!ov_cache) { free(rel_cache); printf("Error: painter_correct malloc ov_cache failed\n"); return 0; }
+    for (int i = 0; i < n * n; ++i) ov_cache[i] = 255; /* 255 = unknown, 0=no-overlap, 1=overlap */
+
     /* For each face id (0..face_count-1) treat that as target */
     for (int target = 0; target < face_count; ++target) {
         /* Find current position of target in the ordered list */

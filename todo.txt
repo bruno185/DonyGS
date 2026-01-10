@@ -28,3 +28,12 @@ Proposition d’implémentation
 J’implémente le pipeline : construire graphe → topo → detection de cycles → résolution par Zmin → topo final, avec logs (mode debug).
 Optionnel : un mode « agressif » qui applique ensuite swaps adjacents pour rapprocher/corriger l’ordre effectif dans la structure existante.
 Tu veux que je commence par l’implémentation du tri
+
+
+Alogo BRUNO : 
+voilà ce qu'on va faire : dans une nouvelle fonciton painter (painter_correct, par exemple), tu vas :
+
+Pour chaque face, que j'appelle target :
+1/ faire un test exactement comme inspect_before (sans les output à l'écran). Si tu trouves 1 ou plusieurs faces mal placées ET qui overlap avec target,(qui devraient être après dans la liste), place target dans la liste AVANT le face trouvée aayant le plus petit indice.
+2/ fait un test exactement comme inspect_after (sans les output à l'écran). Si tu trouves 1 ou plusieurs faces mal placées ET qui overlap avec target, (qui devraient être avant dans la liste), place target dans la liste APRES le face trouvée aayant le plus grand indice.
+Fais le  
