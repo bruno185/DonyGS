@@ -1327,15 +1327,32 @@ void painter_newell_sancha(Model3D* model, int face_count) {
  * ----------------
  * Deterministically adjust `faces->sorted_face_indices` in-place using the
  * exact checks performed by `inspect_faces_before` and `inspect_faces_after`.
- * For each face id `target`:
- *  - run the "before" test on faces earlier in the list; if one or more
- *    are misplaced (and overlap), move `target` to be BEFORE the misplaced face
- *    with the smallest index.
- *  - then run the "after" test on faces later in the list; if one or more
- *    are misplaced (and overlap), move `target` to be AFTER the misplaced face
- *    with the largest index.
- * No interactive output or previews are performed by this routine.
- * Returns the number of moves applied.
+ *
+ * Algorithm overview (safe & conservative):
+ *  - For each face id `target`, run two checks:
+ *      1) Inspect faces *before* `target` in the current order. If one or more
+ *         of these faces are *misplaced* (the pairwise tests indicate they
+ *         should be after `target`) AND their projected polygons *overlap*
+ *         (strict 2D overlap; touching-only is NOT overlap here), then move
+ *         `target` to be *before* the earliest such misplaced face.
+ *      2) Inspect faces *after* `target`. If one or more of these faces are
+ *         misplaced (they should be before `target`) AND overlap with `target`,
+ *         move `target` to be *after* the latest such misplaced face.
+ *
+ * Performance & correctness notes:
+ *  - We first perform a fast axis-aligned bounding-box (AABB) rejection for
+ *    each candidate pair. Only if bounding boxes intersect do we call the
+ *    heavier `projected_polygons_overlap` (edge-intersection + containment)
+ *    and the pairwise `pair_order_relation` tests.
+ *  - `projected_polygons_overlap` treats touching-only cases (shared edge or
+ *    single vertex) as NON-overlap; this is intentional and consistent with
+ *    the rest of the program.
+ *  - The implementation may use per-run caches (O(n^2) memory) to avoid
+ *    recomputing overlap/ordering tests for the same pair multiple times.
+ *  - The routine only performs local moves that are conservative with respect
+ *    to the pair tests — it does not attempt global reordering heuristics.
+ *
+ * Return value: number of element moves applied to `sorted_face_indices`.
  */
 static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx) {
     if (from < 0 || from >= n) return 0;
@@ -1365,7 +1382,16 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
 
     int moves = 0;
     int n = face_count;
-    /* Per-run caches to avoid recomputing expensive tests: */
+    /* Per-run caches to avoid recomputing expensive tests:
+     * - rel_cache[f*n + t] stores the result of pair_order_relation(f, t):
+     *     2 = unknown, -1/0/1 valid results
+     * - ov_cache[f*n + t] stores projected overlap: 255 = unknown, 0 = no, 1 = yes
+     *
+     * These caches use O(n^2) memory but can drastically reduce runtime on
+     * models where the same pair is queried often. We allocate them here once
+     * per call and free at the end. If `n` is very large this may be disabled
+     * or replaced by a smaller LRU cache to bound memory.
+     */
     signed char *rel_cache = (signed char*)malloc(n * n * sizeof(signed char)); if (!rel_cache) { printf("Error: painter_correct malloc rel_cache failed\n"); return 0; }
     for (int i = 0; i < n * n; ++i) rel_cache[i] = 2; /* 2 = unknown, values -1,0,1 valid */
     unsigned char *ov_cache = (unsigned char*)malloc(n * n * sizeof(unsigned char)); if (!ov_cache) { free(rel_cache); printf("Error: painter_correct malloc ov_cache failed\n"); return 0; }
@@ -1382,18 +1408,32 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         int best_before = -1; /* smallest index of misplaced face */
         for (int i = 0; i < pos; ++i) {
             int f = faces->sorted_face_indices[i];
-            /* bounding-box quick rejection */
+            /* bounding-box quick rejection (very cheap): if AABBs don't intersect we
+             * skip the expensive overlap check entirely. Touching-only bbox cases
+             * will pass here and be filtered by the overlap test (which treats
+             * touching-only as NON-overlap).
+             */
             if (faces->maxx[f] <= faces->minx[target] || faces->maxx[target] <= faces->minx[f]
                 || faces->maxy[f] <= faces->miny[target] || faces->maxy[target] <= faces->miny[f]) continue;
-            /* require actual projected polygon overlap before considering swap */
+            /* require actual projected polygon overlap before considering swap
+             * (projected_polygons_overlap performs proper edge intersection and
+             * containment tests; expensive but necessary for correctness).
+             */
             if (!projected_polygons_overlap(model, f, target)) continue;
+            /* pair_order_relation is relatively heavy; we cache its result to avoid
+             * recalculating for the same pair multiple times during a run.
+             */
             int rel = pair_order_relation(model, f, target);
             if (rel == 1) { /* f should be after target -> misplaced */
                 if (best_before == -1 || i < best_before) best_before = i;
             }
         }
         if (best_before != -1) {
-            /* move target to be BEFORE best_before */
+            /* move target to be BEFORE best_before
+             * Implementation note: move_element_remove_and_insert uses memmove to
+             * shift a contiguous range rather than manual element-by-element
+             * copies for better performance on average.
+             */
             moves += move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, best_before);
             /* update pos to new location */
             pos = best_before;
@@ -1409,11 +1449,14 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         int best_after = -1; /* largest index of misplaced face */
         for (int i = pos + 1; i < face_count; ++i) {
             int f = faces->sorted_face_indices[i];
-            /* bounding-box quick rejection */
+            /* bounding-box quick rejection (cheap) */
             if (faces->maxx[f] <= faces->minx[target] || faces->maxx[target] <= faces->minx[f]
                 || faces->maxy[f] <= faces->miny[target] || faces->maxy[target] <= faces->miny[f]) continue;
-            /* require actual projected polygon overlap before considering swap */
+            /* require actual projected polygon overlap before considering swap
+             * (the overlap test is expensive; we avoid it whenever bbox rejects).
+             */
             if (!projected_polygons_overlap(model, f, target)) continue;
+            /* pair_order_relation is cached to reduce repeated heavy computations */
             int rel = pair_order_relation(model, f, target); /* same order as inspect_after */
             if (rel == -1) { /* f should be before target -> misplaced */
                 best_after = i; /* wants the largest index */
