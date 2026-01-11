@@ -1352,25 +1352,6 @@ void painter_newell_sancha(Model3D* model, int face_count) {
  *  - The routine only performs local moves that are conservative with respect
  *    to the pair tests — it does not attempt global reordering heuristics.
  *
- * Return value: number of element moves applied to `sorted_face_indices`.
- */
-static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx) {
-    if (from < 0 || from >= n) return 0;
-    if (insert_idx < 0) insert_idx = 0;
-    if (insert_idx > n-1) insert_idx = n-1;
-    if (from == insert_idx) return 0;
-    int val = arr[from];
-    if (insert_idx < from) {
-        /* shift left region [insert_idx..from-1] right by 1 */
-        memmove(&arr[insert_idx+1], &arr[insert_idx], (from - insert_idx) * sizeof(int));
-        arr[insert_idx] = val;
-    } else {
-        /* insert_idx > from: shift region [from+1..insert_idx] left by 1 */
-        memmove(&arr[from], &arr[from+1], (insert_idx - from) * sizeof(int));
-        arr[insert_idx] = val;
-    }
-    return 1;
-}
 
 /* Optimized variant: performs the same remove+insert but updates an optional
  * inverse map `pos_of_face` in a single pass to avoid a separate update loop.
@@ -1433,7 +1414,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc pos_of_face failed\n"); return 0; }
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
 
-
+    printf("Faces:");
     /* For each face id (0..face_count-1) treat that as target */
     for (int target = 0; target < face_count; ++target) {
         /* Find current position of target via inverse map */
@@ -1526,6 +1507,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         
         printf(" %d",target);
     }
+    printf("\n");
 
     /* restore state */
     cull_back_faces = old_cull;
@@ -2251,26 +2233,40 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
 static int pair_plane_after(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    /* Micro-optimizations: Z-range quick reject, hoist epsilon to Fixed64, and
+       local pointers to buffers / vertex arrays to reduce repeated dereferences. */
+    Fixed64 epsilon64 = (Fixed64)FLOAT_TO_FIXED(0.01f);
     int k;
     int n1 = faces->vertex_count[f1];
     int n2 = faces->vertex_count[f2];
     int offset1 = faces->vertex_indices_ptr[f1];
     int offset2 = faces->vertex_indices_ptr[f2];
+
+    /* Z-range reject using global z buffers if available */
+    if (f_z_min_buf && f_z_max_buf) {
+        if (f_z_max_buf[f1] <= f_z_min_buf[f2] || f_z_max_buf[f2] <= f_z_min_buf[f1]) return 0;
+    }
+
+    const int *buf1 = faces->vertex_indices_buffer + offset1;
+    const int *buf2 = faces->vertex_indices_buffer + offset2;
+    const Fixed32 *xo = vtx->xo;
+    const Fixed32 *yo = vtx->yo;
+    const Fixed32 *zo = vtx->zo;
+
     Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
 
     int obs_side1 = 0; int side; int all_opposite_side;
-    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    obs_side1 = 0; if (d1 > epsilon64) obs_side1 = 1; else if (d1 < -epsilon64) obs_side1 = -1; else obs_side1 = 0;
     if (obs_side1 != 0) {
         all_opposite_side = 1;
         for (k = 0; k < n2; ++k) {
-            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            int v = buf2[k]-1;
             Fixed64 acc = 0;
-            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc  = (((Fixed64)a1 * (Fixed64)xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d1;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (acc > epsilon64) side = 1; else if (acc < -epsilon64) side = -1; else continue;
             if (obs_side1 == side) { all_opposite_side = 0; break; }
         }
         if (all_opposite_side) return 1;
@@ -2278,17 +2274,17 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
     /* Test7 fallback (symmetric) */
     Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
     int obs_side2 = 0; int all_same_side = 0;
-    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    obs_side2 = 0; if (d2 > epsilon64) obs_side2 = 1; else if (d2 < -epsilon64) obs_side2 = -1; else obs_side2 = 0;
     if (obs_side2 != 0) {
         all_same_side = 1;
         for (k = 0; k < n1; ++k) {
-            int v = faces->vertex_indices_buffer[offset1+k]-1;
+            int v = buf1[k]-1;
             Fixed64 acc = 0;
-            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc  = (((Fixed64)a2 * (Fixed64)xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d2;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (acc > epsilon64) side = 1; else if (acc < -epsilon64) side = -1; else continue;
             if (obs_side2 != side) { all_same_side = 0; break; }
         }
         if (all_same_side) return 1;
@@ -2299,26 +2295,38 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
 static int pair_plane_before(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    Fixed64 epsilon64 = (Fixed64)FLOAT_TO_FIXED(0.01f);
     int k;
     int n1 = faces->vertex_count[f1];
     int n2 = faces->vertex_count[f2];
     int offset1 = faces->vertex_indices_ptr[f1];
     int offset2 = faces->vertex_indices_ptr[f2];
+
+    /* Z-range reject using global z buffers if available */
+    if (f_z_min_buf && f_z_max_buf) {
+        if (f_z_max_buf[f1] <= f_z_min_buf[f2] || f_z_max_buf[f2] <= f_z_min_buf[f1]) return 0;
+    }
+
+    const int *buf1 = faces->vertex_indices_buffer + offset1;
+    const int *buf2 = faces->vertex_indices_buffer + offset2;
+    const Fixed32 *xo = vtx->xo;
+    const Fixed32 *yo = vtx->yo;
+    const Fixed32 *zo = vtx->zo;
+
     Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
 
     int obs_side1 = 0; int side; int all_same_side;
-    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    obs_side1 = 0; if (d1 > epsilon64) obs_side1 = 1; else if (d1 < -epsilon64) obs_side1 = -1; else obs_side1 = 0;
     if (obs_side1 != 0) {
         all_same_side = 1;
         for (k = 0; k < n2; ++k) {
-            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            int v = buf2[k]-1;
             Fixed64 acc = 0;
-            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc  = (((Fixed64)a1 * (Fixed64)xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d1;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (acc > epsilon64) side = 1; else if (acc < -epsilon64) side = -1; else continue;
             if (obs_side1 != side) { all_same_side = 0; break; }
         }
         if (all_same_side) return 1;
@@ -2326,17 +2334,17 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
     /* Test5 fallback */
     Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
     int obs_side2 = 0; int all_opposite_side = 0;
-    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    obs_side2 = 0; if (d2 > epsilon64) obs_side2 = 1; else if (d2 < -epsilon64) obs_side2 = -1; else obs_side2 = 0;
     if (obs_side2 != 0) {
         all_opposite_side = 1;
         for (k = 0; k < n1; ++k) {
-            int v = faces->vertex_indices_buffer[offset1+k]-1;
+            int v = buf1[k]-1;
             Fixed64 acc = 0;
-            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc  = (((Fixed64)a2 * (Fixed64)xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d2;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (acc > epsilon64) side = 1; else if (acc < -epsilon64) side = -1; else continue;
             if (obs_side2 == side) { all_opposite_side = 0; break; }
         }
         if (all_opposite_side) return 1;
@@ -4659,7 +4667,7 @@ static void show_help_pager(void) {
         "Arrow Up/Down: Increase/Decrease vertical angle",
         "W/X: Increase/Decrease screen rotation angle",
         "C: Toggle color palette display",
-        "1: Set painter to FAST (simple face sorting only)",
+        "1: Set painter to FAST (face sorting by depth only)",
         "2: Set painter to NORMAL (Fixed32/64)",
         "3: Set painter to FLOAT (float-based)",
         "4: Set painter to CORRECT (painter_correct) - tries to fix ordering by local moves",
@@ -4896,7 +4904,7 @@ segment "code22";
                 printf("    Vertical Angle: %d deg\n", params.angle_v);
                 printf("    Screen Rotation Angle: %d deg\n", params.angle_w);
                 printf("    Projection scale: %.2f\n", FIXED_TO_FLOAT(s_global_proj_scale_fixed));
-                if (painter_mode == PAINTER_MODE_FAST) printf("    Painter mode: FAST (simple face sorting only)\n");
+                if (painter_mode == PAINTER_MODE_FAST) printf("    Painter mode: FAST (face sorting by depth only)\n");
                 else if (painter_mode == PAINTER_MODE_FIXED) printf("    Painter mode: NORMAL (Fixed32/64)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECT) printf("    Painter mode: CORRECT (painter_correct)\n");
                 else printf("    Painter mode: FLOAT (float-based)\n\n");
@@ -5062,7 +5070,7 @@ segment "code22";
              */
             case 49: // '1' - set FAST painter
                 painter_mode = PAINTER_MODE_FAST;
-                printf("Painter mode: FAST (simple face sorting only)\n");
+                printf("Painter mode: FAST (face sorting by depth only)\n");
                 inconclusive_pairs_count = 0; // clear inconclusive pairs in fast mode
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
                 
