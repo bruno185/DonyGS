@@ -1423,6 +1423,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
      * per call and free at the end. If `n` is very large this may be disabled
      * or replaced by a smaller LRU cache to bound memory.
      */
+
     signed char *rel_cache = (signed char*)malloc(n * n * sizeof(signed char)); if (!rel_cache) { printf("Error: painter_correct malloc rel_cache failed\n"); return 0; }
     for (int i = 0; i < n * n; ++i) rel_cache[i] = 2; /* 2 = unknown, values -1,0,1 valid */
     unsigned char *ov_cache = (unsigned char*)malloc(n * n * sizeof(unsigned char)); if (!ov_cache) { free(rel_cache); printf("Error: painter_correct malloc ov_cache failed\n"); return 0; }
@@ -1432,23 +1433,33 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc pos_of_face failed\n"); return 0; }
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
 
+
     /* For each face id (0..face_count-1) treat that as target */
     for (int target = 0; target < face_count; ++target) {
         /* Find current position of target via inverse map */
         int pos = pos_of_face[target];
-        if (pos < 0 || pos >= n) continue; /* not present for some reason */
+        if (pos < 0) continue;
+        if (pos >= n) continue; /* not present for some reason */
 
         /* 1) BEFORE test: check faces placed before target */
         int best_before = -1; /* smallest index of misplaced face */
         for (int i = 0; i < pos; ++i) {
             int f = faces->sorted_face_indices[i];
+
+            /* depth (Z) quick rejection (cheap): if Z ranges do not overlap skip */
+            if (faces->z_max[f] <= faces->z_min[target]) continue;
+            if (faces->z_max[target] <= faces->z_min[f]) continue;
+
             /* bounding-box quick rejection (very cheap): if AABBs don't intersect we
              * skip the expensive overlap check entirely. Touching-only bbox cases
              * will pass here and be filtered by the overlap test (which treats
              * touching-only as NON-overlap).
              */
-            if (faces->maxx[f] <= faces->minx[target] || faces->maxx[target] <= faces->minx[f]
-                || faces->maxy[f] <= faces->miny[target] || faces->maxy[target] <= faces->miny[f]) continue;
+            if (faces->maxx[f] <= faces->minx[target]) continue;
+            if (faces->maxx[target] <= faces->minx[f]) continue;
+            if (faces->maxy[f] <= faces->miny[target]) continue;
+            if (faces->maxy[target] <= faces->miny[f]) continue;    
+
             /* require actual projected polygon overlap before considering swap
              * (projected_polygons_overlap performs proper edge intersection and
              * containment tests; expensive but necessary for correctness).
@@ -1457,8 +1468,11 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
             /* pair_order_relation is relatively heavy; we cache its result to avoid
              * recalculating for the same pair multiple times during a run.
              */
-            int rel = pair_order_relation(model, f, target);
-            if (rel == 1) { /* f should be after target -> misplaced */
+
+            /* Use specialized plane-only 'after' test for BEFORE loop: quick check
+             * to see if `f` is geometrically after (in front of) `target`.
+             */
+            if (pair_plane_after(model, f, target)) {
                 if (best_before == -1 || i < best_before) best_before = i;
             }
         }
@@ -1476,18 +1490,31 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         int best_after = -1; /* largest index of misplaced face */
         for (int i = pos + 1; i < face_count; ++i) {
             int f = faces->sorted_face_indices[i];
+
+            /* depth (Z) quick rejection (cheap) */
+            if (faces->z_max[f] <= faces->z_min[target]) continue;
+            if (faces->z_max[target] <= faces->z_min[f]) continue;
+
             /* bounding-box quick rejection (cheap) */
-            if (faces->maxx[f] <= faces->minx[target] || faces->maxx[target] <= faces->minx[f]
-                || faces->maxy[f] <= faces->miny[target] || faces->maxy[target] <= faces->miny[f]) continue;
+            // if (faces->maxx[f] <= faces->minx[target] || faces->maxx[target] <= faces->minx[f]
+            //     || faces->maxy[f] <= faces->miny[target] || faces->maxy[target] <= faces->miny[f]) continue;
+            // XXX : ioptimisation 
+            if (faces->maxx[f] <= faces->minx[target]) continue;
+            if (faces->maxx[target] <= faces->minx[f]) continue;
+            if (faces->maxy[f] <= faces->miny[target]) continue;
+            if (faces->maxy[target] <= faces->miny[f]) continue;
+            // XXX
+
             /* require actual projected polygon overlap before considering swap
              * (the overlap test is expensive; we avoid it whenever bbox rejects).
              */
             if (!projected_polygons_overlap(model, f, target)) continue;
-            /* pair_order_relation is cached to reduce repeated heavy computations */
-            int rel = pair_order_relation(model, f, target); /* same order as inspect_after */
-            if (rel == -1) { /* f should be before target -> misplaced */
-                best_after = i; /* wants the largest index */
-            }
+            /* Use specialized plane-only 'before' test for AFTER loop: quick check
+             * to see if `f` is geometrically before `target`.
+             */
+            if (pair_plane_before(model, f, target)) { best_after = i; /* wants the largest index */ }
+
+            
         }
         if (best_after != -1) {
             /* We want to move target AFTER best_after. Compute insertion index after removal: */
@@ -1496,6 +1523,8 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
             /* perform remove and insert (use optimized variant to update inverse map) */
             moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
         }
+        
+        printf(" %d",target);
     }
 
     /* restore state */
@@ -2204,6 +2233,115 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
         }
         if (all_same_side) out[6] = 1; else out[6] = 0;
     } else out[6] = 0;
+}
+
+/* Plane-based pair relation used by `painter_correct` fast path:
+ * - Only evaluates geometric plane tests (equivalent to tests 4..7)
+ * - Returns -1 if f1 is before f2, 1 if f1 is after f2, 0 if inconclusive
+ *
+ * This avoids depth/bbox checks which are unnecessary for the local
+ * geometric decision in `painter_correct`.
+ */
+
+
+/* Specialized plane-only checks for painter_correct fast path
+ * - pair_plane_after(f1,f2): returns 1 if f1 is geometrically after f2 (Test6 or Test7)
+ * - pair_plane_before(f1,f2): returns 1 if f1 is geometrically before f2 (Test4 or Test5)
+ */
+static int pair_plane_after(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int k;
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+
+    int obs_side1 = 0; int side; int all_opposite_side;
+    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    if (obs_side1 != 0) {
+        all_opposite_side = 1;
+        for (k = 0; k < n2; ++k) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side1 == side) { all_opposite_side = 0; break; }
+        }
+        if (all_opposite_side) return 1;
+    }
+    /* Test7 fallback (symmetric) */
+    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
+    int obs_side2 = 0; int all_same_side = 0;
+    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    if (obs_side2 != 0) {
+        all_same_side = 1;
+        for (k = 0; k < n1; ++k) {
+            int v = faces->vertex_indices_buffer[offset1+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d2;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side2 != side) { all_same_side = 0; break; }
+        }
+        if (all_same_side) return 1;
+    }
+    return 0;
+}
+
+static int pair_plane_before(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int k;
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+
+    int obs_side1 = 0; int side; int all_same_side;
+    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    if (obs_side1 != 0) {
+        all_same_side = 1;
+        for (k = 0; k < n2; ++k) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side1 != side) { all_same_side = 0; break; }
+        }
+        if (all_same_side) return 1;
+    }
+    /* Test5 fallback */
+    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
+    int obs_side2 = 0; int all_opposite_side = 0;
+    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    if (obs_side2 != 0) {
+        all_opposite_side = 1;
+        for (k = 0; k < n1; ++k) {
+            int v = faces->vertex_indices_buffer[offset1+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d2;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side2 == side) { all_opposite_side = 0; break; }
+        }
+        if (all_opposite_side) return 1;
+    }
+    return 0;
 }
 
 segment "code04";
