@@ -2233,8 +2233,8 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
 static int pair_plane_after(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    /* Micro-optimizations: Z-range quick reject, hoist epsilon to Fixed64, and
-       local pointers to buffers / vertex arrays to reduce repeated dereferences. */
+    /* Micro-optimizations: hoist epsilon to Fixed64, and local pointers
+       to buffers / vertex arrays to reduce repeated dereferences. */
     Fixed64 epsilon64 = (Fixed64)FLOAT_TO_FIXED(0.01f);
     int k;
     int n1 = faces->vertex_count[f1];
@@ -2242,10 +2242,12 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
     int offset1 = faces->vertex_indices_ptr[f1];
     int offset2 = faces->vertex_indices_ptr[f2];
 
-    /* Z-range reject using global z buffers if available */
-    if (f_z_min_buf && f_z_max_buf) {
-        if (f_z_max_buf[f1] <= f_z_min_buf[f2] || f_z_max_buf[f2] <= f_z_min_buf[f1]) return 0;
-    }
+    /* Z-range reject removed here (redundant)
+     * Note: `painter_correct` performs Z-range quick rejection before
+     * calling these plane-only predicates. Removing this duplicate check
+     * avoids extra work in the hot path. Re-enable if these predicates
+     * are ever invoked standalone (requires f_z_min_buf/f_z_max_buf).
+     */
 
     const int *buf1 = faces->vertex_indices_buffer + offset1;
     const int *buf2 = faces->vertex_indices_buffer + offset2;
@@ -2302,10 +2304,12 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
     int offset1 = faces->vertex_indices_ptr[f1];
     int offset2 = faces->vertex_indices_ptr[f2];
 
-    /* Z-range reject using global z buffers if available */
-    if (f_z_min_buf && f_z_max_buf) {
-        if (f_z_max_buf[f1] <= f_z_min_buf[f2] || f_z_max_buf[f2] <= f_z_min_buf[f1]) return 0;
-    }
+    /* Z-range reject removed here (redundant)
+     * Note: `painter_correct` performs Z-range quick rejection before
+     * calling these plane-only predicates. Removing this duplicate check
+     * avoids extra work in the hot path. Re-enable if these predicates
+     * are ever invoked standalone (requires f_z_min_buf/f_z_max_buf).
+     */
 
     const int *buf1 = faces->vertex_indices_buffer + offset1;
     const int *buf2 = faces->vertex_indices_buffer + offset2;
