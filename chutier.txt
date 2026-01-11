@@ -540,3 +540,30 @@ void processModelWireframe(Model3D* model, ObserverParams* params, const char* f
         faces->sorted_face_indices[i] = i; // identity order; no sorting required
     }
 }
+
+/* ===== ARCHIVE (moved from DONYGS.cc) =====
+ * Function: move_element_remove_and_insert
+ * Moved: 2026-01-11
+ * Reason: replaced by optimized variant `move_element_remove_and_insert_pos` and
+ *         wrapper left in place for compatibility. Original implementation
+ *         archived here for reference.
+ */
+static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx) {
+    if (from < 0 || from >= n) return 0;
+    if (insert_idx < 0) insert_idx = 0;
+    if (insert_idx > n-1) insert_idx = n-1;
+    if (from == insert_idx) return 0;
+    int val = arr[from];
+    if (insert_idx < from) {
+        /* shift left region [insert_idx..from-1] right by 1 */
+        memmove(&arr[insert_idx+1], &arr[insert_idx], (from - insert_idx) * sizeof(int));
+        arr[insert_idx] = val;
+    } else {
+        /* insert_idx > from: shift region [from+1..insert_idx] left by 1 */
+        memmove(&arr[from], &arr[from+1], (insert_idx - from) * sizeof(int));
+        arr[insert_idx] = val;
+    }
+    return 1;
+}
+
+/* End of archive block */
