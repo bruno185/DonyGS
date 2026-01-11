@@ -1446,9 +1446,6 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
              * containment tests; expensive but necessary for correctness).
              */
             if (!projected_polygons_overlap(model, f, target)) continue;
-            /* pair_order_relation is relatively heavy; we cache its result to avoid
-             * recalculating for the same pair multiple times during a run.
-             */
 
             /* Use specialized plane-only 'after' test for BEFORE loop: quick check
              * to see if `f` is geometrically after (in front of) `target`.
@@ -1490,6 +1487,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
              * (the overlap test is expensive; we avoid it whenever bbox rejects).
              */
             if (!projected_polygons_overlap(model, f, target)) continue;
+            
             /* Use specialized plane-only 'before' test for AFTER loop: quick check
              * to see if `f` is geometrically before `target`.
              */

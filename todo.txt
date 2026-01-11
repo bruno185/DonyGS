@@ -30,7 +30,7 @@ Optionnel : un mode « agressif » qui applique ensuite swaps adjacents pour rap
 Tu veux que je commence par l’implémentation du tri
 
 
-Alogo BRUNO : 
+Algo BRUNO : 
 voilà ce qu'on va faire : dans une nouvelle fonciton painter (painter_correct, par exemple), tu vas :
 
 Pour chaque face, que j'appelle target :
