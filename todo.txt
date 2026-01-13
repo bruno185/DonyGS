@@ -1,3 +1,8 @@
+NOTE: 2026-01-14 - Commit 067edb4 : painter_super - add PASS 1 / PASS 2 progress markers & min/max marks
+- Ajout de `painter_super` (mode '5'): enregistre min_allowed_pos & max_allowed_pos et effectue 2 passes respectant les marques.
+- Ajout de marquages de progression PASS 1 / PASS 2 et impressions compactes par target.
+- Compile & push effectués; tag proposé: `painter_super-067edb4`.
+
 NOTE: 2026-01-13 - Commit 339afdf : painter_correct - éviter oscillations
 - Ajout de `min_allowed_pos[]` pour marquer les cibles déplacées dans la passe BEFORE.
 - Clamp dans la passe AFTER pour empêcher qu'une face déplacée retourne à un index plus élevé.
