@@ -1439,6 +1439,9 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     /* Inverse map for quick position lookup: face_id -> index in sorted_face_indices */
     int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc pos_of_face failed\n"); return 0; }
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+    /* Per-target minimal allowed index once moved: -1 means not moved yet. */
+    int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(rel_cache); free(ov_cache); free(pos_of_face); printf("Error: painter_correct malloc min_allowed_pos failed\n"); return 0; }
+    for (int i = 0; i < n; ++i) min_allowed_pos[i] = -1;
 
 
     /* For each face id (0..face_count-1) treat that as target */
@@ -1488,6 +1491,8 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
             moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
             /* update pos to new location via inverse map */
             pos = pos_of_face[target];
+            /* record minimal allowed index for this target (disallow later moves placing it at indices > pos) */
+            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
         }
 
         /* 2) AFTER test: check faces placed after target */
@@ -1527,8 +1532,13 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
             /* We want to move target AFTER best_after. Compute insertion index after removal: */
             int insert_idx;
             if (best_after < pos) insert_idx = best_after + 1; else insert_idx = best_after; /* as analyzed */
+            /* If target was previously moved forward, clamp insertion so it cannot be placed at an index greater than its minimal reached index */
+            if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
             /* perform remove and insert (use optimized variant to update inverse map) */
             moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
+            /* update recorded minimal position in case the move moved it even earlier */
+            pos = pos_of_face[target];
+            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
         }
         
         printf(" %d",target);
@@ -1536,7 +1546,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
 
     /* restore state */
     cull_back_faces = old_cull;
-    free(rel_cache); free(ov_cache); free(pos_of_face);
+    free(rel_cache); free(ov_cache); free(pos_of_face); free(min_allowed_pos);
     if (debug) return moves; else return moves;
 }
 
