@@ -93,7 +93,6 @@ static int pan_dy = 0;
 #define PAINTER_MODE_FIXED 1
 #define PAINTER_MODE_FLOAT 2
 #define PAINTER_MODE_CORRECT 3
-#define PAINTER_MODE_SUPER 4
 
 static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct,4=super (set with '5')
 
@@ -1552,177 +1551,6 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     return moves;
 }
 
-/* painter_super
- * ----------------
- * Variant of painter_correct that tracks two marks per target:
- *  - min_allowed_pos[target] : set when target is moved in BEFORE (lowest index reached)
- *  - max_allowed_pos[target] : set when target is moved in AFTER (highest index reached)
- * Behavior:
- *  - First pass: run BEFORE then AFTER like painter_correct, recording min/max marks
- *  - Second pass: repeat BEFORE then AFTER but **respect the marks** (clamp insertion indices
- *    so that targets cannot be moved outside their per-target [min,max] range).
- * This is a conservative approach to avoid oscillations while allowing corrective moves.
- */
-static int painter_super(Model3D* model, int face_count, int debug) {
-    if (!model) return 0;
-    FaceArrays3D* faces = &model->faces;
-    if (face_count <= 0) return 0;
-
-    /* Prepare sorting state  */
-    int old_cull = cull_back_faces;
-    cull_back_faces = 0;
-    painter_newell_sancha(model, face_count);
-
-    int moves = 0;
-    int n = face_count;
-
-    signed char *rel_cache = (signed char*)malloc(n * n * sizeof(signed char)); if (!rel_cache) { printf("Error: painter_super malloc rel_cache failed\n"); return 0; }
-    for (int i = 0; i < n * n; ++i) rel_cache[i] = 2;
-    unsigned char *ov_cache = (unsigned char*)malloc(n * n * sizeof(unsigned char)); if (!ov_cache) { free(rel_cache); printf("Error: painter_super malloc ov_cache failed\n"); return 0; }
-    for (int i = 0; i < n * n; ++i) ov_cache[i] = 255;
-
-    int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { free(rel_cache); free(ov_cache); printf("Error: painter_super malloc pos_of_face failed\n"); return 0; }
-    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
-
-    int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(rel_cache); free(ov_cache); free(pos_of_face); printf("Error: painter_super malloc min_allowed_pos failed\n"); return 0; }
-    int *max_allowed_pos = (int*)malloc(n * sizeof(int)); if (!max_allowed_pos) { free(rel_cache); free(ov_cache); free(pos_of_face); free(min_allowed_pos); printf("Error: painter_super malloc max_allowed_pos failed\n"); return 0; }
-    for (int i = 0; i < n; ++i) { min_allowed_pos[i] = -1; max_allowed_pos[i] = -1; }
-
-    // --- PASS 1: BEFORE then AFTER, recording min/max marks
-    printf("\nPASS 1:"); fflush(stdout);
-    int pass1_moves = 0; /* count moves in pass 1 */
-    for (int target = 0; target < face_count; ++target) {
-        int pos = pos_of_face[target]; if (pos < 0 || pos >= n) continue;
-
-        // BEFORE
-        int best_before = -1;
-        for (int i = 0; i < pos; ++i) {
-            int f = faces->sorted_face_indices[i];
-            if (faces->z_max[f] <= faces->z_min[target]) continue;
-            if (faces->z_max[target] <= faces->z_min[f]) continue;
-            if (faces->maxx[f] <= faces->minx[target]) continue;
-            if (faces->maxx[target] <= faces->minx[f]) continue;
-            if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;
-            if (!projected_polygons_overlap(model, f, target)) continue;
-            if (pair_plane_after(model, f, target)) { if (best_before == -1 || i < best_before) best_before = i; }
-        }
-        if (best_before != -1) {
-            // Respect any AFTER mark that prevents moving earlier than max_allowed_pos[target]
-            if (max_allowed_pos[target] != -1 && best_before < max_allowed_pos[target]) best_before = max_allowed_pos[target];
-            {
-                int r = move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
-                moves += r; pass1_moves += r;
-            }
-        }
-
-        // AFTER
-        pos = pos_of_face[target]; if (pos < 0 || pos >= n) continue;
-        int best_after = -1;
-        for (int i = pos + 1; i < face_count; ++i) {
-            int f = faces->sorted_face_indices[i];
-            if (faces->z_max[f] <= faces->z_min[target]) continue;
-            if (faces->z_max[target] <= faces->z_min[f]) continue;
-            if (faces->maxx[f] <= faces->minx[target]) continue;
-            if (faces->maxx[target] <= faces->minx[f]) continue;
-            if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;
-            if (!projected_polygons_overlap(model, f, target)) continue;
-            if (pair_plane_before(model, f, target)) { best_after = i; }
-        }
-        if (best_after != -1) {
-            int insert_idx = (best_after < pos) ? best_after + 1 : best_after;
-            if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
-            // Also enforce any existing AFTER mark (don't allow moving earlier than max_allowed_pos[target])
-            if (max_allowed_pos[target] != -1 && insert_idx < max_allowed_pos[target]) insert_idx = max_allowed_pos[target];
-            {
-                int r = move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
-                moves += r; pass1_moves += r;
-            }
-            pos = pos_of_face[target];
-            if (max_allowed_pos[target] == -1 || pos > max_allowed_pos[target]) max_allowed_pos[target] = pos;
-            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-        }
-        /* Progress: show processed target id (compact) */
-        printf(" %d", target);
-    }
-
-    /* Summary and pause after pass 1 */
-    printf("\n\nPASS 1 moves: %d\n", pass1_moves); fflush(stdout); printf("Press any key to continue..."); fflush(stdout); keypress();
-
-    if (pass1_moves == 0) { printf("\nPASS 1 did 0 moves: skipping PASS 2\n"); fflush(stdout); } else {
-    /* Newline separation after pass 1 and header for pass 2 */
-    printf("\n\nPASS 2:\n"); fflush(stdout);
-    // --- PASS 2: repeat BEFORE then AFTER, respecting the marks
-    int pass2_moves = 0; /* count moves in pass 2 */
-    for (int target = 0; target < face_count; ++target) {
-        int pos = pos_of_face[target]; if (pos < 0 || pos >= n) continue;
-
-        // BEFORE
-        int best_before = -1;
-        for (int i = 0; i < pos; ++i) {
-            int f = faces->sorted_face_indices[i];
-            if (faces->z_max[f] <= faces->z_min[target]) continue;
-            if (faces->z_max[target] <= faces->z_min[f]) continue;
-            if (faces->maxx[f] <= faces->minx[target]) continue;
-            if (faces->maxx[target] <= faces->minx[f]) continue;
-            if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;
-            if (!projected_polygons_overlap(model, f, target)) continue;
-            if (pair_plane_after(model, f, target)) { if (best_before == -1 || i < best_before) best_before = i; }
-        }
-        if (best_before != -1) {
-            // Clamp to respect AFTER mark (cannot place target earlier than recorded AFTER move)
-            if (max_allowed_pos[target] != -1 && best_before < max_allowed_pos[target]) best_before = max_allowed_pos[target];
-            {
-                int r = move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
-                moves += r; pass2_moves += r;
-            }
-            pos = pos_of_face[target];
-            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-        }
-
-        // AFTER
-        pos = pos_of_face[target]; if (pos < 0 || pos >= n) continue;
-        int best_after = -1;
-        for (int i = pos + 1; i < face_count; ++i) {
-            int f = faces->sorted_face_indices[i];
-            if (faces->z_max[f] <= faces->z_min[target]) continue;
-            if (faces->z_max[target] <= faces->z_min[f]) continue;
-            if (faces->maxx[f] <= faces->minx[target]) continue;
-            if (faces->maxx[target] <= faces->minx[f]) continue;
-            if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;
-            if (!projected_polygons_overlap(model, f, target)) continue;
-            if (pair_plane_before(model, f, target)) { best_after = i; }
-        }
-        if (best_after != -1) {
-            int insert_idx = (best_after < pos) ? best_after + 1 : best_after;
-            // Enforce BEFORE mark: cannot place target later than its minimal reached index
-            if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
-            // Enforce AFTER mark: cannot place target earlier than its maximal reached index
-            if (max_allowed_pos[target] != -1 && insert_idx < max_allowed_pos[target]) insert_idx = max_allowed_pos[target];
-            {
-                int r = move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
-                moves += r; pass2_moves += r;
-            }
-            pos = pos_of_face[target];
-            if (max_allowed_pos[target] == -1 || pos > max_allowed_pos[target]) max_allowed_pos[target] = pos;
-            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-        }
-        /* Progress: show processed target id (compact) */
-        printf(" %d", target);
-    }
-
-    /* After pass 2 summary and pause */
-    printf("\n\nPASS 2 moves: %d\n", pass2_moves); fflush(stdout); printf("Press any key to continue..."); fflush(stdout); keypress();
-    }
-
-    /* restore state */
-    cull_back_faces = old_cull;
-    free(rel_cache); free(ov_cache); free(pos_of_face); free(min_allowed_pos); free(max_allowed_pos);
-    return moves;
-}
 
 void painter_newell_sancha_float(Model3D* model, int face_count) {
     if (!model) return;
@@ -3767,9 +3595,6 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     } else if (painter_mode == PAINTER_MODE_CORRECT) {
         /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
         painter_correct(model, model->faces.face_count, 0);
-    } else if (painter_mode == PAINTER_MODE_SUPER) {
-        /* painter_super: enhanced corrector with min/max position marks and 2 passes */
-        painter_super(model, model->faces.face_count, 0);
     } else {
         // PAINTER_MODE_FLOAT
         painter_newell_sancha_float(model, model->faces.face_count);
@@ -3780,7 +3605,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     {
         long elapsed = t_end - t_start;
         double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
-        const char* pname = (painter_mode==PAINTER_MODE_FAST)?"painter_newell_sancha_fast":(painter_mode==PAINTER_MODE_FIXED?"painter_newell_sancha":(painter_mode==PAINTER_MODE_CORRECT?"painter_correct":(painter_mode==PAINTER_MODE_SUPER?"painter_super":"painter_newell_sancha_float")) );
+        const char* pname = (painter_mode==PAINTER_MODE_FAST)?"painter_newell_sancha_fast":(painter_mode==PAINTER_MODE_FIXED?"painter_newell_sancha":(painter_mode==PAINTER_MODE_CORRECT?"painter_correct":"painter_newell_sancha_float"));
         printf("[TIMING] %s: %ld ticks (%.2f ms)\n", pname, elapsed, ms);
         keypress();
     }
@@ -5264,10 +5089,6 @@ segment "code22";
                 printf("Painter mode: CORRECT (painter_correct)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 53: // '5' - set SUPER painter (runs painter_super)
-                painter_mode = PAINTER_MODE_SUPER;
-                printf("Painter mode: SUPER (painter_super)\n");
-                if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
 
 case 80:  // 'P' - toggle frame-only polygon rendering
