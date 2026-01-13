@@ -1444,6 +1444,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(rel_cache); free(ov_cache); free(pos_of_face); printf("Error: painter_correct malloc min_allowed_pos failed\n"); return 0; }
     for (int i = 0; i < n; ++i) min_allowed_pos[i] = -1;
 
+    printf("Faces:");
 
     /* For each face id (0..face_count-1) treat that as target */
     for (int target = 0; target < face_count; ++target) {
@@ -1548,7 +1549,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     /* restore state */
     cull_back_faces = old_cull;
     free(rel_cache); free(ov_cache); free(pos_of_face); free(min_allowed_pos);
-    if (debug) return moves; else return moves;
+    return moves;
 }
 
 /* painter_super
@@ -1589,6 +1590,7 @@ static int painter_super(Model3D* model, int face_count, int debug) {
 
     // --- PASS 1: BEFORE then AFTER, recording min/max marks
     printf("\nPASS 1:"); fflush(stdout);
+    int pass1_moves = 0; /* count moves in pass 1 */
     for (int target = 0; target < face_count; ++target) {
         int pos = pos_of_face[target]; if (pos < 0 || pos >= n) continue;
 
@@ -1608,9 +1610,10 @@ static int painter_super(Model3D* model, int face_count, int debug) {
         if (best_before != -1) {
             // Respect any AFTER mark that prevents moving earlier than max_allowed_pos[target]
             if (max_allowed_pos[target] != -1 && best_before < max_allowed_pos[target]) best_before = max_allowed_pos[target];
-            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
-            pos = pos_of_face[target];
-            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+            {
+                int r = move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
+                moves += r; pass1_moves += r;
+            }
         }
 
         // AFTER
@@ -1632,7 +1635,10 @@ static int painter_super(Model3D* model, int face_count, int debug) {
             if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
             // Also enforce any existing AFTER mark (don't allow moving earlier than max_allowed_pos[target])
             if (max_allowed_pos[target] != -1 && insert_idx < max_allowed_pos[target]) insert_idx = max_allowed_pos[target];
-            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
+            {
+                int r = move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
+                moves += r; pass1_moves += r;
+            }
             pos = pos_of_face[target];
             if (max_allowed_pos[target] == -1 || pos > max_allowed_pos[target]) max_allowed_pos[target] = pos;
             if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
@@ -1641,9 +1647,14 @@ static int painter_super(Model3D* model, int face_count, int debug) {
         printf(" %d", target);
     }
 
+    /* Summary and pause after pass 1 */
+    printf("\n\nPASS 1 moves: %d\n", pass1_moves); fflush(stdout); printf("Press any key to continue..."); fflush(stdout); keypress();
+
+    if (pass1_moves == 0) { printf("\nPASS 1 did 0 moves: skipping PASS 2\n"); fflush(stdout); } else {
     /* Newline separation after pass 1 and header for pass 2 */
     printf("\n\nPASS 2:\n"); fflush(stdout);
     // --- PASS 2: repeat BEFORE then AFTER, respecting the marks
+    int pass2_moves = 0; /* count moves in pass 2 */
     for (int target = 0; target < face_count; ++target) {
         int pos = pos_of_face[target]; if (pos < 0 || pos >= n) continue;
 
@@ -1663,7 +1674,10 @@ static int painter_super(Model3D* model, int face_count, int debug) {
         if (best_before != -1) {
             // Clamp to respect AFTER mark (cannot place target earlier than recorded AFTER move)
             if (max_allowed_pos[target] != -1 && best_before < max_allowed_pos[target]) best_before = max_allowed_pos[target];
-            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
+            {
+                int r = move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
+                moves += r; pass2_moves += r;
+            }
             pos = pos_of_face[target];
             if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
         }
@@ -1688,7 +1702,10 @@ static int painter_super(Model3D* model, int face_count, int debug) {
             if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
             // Enforce AFTER mark: cannot place target earlier than its maximal reached index
             if (max_allowed_pos[target] != -1 && insert_idx < max_allowed_pos[target]) insert_idx = max_allowed_pos[target];
-            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
+            {
+                int r = move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
+                moves += r; pass2_moves += r;
+            }
             pos = pos_of_face[target];
             if (max_allowed_pos[target] == -1 || pos > max_allowed_pos[target]) max_allowed_pos[target] = pos;
             if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
@@ -1697,10 +1714,14 @@ static int painter_super(Model3D* model, int face_count, int debug) {
         printf(" %d", target);
     }
 
+    /* After pass 2 summary and pause */
+    printf("\n\nPASS 2 moves: %d\n", pass2_moves); fflush(stdout); printf("Press any key to continue..."); fflush(stdout); keypress();
+    }
+
     /* restore state */
     cull_back_faces = old_cull;
     free(rel_cache); free(ov_cache); free(pos_of_face); free(min_allowed_pos); free(max_allowed_pos);
-    if (debug) return moves; else return moves;
+    return moves;
 }
 
 void painter_newell_sancha_float(Model3D* model, int face_count) {
