@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- *                              DONYGS.cc - Fixed32 Optimized Implementation
+ *              DONYGS.cc - Fixed32 Optimized Implementation
  * ============================================================================
  *
  * Purpose:
@@ -60,6 +60,7 @@
 #include <window.h>     // Window management
 #include <orca.h>       // ORCA specific functions (startgraph, etc.)
 #include <stdint.h>      // uint32_t, etc.
+
 
 #pragma memorymodel 1
 
@@ -318,11 +319,6 @@ static inline int normalize_deg(int deg) {
 //#define PERFORMANCE_MODE 0      // 1 = Optimized performance mode, 0 = Debug mode
 // OPTIMIZATION: Performance mode - disable printf
 #define PERFORMANCE_MODE 1      // 1 = no printf, 0 = normal printf
-#if PERFORMANCE_MODE
-#define QUIET_PRINTF(...) ((void)0)
-#else
-#define QUIET_PRINTF(...) printf(__VA_ARGS__)
-#endif
 
 #define MAX_LINE_LENGTH 256     // Maximum file line size
 #define MAX_VERTICES 6000       // Maximum vertices in a 3D model
@@ -330,48 +326,6 @@ static inline int normalize_deg(int deg) {
 #define MAX_FACE_VERTICES 6     // Maximum vertices per face (triangles/quads/hexagons)
 #define CENTRE_X 160            // Screen center in X (320/2)
 #define CENTRE_Y 100            // Screen center in Y (200/2)
-/* Sub-pixel projection scale used to compute higher-resolution projected coords
- * for more stable overlap tests. Typical values: 16 or 64 (tradeoff precision/cost).
- */
-#define SUBPIX_SCALE 64
-
-/* Overlap diagnostics (enabled in debug mode) */
-static int ov_total_calls = 0;          /* total projected overlap calls */
-static int ov_new_yes = 0;              /* returns=1 using subpixel coords */
-static int ov_legacy_yes = 0;           /* returns=1 using legacy integer coords */
-static int ov_mismatch = 0;             /* counts where subpixel != legacy */
-static int ov_mismatch_samples[16][2];  /* store sample pairs (f1,f2) */
-static int ov_mismatch_sample_count = 0;
-static int ov_ambiguous = 0;            /* counts containment cases deemed ambiguous by epsilon test */
-static int ov_subpixel_preferred = 0;   /* counts mismatches where subpixel was chosen over legacy */
-/* Experimental stabilization: simulate a stronger zoom for containment tests to reduce instability at normal zoom */
-static int ENABLE_SIM_ZOOM = 1;         /* 1 = enable simulated zoom stabilization, 0 = disable */
-#ifndef SIM_ONLY_COMPILE
-#define SIM_ONLY_COMPILE 0    /* COMPILE-TIME: force SIM_ONLY_MODE (integer-only sim-zoom) */
-#endif
-static int SIM_ZOOM_FACTOR = 32;        /* scale factor for simulated zoom (integer, power of two) */
-static int SIM_ZOOM_SHIFT = 5;          /* use left shifts (<< SIM_ZOOM_SHIFT) instead of multiplication for speed */
-/* SIM_ONLY_MODE can be enabled at runtime (args/env) or forced at compile-time
- * by defining SIM_ONLY_COMPILE to 1 (e.g., add #define SIM_ONLY_COMPILE 1 or set in build).
- */
-static int SIM_ONLY_MODE = SIM_ONLY_COMPILE; /* 1 = use integer coords scaled by SIM_ZOOM_SHIFT, no subpixel/epsilon (test mode) */
-static int ov_simzoom_used = 0;         /* counts times simulated zoom was used for a containment decision */
-static int ov_simzoom_changed = 0;      /* counts times simulated zoom changed the chosen result */
-/* Profiling counters for overlap check (lightweight): */
-static long ov_time_ticks_total = 0;    /* total ticks spent inside projected_polygons_overlap (GetTick units) */
-static int ov_segs_intersect_ll_calls = 0;   /* 64-bit segment intersection calls */
-static int ov_segs_intersect_int_calls = 0;  /* 32-bit segment intersection calls */
-static int ov_point_in_poly_int_calls = 0;   /* calls to point_in_poly_int */
-static int ov_point_in_poly_sub_scaled_calls = 0; /* calls to point_in_poly_sub_scaled */
-static int ov_point_in_poly_scaled_int_calls = 0; /* calls to point_in_poly_scaled_int */
-
-/* Perf log filename helper: returns a short file name (no underscores, < 15 chars)
- * Uses current SIM_ONLY_MODE to select suffix 0/1.
- */
-static const char* perf_log_filename(void) {
-    return SIM_ONLY_MODE ? "perfsim1.log" : "perfsim0.log";
-}
-
 //#define mode 640              // Graphics mode 640x200 pixels
 #define mode 320                // Graphics mode 320x200 pixels
 
@@ -406,7 +360,6 @@ typedef struct {
     Fixed32 *x, *y, *z;
     Fixed32 *xo, *yo, *zo;
     int *x2d, *y2d;
-    int *x2d_sub, *y2d_sub; /* sub-pixel scaled integer coords (units = pixels * SUBPIX_SCALE) */
     int vertex_count;
 } VertexArrays3D;
 
@@ -1012,6 +965,11 @@ void painter_newell_sancha(Model3D* model, int face_count) {
             if (maxy1 <= miny2 || maxy2 <= miny1) continue; // separated on Y
 
 
+            if (!projected_polygons_overlap(model, f1, f2)) {
+                // bounding boxes overlap but polygons do not overlap
+                continue;
+                
+            }
 
             // Use cached plane normals and d terms computed in calculateFaceDepths
             int n1 = faces->vertex_count[f1];
@@ -1399,6 +1357,25 @@ void painter_newell_sancha(Model3D* model, int face_count) {
  *  - The routine only performs local moves that are conservative with respect
  *    to the pair tests — it does not attempt global reordering heuristics.
  *
+ * Return value: number of element moves applied to `sorted_face_indices`.
+ */
+static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx) {
+    if (from < 0 || from >= n) return 0;
+    if (insert_idx < 0) insert_idx = 0;
+    if (insert_idx > n-1) insert_idx = n-1;
+    if (from == insert_idx) return 0;
+    int val = arr[from];
+    if (insert_idx < from) {
+        /* shift left region [insert_idx..from-1] right by 1 */
+        memmove(&arr[insert_idx+1], &arr[insert_idx], (from - insert_idx) * sizeof(int));
+        arr[insert_idx] = val;
+    } else {
+        /* insert_idx > from: shift region [from+1..insert_idx] left by 1 */
+        memmove(&arr[from], &arr[from+1], (insert_idx - from) * sizeof(int));
+        arr[insert_idx] = val;
+    }
+    return 1;
+}
 
 /* Optimized variant: performs the same remove+insert but updates an optional
  * inverse map `pos_of_face` in a single pass to avoid a separate update loop.
@@ -1436,17 +1413,13 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     FaceArrays3D* faces = &model->faces;
     if (face_count <= 0) return 0;
 
-    /* Prepare sorting state (same helper used by inspectors) */
-    int old_cull = prepare_inspector_sort(model, face_count);
+    /* Prepare sorting state  */
+    int old_cull = cull_back_faces;
+    cull_back_faces = 0;
+    painter_newell_sancha(model, face_count);
 
     int moves = 0;
     int n = face_count;
-    /* reset overlap diagnostics counters for this run so we can log them even when debug==0 */
-    ov_total_calls = ov_new_yes = ov_legacy_yes = ov_mismatch = 0; ov_mismatch_sample_count = 0;
-    ov_ambiguous = ov_subpixel_preferred = ov_simzoom_used = ov_simzoom_changed = 0;
-    /* reset profiling counters */
-    ov_time_ticks_total = 0; ov_segs_intersect_ll_calls = 0; ov_segs_intersect_int_calls = 0;
-    ov_point_in_poly_int_calls = 0; ov_point_in_poly_sub_scaled_calls = 0; ov_point_in_poly_scaled_int_calls = 0;
     /* Per-run caches to avoid recomputing expensive tests:
      * - rel_cache[f*n + t] stores the result of pair_order_relation(f, t):
      *     2 = unknown, -1/0/1 valid results
@@ -1467,7 +1440,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc pos_of_face failed\n"); return 0; }
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
 
-    QUIET_PRINTF("Faces:");
+
     /* For each face id (0..face_count-1) treat that as target */
     for (int target = 0; target < face_count; ++target) {
         /* Find current position of target via inverse map */
@@ -1475,8 +1448,48 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         if (pos < 0) continue;
         if (pos >= n) continue; /* not present for some reason */
 
+        /* 1) BEFORE test: check faces placed before target */
+        int best_before = -1; /* smallest index of misplaced face */
+        for (int i = 0; i < pos; ++i) {
+            int f = faces->sorted_face_indices[i];
 
-    
+            /* depth (Z) quick rejection (cheap): if Z ranges do not overlap skip */
+            if (faces->z_max[f] <= faces->z_min[target]) continue;
+            if (faces->z_max[target] <= faces->z_min[f]) continue;
+
+            /* bounding-box quick rejection (very cheap): if AABBs don't intersect we
+             * skip the expensive overlap check entirely. Touching-only bbox cases
+             * will pass here and be filtered by the overlap test (which treats
+             * touching-only as NON-overlap).
+             */
+            if (faces->maxx[f] <= faces->minx[target]) continue;
+            if (faces->maxx[target] <= faces->minx[f]) continue;
+            if (faces->maxy[f] <= faces->miny[target]) continue;
+            if (faces->maxy[target] <= faces->miny[f]) continue;    
+
+            /* require actual projected polygon overlap before considering swap
+             * (projected_polygons_overlap performs proper edge intersection and
+             * containment tests; expensive but necessary for correctness).
+             */
+            if (!projected_polygons_overlap(model, f, target)) continue;
+            /* pair_order_relation is relatively heavy; we cache its result to avoid
+             * recalculating for the same pair multiple times during a run.
+             */
+
+            /* Use specialized plane-only 'after' test for BEFORE loop: quick check
+             * to see if `f` is geometrically after (in front of) `target`.
+             */
+            if (pair_plane_after(model, f, target)) {
+                if (best_before == -1 || i < best_before) best_before = i;
+            }
+        }
+        if (best_before != -1) {
+            /* move target to be BEFORE best_before (use optimized variant updating inverse map) */
+            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
+            /* update pos to new location via inverse map */
+            pos = pos_of_face[target];
+        }
+
         /* 2) AFTER test: check faces placed after target */
         /* recompute pos if necessary (ensure we have current location) */
         pos = pos_of_face[target];
@@ -1503,11 +1516,12 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
              * (the overlap test is expensive; we avoid it whenever bbox rejects).
              */
             if (!projected_polygons_overlap(model, f, target)) continue;
-            
             /* Use specialized plane-only 'before' test for AFTER loop: quick check
              * to see if `f` is geometrically before `target`.
              */
             if (pair_plane_before(model, f, target)) { best_after = i; /* wants the largest index */ }
+
+            
         }
         if (best_after != -1) {
             /* We want to move target AFTER best_after. Compute insertion index after removal: */
@@ -1516,96 +1530,14 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
             /* perform remove and insert (use optimized variant to update inverse map) */
             moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
         }
-
-        /* 1) BEFORE test: check faces placed before target */
-        int best_before = -1; /* smallest index of misplaced face */
-        for (int i = 0; i < pos; ++i) {
-            int f = faces->sorted_face_indices[i];
-
-            /* depth (Z) quick rejection (cheap): if Z ranges do not overlap skip */
-            if (faces->z_max[f] <= faces->z_min[target]) continue;
-            if (faces->z_max[target] <= faces->z_min[f]) continue;
-
-            /* bounding-box quick rejection (very cheap): if AABBs don't intersect we
-             * skip the expensive overlap check entirely. Touching-only bbox cases
-             * will pass here and be filtered by the overlap test (which treats
-             * touching-only as NON-overlap).
-             */
-            if (faces->maxx[f] <= faces->minx[target]) continue;
-            if (faces->maxx[target] <= faces->minx[f]) continue;
-            if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;    
-
-            /* require actual projected polygon overlap before considering swap
-             * (projected_polygons_overlap performs proper edge intersection and
-             * containment tests; expensive but necessary for correctness).
-             */
-            if (!projected_polygons_overlap(model, f, target)) continue;
-
-            /* Use specialized plane-only 'after' test for BEFORE loop: quick check
-             * to see if `f` is geometrically after (in front of) `target`.
-             */
-            if (pair_plane_after(model, f, target)) {
-                if (best_before == -1 || i < best_before) best_before = i;
-            }
-        }
-        if (best_before != -1) {
-            /* move target to be BEFORE best_before (use optimized variant updating inverse map) */
-            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
-            /* update pos to new location via inverse map */
-            pos = pos_of_face[target];
-        }
-
         
-        QUIET_PRINTF(" %d",target);
+        printf(" %d",target);
     }
-    QUIET_PRINTF("\n");
 
     /* restore state */
     cull_back_faces = old_cull;
     free(rel_cache); free(ov_cache); free(pos_of_face);
-    if (debug) {
-        QUIET_PRINTF("Overlap calls: total=%d new_yes=%d legacy_yes=%d mismatches=%d ambiguous=%d subpixel_preferred=%d simzoom_used=%d simzoom_changed=%d ticks_total=%ld segs_ll=%d segs_int=%d pip_int=%d pip_sub_scaled=%d pip_scaled_int=%d\n", ov_total_calls, ov_new_yes, ov_legacy_yes, ov_mismatch, ov_ambiguous, ov_subpixel_preferred, ov_simzoom_used, ov_simzoom_changed, ov_time_ticks_total, ov_segs_intersect_ll_calls, ov_segs_intersect_int_calls, ov_point_in_poly_int_calls, ov_point_in_poly_sub_scaled_calls, ov_point_in_poly_scaled_int_calls);
-        if (ov_mismatch_sample_count > 0) {
-            QUIET_PRINTF("Mismatch samples (up to 16):\n");
-            for (int i = 0; i < ov_mismatch_sample_count; ++i) QUIET_PRINTF("  sample %d: f1=%d f2=%d\n", i, ov_mismatch_samples[i][0], ov_mismatch_samples[i][1]);
-        }
-        /* Append diagnostics to perf analysis file (short name) */
-        {
-            FILE* pf = fopen(perf_log_filename(), "a");
-            if (pf) {
-                fprintf(pf, "OVERLAP_STATS: total=%d new_yes=%d legacy_yes=%d mismatches=%d ambiguous=%d subpixel_preferred=%d simzoom_used=%d simzoom_changed=%d\n", ov_total_calls, ov_new_yes, ov_legacy_yes, ov_mismatch, ov_ambiguous, ov_subpixel_preferred, ov_simzoom_used, ov_simzoom_changed);
-                if (ov_mismatch_sample_count > 0) {
-                    fprintf(pf, "OVERLAP_MISMATCH_SAMPLES:");
-                    for (int i = 0; i < ov_mismatch_sample_count; ++i) fprintf(pf, " %d-%d", ov_mismatch_samples[i][0], ov_mismatch_samples[i][1]);
-                    fprintf(pf, "\n");
-                }
-                /* Profiling summary for overlap checks */
-                fprintf(pf, "OVERLAP_PROFILE: ticks_total=%ld segs_ll=%d segs_int=%d pip_int=%d pip_sub_scaled=%d pip_scaled_int=%d\n",
-                        ov_time_ticks_total, ov_segs_intersect_ll_calls, ov_segs_intersect_int_calls, ov_point_in_poly_int_calls, ov_point_in_poly_sub_scaled_calls, ov_point_in_poly_scaled_int_calls);
-                fclose(pf);
-                /* Inform user: perf file was appended (check current working directory) */
-                QUIET_PRINTF("perf file appended (check current working directory)\n");
-            }
-        }
-        return moves;
-    }
-    /* Ensure perf summary is also written even when debug==0 */
-    if (!debug) {
-        FILE* pf2 = fopen(perf_log_filename(), "a");
-        if (pf2) {
-            fprintf(pf2, "OVERLAP_STATS: total=%d new_yes=%d legacy_yes=%d mismatches=%d ambiguous=%d subpixel_preferred=%d simzoom_used=%d simzoom_changed=%d\n",
-                    ov_total_calls, ov_new_yes, ov_legacy_yes, ov_mismatch, ov_ambiguous, ov_subpixel_preferred, ov_simzoom_used, ov_simzoom_changed);
-            if (ov_mismatch_sample_count > 0) {
-                fprintf(pf2, "OVERLAP_MISMATCH_SAMPLES:");
-                for (int i = 0; i < ov_mismatch_sample_count; ++i) fprintf(pf2, " %d-%d", ov_mismatch_samples[i][0], ov_mismatch_samples[i][1]);
-                fprintf(pf2, "\n");
-            }
-            fprintf(pf2, "OVERLAP_PROFILE: ticks_total=%ld segs_ll=%d segs_int=%d pip_int=%d pip_sub_scaled=%d pip_scaled_int=%d\n",
-                    ov_time_ticks_total, ov_segs_intersect_ll_calls, ov_segs_intersect_int_calls, ov_point_in_poly_int_calls, ov_point_in_poly_sub_scaled_calls, ov_point_in_poly_scaled_int_calls);
-            fclose(pf2);
-        }
-    }
+    if (debug) return moves; else return moves;
 }
 
 void painter_newell_sancha_float(Model3D* model, int face_count) {
@@ -1948,24 +1880,6 @@ void painter_newell_sancha_float(Model3D* model, int face_count) {
  *   1 if f1 is (conclusively) after f2
  *   0 if inconclusive
  */
-/* prepare_inspector_sort
- * ----------------------
- * Purpose: prepare a model for interactive inspector runs.
- * Behavior:
- *  - Temporarily disables back-face culling so the painter sorts ALL faces
- *    (including back faces). This ensures inspectors consider every face
- *    regardless of the global `cull_back_faces` flag.
- *  - Runs the painter sort (`painter_newell_sancha`) to compute `sorted_face_indices`
- * Returns:
- *  - previous `cull_back_faces` value (so callers can restore it)
- */
-segment "code00";
-static int prepare_inspector_sort(Model3D* m, int fc) {
-    int old = cull_back_faces;
-    cull_back_faces = 0; /* inspector should include back faces */
-    painter_newell_sancha(m, fc);
-    return old;
-}
 
 /* pair_order_relation
  * -------------------
@@ -2118,63 +2032,18 @@ static int segs_intersect_int(int x1,int y1,int x2,int y2,int x3,int y3,int x4,i
     /* Ignore colinear or on-segment cases (return 0) */
     return 0;
 }
-/* Segments intersection variant for long long (used by scaled/simulated zoom tests) */
-static int segs_intersect_ll(long long x1,long long y1,long long x2,long long y2,long long x3,long long y3,long long x4,long long y4) {
-    long long o1 = orient_ll(x1,y1,x2,y2,x3,y3);
-    long long o2 = orient_ll(x1,y1,x2,y2,x4,y4);
-    long long o3 = orient_ll(x3,y3,x4,y4,x1,y1);
-    long long o4 = orient_ll(x3,y3,x4,y4,x2,y2);
-    if (((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0))) return 1;
-    return 0;
-}
 static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* vtx, int f, int n) {
     int cnt = 0; int off = faces->vertex_indices_ptr[f];
     for (int i = 0; i < n; ++i) {
         int j = (i+1)%n;
         int vi = faces->vertex_indices_buffer[off + i] - 1;
         int vj = faces->vertex_indices_buffer[off + j] - 1;
-        int xi = vtx->x2d_sub[vi], yi = vtx->y2d_sub[vi];
-        int xj = vtx->x2d_sub[vj], yj = vtx->y2d_sub[vj];
+        int xi = vtx->x2d[vi], yi = vtx->y2d[vi];
+        int xj = vtx->x2d[vj], yj = vtx->y2d[vj];
         /* If the point lies exactly on the edge, consider it OUTSIDE (no overlap).
          * Use orient==0 + on-segment test to detect boundary points. */
         if (orient_ll(xi, yi, xj, yj, px, py) == 0 && on_seg_ll(xi, yi, xj, yj, px, py)) return 0;
         if (((yi > py) != (yj > py)) && (px < (long long)(xj - xi) * (py - yi) / (yj - yi) + xi)) cnt++;
-    }
-    return (cnt & 1);
-}
-static int point_in_poly_sub_scaled(int px,int py,FaceArrays3D* faces, VertexArrays3D* vtx, int f, int n, int shift) {
-    int cnt = 0; int off = faces->vertex_indices_ptr[f];
-    long long spx = ((long long)px) << shift;
-    long long spy = ((long long)py) << shift;
-    for (int i = 0; i < n; ++i) {
-        int j = (i+1)%n;
-        int vi = faces->vertex_indices_buffer[off + i] - 1;
-        int vj = faces->vertex_indices_buffer[off + j] - 1;
-        long long xi = ((long long)vtx->x2d_sub[vi]) << shift, yi = ((long long)vtx->y2d_sub[vi]) << shift;
-        long long xj = ((long long)vtx->x2d_sub[vj]) << shift, yj = ((long long)vtx->y2d_sub[vj]) << shift;
-        /* If the point lies exactly on the edge, consider it OUTSIDE (no overlap). */
-        if (orient_ll(xi, yi, xj, yj, spx, spy) == 0 && on_seg_ll(xi, yi, xj, yj, spx, spy)) return 0;
-        if (((yi > spy) != (yj > spy)) && (spx < (long long)(xj - xi) * (spy - yi) / (yj - yi) + xi)) cnt++;
-    }
-    return (cnt & 1);
-}
-
-/* point-in-polygon using scaled INTEGER coords (for SIM_ONLY_MODE):
- * uses x2d/y2d values shifted left by 'shift' to simulate zoom.
- */
-static int point_in_poly_scaled_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* vtx, int f, int n, int shift) {
-    int cnt = 0; int off = faces->vertex_indices_ptr[f];
-    long long spx = ((long long)px) << shift;
-    long long spy = ((long long)py) << shift;
-    for (int i = 0; i < n; ++i) {
-        int j = (i+1)%n;
-        int vi = faces->vertex_indices_buffer[off + i] - 1;
-        int vj = faces->vertex_indices_buffer[off + j] - 1;
-        long long xi = ((long long)vtx->x2d[vi]) << shift, yi = ((long long)vtx->y2d[vi]) << shift;
-        long long xj = ((long long)vtx->x2d[vj]) << shift, yj = ((long long)vtx->y2d[vj]) << shift;
-        /* If the point lies exactly on the edge, consider it OUTSIDE (no overlap). */
-        if (orient_ll(xi, yi, xj, yj, spx, spy) == 0 && on_seg_ll(xi, yi, xj, yj, spx, spy)) return 0;
-        if (((yi > spy) != (yj > spy)) && (spx < (long long)(xj - xi) * (spy - yi) / (yj - yi) + xi)) cnt++;
     }
     return (cnt & 1);
 }
@@ -2186,19 +2055,11 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     if (ENABLE_DEBUG_SAVE) printf("Checking projected overlap for faces %d and %d (touching is considered NON-overlap)\n", f1, f2);
     int n1 = faces->vertex_count[f1];
     int n2 = faces->vertex_count[f2];
-    int new_res = 0; /* will hold computed result (0/1) */
-    /* Timing start for profiling (GetTick units) */
-    long t_start = GetTick();
-    /* Local flags for simulated zoom stabilization (used for diagnostics) */
-    int sim_used_local = 0; int sim_changed_local = 0;
-    int sim = (ENABLE_SIM_ZOOM && SIM_ZOOM_FACTOR > 1) ? 1 : 0;
-    if (SIM_ONLY_MODE) { sim = 1; sim_used_local = 1; ov_simzoom_used++; }
-    else if (sim) { sim_used_local = 1; ov_simzoom_used++; }
-    if (n1 < 3 || n2 < 3) { new_res = 0; goto done_overlap_check; }
+    if (n1 < 3 || n2 < 3) return 0;
 
     int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
     int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-    if (maxx1 < minx2 || maxx2 < minx1 || maxy1 < miny2 || maxy2 < miny1) { new_res = 0; goto done_overlap_check; }
+    if (maxx1 < minx2 || maxx2 < minx1 || maxy1 < miny2 || maxy2 < miny1) return 0;
 
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
@@ -2211,286 +2072,49 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         int i2 = (i+1) % n1;
         int va = faces->vertex_indices_buffer[off1 + i] - 1;
         int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
-        if (sim && !SIM_ONLY_MODE) {
-            /* edge intersection using simulated zoom (scaled subpixel coords) */
-            long long ax = ((long long)vtx->x2d_sub[va]) << SIM_ZOOM_SHIFT;
-            long long ay = ((long long)vtx->y2d_sub[va]) << SIM_ZOOM_SHIFT;
-            long long bx = ((long long)vtx->x2d_sub[vb]) << SIM_ZOOM_SHIFT;
-            long long by = ((long long)vtx->y2d_sub[vb]) << SIM_ZOOM_SHIFT;
-            long long aminx = ax < bx ? ax : bx; long long amaxx = ax > bx ? ax : bx;
-            long long aminy = ay < by ? ay : by; long long amaxy = ay > by ? ay : by;
-            for (int j = 0; j < n2; ++j) {
-                int j2 = (j+1) % n2;
-                int vc = faces->vertex_indices_buffer[off2 + j] - 1;
-                int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
-                long long cx = ((long long)vtx->x2d_sub[vc]) << SIM_ZOOM_SHIFT;
-                long long cy = ((long long)vtx->y2d_sub[vc]) << SIM_ZOOM_SHIFT;
-                long long dx = ((long long)vtx->x2d_sub[vd]) << SIM_ZOOM_SHIFT;
-                long long dy = ((long long)vtx->y2d_sub[vd]) << SIM_ZOOM_SHIFT;
-                long long cminx = cx < dx ? cx : dx; long long cmaxx = cx > dx ? cx : dx;
-                long long cminy = cy < dy ? cy : dy; long long cmaxy = cy > dy ? cy : dy;
-                /* quick reject if edge AABBs do not overlap (<= to consider touching as non-overlap) */
-                if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
-                ov_segs_intersect_ll_calls++;
-                if (segs_intersect_ll(ax,ay,bx,by,cx,cy,dx,dy)) { new_res = 1; goto done_overlap_check; }
-            }
-        } else if (SIM_ONLY_MODE) {
-            /* SIM_ONLY_MODE: use integer coords scaled by shift (no subpixel/epsilon) */
-            long long ax = ((long long)vtx->x2d[va]) << SIM_ZOOM_SHIFT;
-            long long ay = ((long long)vtx->y2d[va]) << SIM_ZOOM_SHIFT;
-            long long bx = ((long long)vtx->x2d[vb]) << SIM_ZOOM_SHIFT;
-            long long by = ((long long)vtx->y2d[vb]) << SIM_ZOOM_SHIFT;
-            long long aminx = ax < bx ? ax : bx; long long amaxx = ax > bx ? ax : bx;
-            long long aminy = ay < by ? ay : by; long long amaxy = ay > by ? ay : by;
-            for (int j = 0; j < n2; ++j) {
-                int j2 = (j+1) % n2;
-                int vc = faces->vertex_indices_buffer[off2 + j] - 1;
-                int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
-                long long cx = ((long long)vtx->x2d[vc]) << SIM_ZOOM_SHIFT;
-                long long cy = ((long long)vtx->y2d[vc]) << SIM_ZOOM_SHIFT;
-                long long dx = ((long long)vtx->x2d[vd]) << SIM_ZOOM_SHIFT;
-                long long dy = ((long long)vtx->y2d[vd]) << SIM_ZOOM_SHIFT;
-                long long cminx = cx < dx ? cx : dx; long long cmaxx = cx > dx ? cx : dx;
-                long long cminy = cy < dy ? cy : dy; long long cmaxy = cy > dy ? cy : dy;
-                /* quick reject if edge AABBs do not overlap (<= to consider touching as non-overlap) */
-                if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
-                ov_segs_intersect_ll_calls++;
-                if (segs_intersect_ll(ax,ay,bx,by,cx,cy,dx,dy)) { new_res = 1; goto done_overlap_check; }
-            }
-        } else {
-            /* edge intersection: use integer pixel coords (conservative for touching cases) */
-            int ax = vtx->x2d[va], ay = vtx->y2d[va];
-            int bx = vtx->x2d[vb], by = vtx->y2d[vb];
-            int aminx = ax < bx ? ax : bx; int amaxx = ax > bx ? ax : bx;
-            int aminy = ay < by ? ay : by; int amaxy = ay > by ? ay : by;
-            for (int j = 0; j < n2; ++j) {
-                int j2 = (j+1) % n2;
-                int vc = faces->vertex_indices_buffer[off2 + j] - 1;
-                int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
-                int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
-                int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
-                int cminx = cx < dx ? cx : dx; int cmaxx = cx > dx ? cx : dx;
-                int cminy = cy < dy ? cy : dy; int cmaxy = cy > dy ? cy : dy;
-                /* quick reject if edge AABBs do not overlap (<= to consider touching as non-overlap) */
-                if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
-                ov_segs_intersect_int_calls++;
-                if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) { new_res = 1; goto done_overlap_check; }
-            }
+        int ax = vtx->x2d[va], ay = vtx->y2d[va];
+        int bx = vtx->x2d[vb], by = vtx->y2d[vb];
+        int aminx = ax < bx ? ax : bx; int amaxx = ax > bx ? ax : bx;
+        int aminy = ay < by ? ay : by; int amaxy = ay > by ? ay : by;
+        for (int j = 0; j < n2; ++j) {
+            int j2 = (j+1) % n2;
+            int vc = faces->vertex_indices_buffer[off2 + j] - 1;
+            int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
+            int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
+            int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
+            int cminx = cx < dx ? cx : dx; int cmaxx = cx > dx ? cx : dx;
+            int cminy = cy < dy ? cy : dy; int cmaxy = cy > dy ? cy : dy;
+            /* quick reject if edge AABBs do not overlap (<= to consider touching as non-overlap) */
+            if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
+            if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) return 1;
         }
     }
 
-    /* Containment tests: only check if candidate point lies inside the other's bbox first
-     * (cheap) before doing the full ray-cast in point_in_poly_int. This skips expensive
-     * loops for points obviously outside the other polygon's bbox. */
-    // Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
-    // This avoids missing a containment when the polygon's first vertex lies on a shared
-    // boundary point (touching) which is treated as outside.
-    for (int ii = 0; ii < n1; ++ii) {
-        int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
-        if (vid < 0 || vid >= vtx->vertex_count) continue;
-        if (SIM_ONLY_MODE) {
-            int px_int = vtx->x2d[vid], py_int = vtx->y2d[vid];
-            if (px_int < minx2 || px_int > maxx2 || py_int < miny2 || py_int > maxy2) continue;
-            /* Direct scaled integer containment (no ambiguity checks) */
-            sim_used_local = 1;
-            ov_point_in_poly_scaled_int_calls++;
-            int sim_res = point_in_poly_scaled_int(px_int, py_int, faces, vtx, f2, n2, SIM_ZOOM_SHIFT);
-            if (sim_res != new_res) sim_changed_local = 1;
-            new_res = sim_res;
-            if (new_res) goto done_overlap_check;
-        } else {
-            int px = vtx->x2d_sub[vid], py = vtx->y2d_sub[vid];
-            if (px < (minx2*SUBPIX_SCALE) || px > (maxx2*SUBPIX_SCALE) || py < (miny2*SUBPIX_SCALE) || py > (maxy2*SUBPIX_SCALE)) continue;
-            /* Ambiguity check: if point is very close to an edge (within ~1 pixel), treat as ambiguous and skip containment
-             * Condition: distance from point to segment <= SUBPIX_SCALE (in subpixel units)
-             * Using squared test: orient^2 <= (SUBPIX_SCALE^2) * (dx^2 + dy^2)
-             */
-            int ambiguous = 0;
-            int off_check = faces->vertex_indices_ptr[f2];
-            for (int ei = 0; ei < n2; ++ei) {
-                int ej = (ei + 1) % n2;
-                int vi = faces->vertex_indices_buffer[off2 + ei] - 1;
-                int vj = faces->vertex_indices_buffer[off2 + ej] - 1;
-                if (vi < 0 || vj < 0) continue;
-                long long xi = vtx->x2d_sub[vi], yi = vtx->y2d_sub[vi];
-                long long xj = vtx->x2d_sub[vj], yj = vtx->y2d_sub[vj];
-                long long dx = xj - xi; long long dy = yj - yi;
-                long long orient = orient_ll((long long)xi, (long long)yi, (long long)xj, (long long)yj, (long long)px, (long long)py);
-                if (orient == 0 && on_seg_ll((long long)xi,(long long)yi,(long long)xj,(long long)yj,(long long)px,(long long)py)) { ambiguous = 1; break; }
-                long long sq_orient = orient * orient;
-                long long edge_sq = dx*dx + dy*dy;
-                long long thr = (long long)SUBPIX_SCALE * (long long)SUBPIX_SCALE * edge_sq;
-                if (sq_orient <= thr) { ambiguous = 1; break; }
-            }
-            if (ambiguous) { ov_ambiguous++; continue; }
-            ov_point_in_poly_int_calls++;
-            if (point_in_poly_int(px, py, faces, vtx, f2, n2)) {
-                if (ENABLE_SIM_ZOOM) {
-                    sim_used_local = 1;
-                    ov_point_in_poly_sub_scaled_calls++;
-                    int sim_res = point_in_poly_sub_scaled(px, py, faces, vtx, f2, n2, SIM_ZOOM_SHIFT);
-                    if (sim_res != new_res) { sim_changed_local = 1; }
-                    new_res = sim_res;
-                } else {
-                    new_res = 1;
-                }
-                goto done_overlap_check;
-            }
-        }
-    }
+    // SUPPRESSION : Containment tests are disabled. 
+    // Risque : cas d'une face entièrement contenue dans l'autre non détecté (mais test Z aura trié)
+    // /* Containment tests: only check if candidate point lies inside the other's bbox first
+    //  * (cheap) before doing the full ray-cast in point_in_poly_int. This skips expensive
+    //  * loops for points obviously outside the other polygon's bbox. */
+    // // Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
+    // // This avoids missing a containment when the polygon's first vertex lies on a shared
+    // // boundary point (touching) which is treated as outside.
+    // for (int ii = 0; ii < n1; ++ii) {
+    //     int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
+    //     if (vid < 0 || vid >= vtx->vertex_count) continue;
+    //     int px = vtx->x2d[vid], py = vtx->y2d[vid];
+    //     if (px < minx2 || px > maxx2 || py < miny2 || py > maxy2) continue;
+    //     if (point_in_poly_int(px, py, faces, vtx, f2, n2)) return 1;
+    // }
 
-    for (int jj = 0; jj < n2; ++jj) {
-        int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
-        if (vid < 0 || vid >= vtx->vertex_count) continue;
-        int px = vtx->x2d_sub[vid], py = vtx->y2d_sub[vid];
-        if (px < (minx1*SUBPIX_SCALE) || px > (maxx1*SUBPIX_SCALE) || py < (miny1*SUBPIX_SCALE) || py > (maxy1*SUBPIX_SCALE)) continue;
-        /* Ambiguity check for containment (symmetrical) */
-        int ambiguous2 = 0;
-        int off_check1 = faces->vertex_indices_ptr[f1];
-        for (int ei = 0; ei < n1; ++ei) {
-            int ej = (ei + 1) % n1;
-            int vi = faces->vertex_indices_buffer[off1 + ei] - 1;
-            int vj = faces->vertex_indices_buffer[off1 + ej] - 1;
-            if (vi < 0 || vj < 0) continue;
-            long long xi = vtx->x2d_sub[vi], yi = vtx->y2d_sub[vi];
-            long long xj = vtx->x2d_sub[vj], yj = vtx->y2d_sub[vj];
-            long long dx = xj - xi; long long dy = yj - yi;
-            long long orient = orient_ll((long long)xi, (long long)yi, (long long)xj, (long long)yj, (long long)px, (long long)py);
-            if (orient == 0 && on_seg_ll((long long)xi,(long long)yi,(long long)xj,(long long)yj,(long long)px,(long long)py)) { ambiguous2 = 1; break; }
-            long long sq_orient = orient * orient;
-            long long edge_sq = dx*dx + dy*dy;
-            long long thr = (long long)SUBPIX_SCALE * (long long)SUBPIX_SCALE * edge_sq;
-            if (sq_orient <= thr) { ambiguous2 = 1; break; }
-        }
-        if (SIM_ONLY_MODE) {
-            int px_int = vtx->x2d[vid], py_int = vtx->y2d[vid];
-            if (px_int < minx1 || px_int > maxx1 || py_int < miny1 || py_int > maxy1) continue;
-            /* SIM_ONLY_MODE: integer scaled containment (no ambiguity checks) */
-            sim_used_local = 1;
-            ov_point_in_poly_scaled_int_calls++;
-            int sim_res = point_in_poly_scaled_int(px_int, py_int, faces, vtx, f1, n1, SIM_ZOOM_SHIFT);
-            if (sim_res != new_res) sim_changed_local = 1;
-            new_res = sim_res;
-            if (new_res) goto done_overlap_check;
-        } else {
-            if (ambiguous2) { ov_ambiguous++; continue; }
-            ov_point_in_poly_int_calls++;
-            if (point_in_poly_int(px, py, faces, vtx, f1, n1)) {
-                if (ENABLE_SIM_ZOOM) {
-                    sim_used_local = 1;
-                    ov_point_in_poly_sub_scaled_calls++;
-                    int sim_res = point_in_poly_sub_scaled(px, py, faces, vtx, f1, n1, SIM_ZOOM_SHIFT);
-                    if (sim_res != new_res) { sim_changed_local = 1; }
-                    new_res = sim_res;
-                } else {
-                    new_res = 1;
-                }
-                goto done_overlap_check;
-            }
-        }
-    }
-    /* default: no overlap */
-    new_res = 0; 
+    // for (int jj = 0; jj < n2; ++jj) {
+    //     int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
+    //     if (vid < 0 || vid >= vtx->vertex_count) continue;
+    //     int px = vtx->x2d[vid], py = vtx->y2d[vid];
+    //     if (px < minx1 || px > maxx1 || py < miny1 || py > maxy1) continue;
+    //     if (point_in_poly_int(px, py, faces, vtx, f1, n1)) return 1;
+    // }
 
-done_overlap_check:;
-    /* accumulate timing for this overlap call */
-    ov_time_ticks_total += (GetTick() - t_start);
-        /* compute legacy behavior using integer coords for comparison (always compute to ensure conservative fallback) */
-    ov_total_calls++;
-    if (new_res) ov_new_yes++;
-    {
-        int legacy_res = 0;
-        // quick reject using integer bbox
-        if (!(maxx1 < minx2 || maxx2 < minx1 || maxy1 < miny2 || maxy2 < miny1)) {
-            // edge intersections (integer coords)
-            for (int i = 0; i < n1 && !legacy_res; ++i) {
-                int i2 = (i+1) % n1;
-                int va = faces->vertex_indices_buffer[off1 + i] - 1;
-                int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
-                int ax = vtx->x2d[va], ay = vtx->y2d[va];
-                int bx = vtx->x2d[vb], by = vtx->y2d[vb];
-                int aminx = ax < bx ? ax : bx; int amaxx = ax > bx ? ax : bx;
-                int aminy = ay < by ? ay : by; int amaxy = ay > by ? ay : by;
-                for (int j = 0; j < n2; ++j) {
-                    int j2 = (j+1) % n2;
-                    int vc = faces->vertex_indices_buffer[off2 + j] - 1;
-                    int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
-                    int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
-                    int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
-                    int cminx = cx < dx ? cx : dx; int cmaxx = cx > dx ? cx : dx;
-                    int cminy = cy < dy ? cy : dy; int cmaxy = cy > dy ? cy : dy;
-                    if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
-                    ov_segs_intersect_int_calls++;
-                    if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) { legacy_res = 1; break; }
-                }
-            }
-            // containment tests
-            if (!legacy_res) {
-                for (int ii = 0; ii < n1 && !legacy_res; ++ii) {
-                    int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
-                    if (vid < 0 || vid >= vtx->vertex_count) continue;
-                    int px = vtx->x2d[vid], py = vtx->y2d[vid];
-                    if (px < minx2 || px > maxx2 || py < miny2 || py > maxy2) continue;
-                    ov_point_in_poly_int_calls++;
-                    if (point_in_poly_int(px, py, faces, vtx, f2, n2)) { legacy_res = 1; break; }
-                }
-            }
-            if (!legacy_res) {
-                for (int jj = 0; jj < n2 && !legacy_res; ++jj) {
-                    int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
-                    if (vid < 0 || vid >= vtx->vertex_count) continue;
-                    int px = vtx->x2d[vid], py = vtx->y2d[vid];
-                    if (px < minx1 || px > maxx1 || py < miny1 || py > maxy1) continue;
-                    ov_point_in_poly_int_calls++;
-                    if (point_in_poly_int(px, py, faces, vtx, f1, n1)) { legacy_res = 1; break; }
-                }
-            }
-        }
-        if (legacy_res) ov_legacy_yes++;
-        if (legacy_res != new_res) {
-            ov_mismatch++;
-            if (sim_used_local) ov_simzoom_changed++;
-            if (ov_mismatch_sample_count < 16) {
-                ov_mismatch_samples[ov_mismatch_sample_count][0] = f1; ov_mismatch_samples[ov_mismatch_sample_count][1] = f2; ov_mismatch_sample_count++;
-                /* Append detailed sample info to perf.log for offline debugging */
-                FILE* pf = fopen(perf_log_filename(), "a");
-                if (pf) {
-                    char chosen_label[32];
-                    if (SIM_ONLY_MODE) {
-                        if (sim_changed_local) strcpy(chosen_label, "SIM_ONLY_CHG"); else strcpy(chosen_label, "SIM_ONLY");
-                    } else if (sim_used_local) {
-                        if (sim_changed_local) strcpy(chosen_label, "SUBPIX_SIM_CHG"); else strcpy(chosen_label, "SUBPIX_SIM");
-                    } else {
-                        strcpy(chosen_label, "SUBPIX");
-                    }
-                    fprintf(pf, "MISMATCH_DETAIL: f1=%d f2=%d new=%d legacy=%d chosen=%s\n", f1, f2, new_res, legacy_res, chosen_label);
-                    fprintf(pf, "  f1_bbox=%d-%d,%d-%d\n", minx1, maxx1, miny1, maxy1);
-                    int off1 = faces->vertex_indices_ptr[f1]; int n1 = faces->vertex_count[f1];
-                    fprintf(pf, "  f1_verts:");
-                    for (int vi = 0; vi < n1; ++vi) {
-                        int v = faces->vertex_indices_buffer[off1 + vi] - 1;
-                        if (v < 0 || v >= vtx->vertex_count) continue;
-                        fprintf(pf, " %d:(%d,%d,%d,%d)", v, vtx->x2d[v], vtx->y2d[v], vtx->x2d_sub[v], vtx->y2d_sub[v]);
-                    }
-                    fprintf(pf, "\n");
-                    fprintf(pf, "  f2_bbox=%d-%d,%d-%d\n", minx2, maxx2, miny2, maxy2);
-                    int off2 = faces->vertex_indices_ptr[f2]; int n2 = faces->vertex_count[f2];
-                    fprintf(pf, "  f2_verts:");
-                    for (int vi = 0; vi < n2; ++vi) {
-                        int v = faces->vertex_indices_buffer[off2 + vi] - 1;
-                        if (v < 0 || v >= vtx->vertex_count) continue;
-                        fprintf(pf, " %d:(%d,%d,%d,%d)", v, vtx->x2d[v], vtx->y2d[v], vtx->x2d_sub[v], vtx->y2d_sub[v]);
-                    }
-                    fprintf(pf, "\n");
-                    fclose(pf);
-                }
-            }
-
-            /* Prefer subpixel: when mismatch occurs, keep subpixel result but record choice */
-            ov_subpixel_preferred++;
-        }
-    }
-    return new_res;
+    return 0;
 }
 
 segment "code03";
@@ -2619,42 +2243,26 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
 static int pair_plane_after(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    /* Micro-optimizations: hoist epsilon to Fixed64, and local pointers
-       to buffers / vertex arrays to reduce repeated dereferences. */
-    Fixed64 epsilon64 = (Fixed64)FLOAT_TO_FIXED(0.01f);
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
     int k;
     int n1 = faces->vertex_count[f1];
     int n2 = faces->vertex_count[f2];
     int offset1 = faces->vertex_indices_ptr[f1];
     int offset2 = faces->vertex_indices_ptr[f2];
-
-    /* Z-range reject removed here (redundant)
-     * Note: `painter_correct` performs Z-range quick rejection before
-     * calling these plane-only predicates. Removing this duplicate check
-     * avoids extra work in the hot path. Re-enable if these predicates
-     * are ever invoked standalone (requires f_z_min_buf/f_z_max_buf).
-     */
-
-    const int *buf1 = faces->vertex_indices_buffer + offset1;
-    const int *buf2 = faces->vertex_indices_buffer + offset2;
-    const Fixed32 *xo = vtx->xo;
-    const Fixed32 *yo = vtx->yo;
-    const Fixed32 *zo = vtx->zo;
-
     Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
 
     int obs_side1 = 0; int side; int all_opposite_side;
-    obs_side1 = 0; if (d1 > epsilon64) obs_side1 = 1; else if (d1 < -epsilon64) obs_side1 = -1; else obs_side1 = 0;
+    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
     if (obs_side1 != 0) {
         all_opposite_side = 1;
         for (k = 0; k < n2; ++k) {
-            int v = buf2[k]-1;
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
             Fixed64 acc = 0;
-            acc  = (((Fixed64)a1 * (Fixed64)xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b1 * (Fixed64)yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c1 * (Fixed64)zo[v]) >> FIXED_SHIFT);
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d1;
-            if (acc > epsilon64) side = 1; else if (acc < -epsilon64) side = -1; else continue;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
             if (obs_side1 == side) { all_opposite_side = 0; break; }
         }
         if (all_opposite_side) return 1;
@@ -2662,17 +2270,17 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
     /* Test7 fallback (symmetric) */
     Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
     int obs_side2 = 0; int all_same_side = 0;
-    obs_side2 = 0; if (d2 > epsilon64) obs_side2 = 1; else if (d2 < -epsilon64) obs_side2 = -1; else obs_side2 = 0;
+    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
     if (obs_side2 != 0) {
         all_same_side = 1;
         for (k = 0; k < n1; ++k) {
-            int v = buf1[k]-1;
+            int v = faces->vertex_indices_buffer[offset1+k]-1;
             Fixed64 acc = 0;
-            acc  = (((Fixed64)a2 * (Fixed64)xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b2 * (Fixed64)yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c2 * (Fixed64)zo[v]) >> FIXED_SHIFT);
+            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d2;
-            if (acc > epsilon64) side = 1; else if (acc < -epsilon64) side = -1; else continue;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
             if (obs_side2 != side) { all_same_side = 0; break; }
         }
         if (all_same_side) return 1;
@@ -2683,40 +2291,26 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
 static int pair_plane_before(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    Fixed64 epsilon64 = (Fixed64)FLOAT_TO_FIXED(0.01f);
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
     int k;
     int n1 = faces->vertex_count[f1];
     int n2 = faces->vertex_count[f2];
     int offset1 = faces->vertex_indices_ptr[f1];
     int offset2 = faces->vertex_indices_ptr[f2];
-
-    /* Z-range reject removed here (redundant)
-     * Note: `painter_correct` performs Z-range quick rejection before
-     * calling these plane-only predicates. Removing this duplicate check
-     * avoids extra work in the hot path. Re-enable if these predicates
-     * are ever invoked standalone (requires f_z_min_buf/f_z_max_buf).
-     */
-
-    const int *buf1 = faces->vertex_indices_buffer + offset1;
-    const int *buf2 = faces->vertex_indices_buffer + offset2;
-    const Fixed32 *xo = vtx->xo;
-    const Fixed32 *yo = vtx->yo;
-    const Fixed32 *zo = vtx->zo;
-
     Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
 
     int obs_side1 = 0; int side; int all_same_side;
-    obs_side1 = 0; if (d1 > epsilon64) obs_side1 = 1; else if (d1 < -epsilon64) obs_side1 = -1; else obs_side1 = 0;
+    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
     if (obs_side1 != 0) {
         all_same_side = 1;
         for (k = 0; k < n2; ++k) {
-            int v = buf2[k]-1;
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
             Fixed64 acc = 0;
-            acc  = (((Fixed64)a1 * (Fixed64)xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b1 * (Fixed64)yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c1 * (Fixed64)zo[v]) >> FIXED_SHIFT);
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d1;
-            if (acc > epsilon64) side = 1; else if (acc < -epsilon64) side = -1; else continue;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
             if (obs_side1 != side) { all_same_side = 0; break; }
         }
         if (all_same_side) return 1;
@@ -2724,17 +2318,17 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
     /* Test5 fallback */
     Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
     int obs_side2 = 0; int all_opposite_side = 0;
-    obs_side2 = 0; if (d2 > epsilon64) obs_side2 = 1; else if (d2 < -epsilon64) obs_side2 = -1; else obs_side2 = 0;
+    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
     if (obs_side2 != 0) {
         all_opposite_side = 1;
         for (k = 0; k < n1; ++k) {
-            int v = buf1[k]-1;
+            int v = faces->vertex_indices_buffer[offset1+k]-1;
             Fixed64 acc = 0;
-            acc  = (((Fixed64)a2 * (Fixed64)xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b2 * (Fixed64)yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c2 * (Fixed64)zo[v]) >> FIXED_SHIFT);
+            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d2;
-            if (acc > epsilon64) side = 1; else if (acc < -epsilon64) side = -1; else continue;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
             if (obs_side2 == side) { all_opposite_side = 0; break; }
         }
         if (all_opposite_side) return 1;
@@ -2762,8 +2356,8 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
 
     // Ensure back-face culling on and recompute depths & ordering
     // helper: enable culling and run painter sort; returns previous culling state
-    int prepare_inspector_sort(Model3D* m, int fc);
-    int old_cull = prepare_inspector_sort(model, face_count);
+    int old_cull = cull_back_faces;
+    cull_back_faces = 1;
 
     // Prompt user for face id
     printf("Enter face id (0..%d) to inspect: ", face_count - 1);
@@ -2974,7 +2568,8 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     int face_count = faces->face_count;
     if (face_count <= 0) { printf("No faces in model\n"); return; }
 
-    int old_cull = prepare_inspector_sort(model, face_count);
+    int old_cull = cull_back_faces;
+    cull_back_faces = 1;
 
     printf("Enter face id (0..%d) to inspect AFTER-list: ", face_count - 1);
     int sel = -1;
@@ -3392,12 +2987,10 @@ Model3D* createModel3D(void) {
     model->vertices.zo = (Fixed32*)malloc(n * sizeof(Fixed32));
     model->vertices.x2d = (int*)malloc(n * sizeof(int));
     model->vertices.y2d = (int*)malloc(n * sizeof(int));
-    model->vertices.x2d_sub = (int*)malloc(n * sizeof(int));
-    model->vertices.y2d_sub = (int*)malloc(n * sizeof(int));
     
     if (!model->vertices.x || !model->vertices.y || !model->vertices.z ||
         !model->vertices.xo || !model->vertices.yo || !model->vertices.zo ||
-        !model->vertices.x2d || !model->vertices.y2d || !model->vertices.x2d_sub || !model->vertices.y2d_sub) {
+        !model->vertices.x2d || !model->vertices.y2d) {
         printf("Error: Unable to allocate memory for vertex arrays\n");
         keypress();
         // Allocation failed, cleanup
@@ -3409,8 +3002,6 @@ Model3D* createModel3D(void) {
         if (model->vertices.zo) free(model->vertices.zo);
         if (model->vertices.x2d) free(model->vertices.x2d);
         if (model->vertices.y2d) free(model->vertices.y2d);
-        if (model->vertices.x2d_sub) free(model->vertices.x2d_sub);
-        if (model->vertices.y2d_sub) free(model->vertices.y2d_sub);
         free(model);
         return NULL;
     }
@@ -3424,7 +3015,6 @@ Model3D* createModel3D(void) {
     model->vertices.zoHandle = NULL;
     model->vertices.x2dHandle = NULL;
     model->vertices.y2dHandle = NULL;
-    /* subpixel arrays use malloc, no handles */
     
     // Step 3: Face array allocation using parallel arrays (like vertices)
     // Each element stored separately to fit 32KB limit per allocation
@@ -3948,16 +3538,8 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
             inv_zo = FIXED_DIV_64(scale, zo);
             x2d_temp = FIXED_ADD(FIXED_MUL_64(xo, inv_zo), centre_x_f);
             y2d_temp = FIXED_SUB(centre_y_f, FIXED_MUL_64(yo, inv_zo));
-            /* compute rotated projected coords once (Fixed32) so we can fill both integer and subpixel buffers */
-            Fixed32 rx = FIXED_ADD(FIXED_SUB(FIXED_MUL_64(cos_w, FIXED_SUB(x2d_temp, centre_x_f)), FIXED_MUL_64(sin_w, FIXED_SUB(centre_y_f, y2d_temp))), centre_x_f);
-            Fixed32 ry = FIXED_SUB(centre_y_f, FIXED_ADD(FIXED_MUL_64(sin_w, FIXED_SUB(x2d_temp, centre_x_f)), FIXED_MUL_64(cos_w, FIXED_SUB(centre_y_f, y2d_temp))));
-            x2d_arr[i] = FIXED_ROUND_TO_INT(rx);
-            y2d_arr[i] = FIXED_ROUND_TO_INT(ry);
-            /* sub-pixel coords (integer units = pixels * SUBPIX_SCALE) */
-            Fixed32 rx_scaled = FIXED_MUL_64(rx, INT_TO_FIXED(SUBPIX_SCALE));
-            Fixed32 ry_scaled = FIXED_MUL_64(ry, INT_TO_FIXED(SUBPIX_SCALE));
-            vtx->x2d_sub[i] = FIXED_ROUND_TO_INT(rx_scaled);
-            vtx->y2d_sub[i] = FIXED_ROUND_TO_INT(ry_scaled);
+            x2d_arr[i] = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_SUB(FIXED_MUL_64(cos_w, FIXED_SUB(x2d_temp, centre_x_f)), FIXED_MUL_64(sin_w, FIXED_SUB(centre_y_f, y2d_temp))), centre_x_f));
+            y2d_arr[i] = FIXED_ROUND_TO_INT(FIXED_SUB(centre_y_f, FIXED_ADD(FIXED_MUL_64(sin_w, FIXED_SUB(x2d_temp, centre_x_f)), FIXED_MUL_64(cos_w, FIXED_SUB(centre_y_f, y2d_temp)))));
 
         } else {
             zo_arr[i] = zo;
@@ -4078,9 +3660,11 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
                     if (vertex_count % 10 == 0) printf("..");
 
                 } else {
+                    printf("[\nDEBUG] readVertices: sscanf failed at line %d: %s\n", line_number, line);
                     keypress();
                 }
             } else {
+                printf("\n[DEBUG] readVertices: vertex limit reached (%d)\n", max_vertices);
                 keypress();
             }
         }
@@ -4442,7 +4026,9 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
                     if (d64 <= 0) {
                         display_flag = 0;
                         ++culled_count;
-                        
+                        if (!PERFORMANCE_MODE) {
+                            printf("[DEBUG] CULL: Face %d culled (plane_d=%.6f)\n", i, FIXED64_TO_FLOAT(d64));
+                        }
                     }
                 }
             }
@@ -4452,7 +4038,14 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
         if (!PERFORMANCE_MODE) {
             float zmax_f = FIXED_TO_FLOAT(z_max);
             if (zmax_f < -100.0f) {
-                // diagnostic suppressed in PERFORMANCE_MODE; removed verbose debug output
+                printf("[DEBUG] Face %d: z_min=%.2f z_max=%.2f display_flag=%d n=%d\n", i, FIXED_TO_FLOAT(z_min), zmax_f, display_flag, n);
+                // Print per-vertex observer-space zo values
+                printf("[DEBUG]  vertex zo: ");
+                for (int jj = 0; jj < n; ++jj) {
+                    int vidx = face_arrays->vertex_indices_buffer[offset + jj] - 1;
+                    if (vidx >= 0) printf("(%d: %.2f) ", vidx, FIXED_TO_FLOAT(vtx->zo[vidx]));
+                }
+                printf("\n");
             }
         }
 
@@ -4476,8 +4069,8 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
         }
     }
 
-    if (cull_back_faces) {
-        /* culled_count available for diagnostics; verbose debug message removed */
+    if (cull_back_faces && !PERFORMANCE_MODE) {
+        printf("[DEBUG] calculateFaceDepths: culled %d faces by back-face test\n", culled_count);
     }
 }
 
@@ -4996,11 +4589,6 @@ void compute2DFromObserver(Model3D* model, int angle_w) {
         Fixed32 ry = FIXED_SUB(centre_y_f, FIXED_ADD(FIXED_MUL_64(sin_w, FIXED_SUB(x2d_temp, centre_x_f)), FIXED_MUL_64(cos_w, FIXED_SUB(centre_y_f, y2d_temp))));
         x2d_out[i] = FIXED_ROUND_TO_INT(rx);
         y2d_out[i] = FIXED_ROUND_TO_INT(ry);
-        /* sub-pixel coords (integer units = pixels * SUBPIX_SCALE) */
-        Fixed32 rx_scaled = FIXED_MUL_64(rx, INT_TO_FIXED(SUBPIX_SCALE));
-        Fixed32 ry_scaled = FIXED_MUL_64(ry, INT_TO_FIXED(SUBPIX_SCALE));
-        vtx->x2d_sub[i] = FIXED_ROUND_TO_INT(rx_scaled);
-        vtx->y2d_sub[i] = FIXED_ROUND_TO_INT(ry_scaled);
     }
 }
 
@@ -5064,7 +4652,7 @@ static void show_help_pager(void) {
         "Arrow Up/Down: Increase/Decrease vertical angle",
         "W/X: Increase/Decrease screen rotation angle",
         "C: Toggle color palette display",
-        "1: Set painter to FAST (face sorting by depth only)",
+        "1: Set painter to FAST (simple face sorting only)",
         "2: Set painter to NORMAL (Fixed32/64)",
         "3: Set painter to FLOAT (float-based)",
         "4: Set painter to CORRECT (painter_correct) - tries to fix ordering by local moves",
@@ -5147,20 +4735,6 @@ segment "code22";
         int last_process_time_end = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
-
-    /* Command-line options parsing (quick simple checks)
-     *  --sim-only : run WITH integer-only simulated zoom (SIM_ONLY_MODE) for testing
-     */
-    for (int ai = 1; ai < argc; ++ai) {
-        if (strcmp(argv[ai], "--sim-only") == 0) {
-            SIM_ONLY_MODE = 1;
-            printf("*** SIM_ONLY_MODE active: integer-only sim-zoom (x%d)\n", SIM_ZOOM_FACTOR);
-        }
-        if (getenv("SIM_ONLY") && atoi(getenv("SIM_ONLY")) > 0) {
-            SIM_ONLY_MODE = 1;
-            printf("*** SIM_ONLY_MODE active via SIM_ONLY env var\n");
-        }
-    }
 
     newmodel:
         printf("===================================\n");
@@ -5315,7 +4889,7 @@ segment "code22";
                 printf("    Vertical Angle: %d deg\n", params.angle_v);
                 printf("    Screen Rotation Angle: %d deg\n", params.angle_w);
                 printf("    Projection scale: %.2f\n", FIXED_TO_FLOAT(s_global_proj_scale_fixed));
-                if (painter_mode == PAINTER_MODE_FAST) printf("    Painter mode: FAST (face sorting by depth only)\n");
+                if (painter_mode == PAINTER_MODE_FAST) printf("    Painter mode: FAST (simple face sorting only)\n");
                 else if (painter_mode == PAINTER_MODE_FIXED) printf("    Painter mode: NORMAL (Fixed32/64)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECT) printf("    Painter mode: CORRECT (painter_correct)\n");
                 else printf("    Painter mode: FLOAT (float-based)\n\n");
@@ -5481,7 +5055,7 @@ segment "code22";
              */
             case 49: // '1' - set FAST painter
                 painter_mode = PAINTER_MODE_FAST;
-                printf("Painter mode: FAST (face sorting by depth only)\n");
+                printf("Painter mode: FAST (simple face sorting only)\n");
                 inconclusive_pairs_count = 0; // clear inconclusive pairs in fast mode
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
                 
