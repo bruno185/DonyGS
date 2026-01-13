@@ -1,4 +1,7 @@
-
+NOTE: 2026-01-13 - Commit 339afdf : painter_correct - éviter oscillations
+- Ajout de `min_allowed_pos[]` pour marquer les cibles déplacées dans la passe BEFORE.
+- Clamp dans la passe AFTER pour empêcher qu'une face déplacée retourne à un index plus élevé.
+- Compile et push effectués (branche main).
 fixed:
 probleme de overlap : 
 avion, 90,20,0 (+ zoom) : o => 45 et 2 : overlap = NO : erreur !
@@ -36,7 +39,10 @@ voilà ce qu'on va faire : dans une nouvelle fonciton painter (painter_correct, 
 Pour chaque face, que j'appelle target :
 1/ faire un test exactement comme inspect_before (sans les output à l'écran). Si tu trouves 1 ou plusieurs faces mal placées ET qui overlap avec target,(qui devraient être après dans la liste), place target dans la liste AVANT le face trouvée aayant le plus petit indice.
 2/ fait un test exactement comme inspect_after (sans les output à l'écran). Si tu trouves 1 ou plusieurs faces mal placées ET qui overlap avec target, (qui devraient être avant dans la liste), place target dans la liste APRES le face trouvée aayant le plus grand indice.
-Fais le  
+Fais le 
+
+Complément : 
+Dans la partie before (partie 1) de painter_correct  on marque target comme déplacée et on mémorise sa nouvelle position. Puis dans la partie after (partie 2) si on doit déplacer un face, et que cette face a déjà été déplacée, on ne peut pas la déplacer à un indice supérieur (mais on peut la déplacer à un indice inférieur). Fais juste ça, rien de plus.
 
 
 TODO:
