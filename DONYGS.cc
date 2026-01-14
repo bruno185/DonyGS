@@ -831,7 +831,6 @@ void painter_newell_sancha(Model3D* model, int face_count) {
         double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
         printf("[TIMING] initial sort (qsort): %ld ticks (%.2f ms)\n", elapsed, ms);
     }
-    
    
     // * * * * *
     // Etape 2 : Boucle de correction d'ordre (adjacent-swap / bubble-like passes)
@@ -1744,6 +1743,9 @@ void painter_newell_sancha_float(Model3D* model, int face_count) {
 
             // Test 3 : Y overlap
             if (maxy1 <= miny2 || maxy2 <= miny1) continue;
+
+
+            if (!projected_polygons_overlap(model, f1, f2)) continue;
 
             // Plane tests (4..7) using float plane coefficients
             int n1 = faces->vertex_count[f1];
