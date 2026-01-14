@@ -686,6 +686,20 @@ static int cmp_faces_by_zmean(const void* pa, const void* pb) {
     return 0;
 }
 
+// Comparator support for qsort in painter_newell_sancha_float (float z_mean)
+static float* qsort_fz_ptr_for_cmp = NULL;
+static int cmp_faces_by_f_zmean(const void* pa, const void* pb) {
+    int a = *(const int*)pa;
+    int b = *(const int*)pb;
+    float za = qsort_fz_ptr_for_cmp[a];
+    float zb = qsort_fz_ptr_for_cmp[b];
+    if (za > zb) return -1;   // larger z_mean first (descending)
+    if (za < zb) return 1;
+    if (a < b) return -1;     // tie-breaker: smaller index first
+    if (a > b) return 1;
+    return 0;
+}
+
 // Global container for *inconclusive* ordering pairs
 // -------------------------------------------------------------------
 // Purpose:
@@ -1651,62 +1665,11 @@ void painter_newell_sancha_float(Model3D* model, int face_count) {
         for (int i = 0; i < face_count; ++i) order[i] = i;
     }
 
-    // Sort faces by z_mean. For performance we use a simple bucket sort (linear time) when visible_count is large,
-    // and insertion sort for small counts.
-    if (visible_count <= 64) {
-        // insertion sort (descending)
-        for (int i = 1; i < visible_count; ++i) {
-            int key = order[i];
-            float kz = f_z_mean[key];
-            int j = i - 1;
-            while (j >= 0) {
-                int ov = order[j];
-                float oz = f_z_mean[ov];
-                if (oz > kz || (oz == kz && ov < key)) break; // descending, tie-breaker: smaller index first
-                order[j+1] = order[j]; j--;
-            }
-            order[j+1] = key;
-        }
-    } else {
-        int buckets = (visible_count < 256) ? visible_count : 256;
-        float zmin_all = 1e30f, zmax_all = -1e30f;
-        for (int i = 0; i < visible_count; ++i) { int fi = order[i]; if (f_z_mean[fi] < zmin_all) zmin_all = f_z_mean[fi]; if (f_z_mean[fi] > zmax_all) zmax_all = f_z_mean[fi]; }
-        if (zmax_all == zmin_all) {
-            // all equal, keep identity order (stable tie-break is already in order[0..visible_count-1])
-        } else {
-            int *counts = (int*)calloc(buckets, sizeof(int));
-            int *temp = (int*)malloc(sizeof(int) * visible_count);
-            // bucket indices (counts)
-            for (int i = 0; i < visible_count; ++i) {
-                int fi = order[i];
-                int idx = (int)((f_z_mean[fi] - zmin_all) / (zmax_all - zmin_all) * (buckets - 1));
-                if (idx < 0) idx = 0; if (idx >= buckets) idx = buckets - 1;
-                counts[idx]++;
-            }
-            // compute starts (prefix sums)
-            int *starts = (int*)malloc(sizeof(int) * buckets);
-            int acc = 0;
-            for (int b = 0; b < buckets; ++b) { starts[b] = acc; acc += counts[b]; }
-            // place items into temp according to starts (use face indices)
-            int *pos_in_bucket = (int*)malloc(sizeof(int) * buckets);
-            for (int b = 0; b < buckets; ++b) pos_in_bucket[b] = starts[b];
-            for (int i = 0; i < visible_count; ++i) {
-                int fi = order[i];
-                int idx = (int)((f_z_mean[fi] - zmin_all) / (zmax_all - zmin_all) * (buckets - 1));
-                if (idx < 0) idx = 0; if (idx >= buckets) idx = buckets - 1;
-                temp[pos_in_bucket[idx]++] = fi;
-            }
-            // flatten buckets from high to low into order (descending z_mean)
-            int pos = 0;
-            for (int b = buckets - 1; b >= 0; --b) {
-                int start = starts[b];
-                int cnt = counts[b];
-                for (int t = 0; t < cnt; ++t) {
-                    order[pos++] = temp[start + t];
-                }
-            }
-            free(pos_in_bucket); free(starts); free(temp); free(counts);
-        }
+    // Sort faces by z_mean using qsort to match fixed-point painter (descending, tie-breaker: smaller index first)
+    if (visible_count > 0) {
+        qsort_fz_ptr_for_cmp = f_z_mean;
+        qsort(order, visible_count, sizeof(int), cmp_faces_by_f_zmean);
+        qsort_fz_ptr_for_cmp = NULL;
     }
 
     int swapped_local = 0;
@@ -1772,7 +1735,8 @@ void painter_newell_sancha_float(Model3D* model, int face_count) {
                 f_plane_conv_buf[f2] = 1;
             } else { a2 = f_plane_a[f2]; b2 = f_plane_b[f2]; c2 = f_plane_c[f2]; d2 = f_plane_d[f2]; }
 
-            float epsilon_f = 1e-6f;
+            /* Align epsilon with fixed-point painter */
+            float epsilon_f = 0.001f;
 
             // Test 4
             int obs_side1 = 0;
@@ -1802,55 +1766,47 @@ void painter_newell_sancha_float(Model3D* model, int face_count) {
             
             skipT5_float: ;
         
-            // Test 6 : Test si f2 est du  côté opposé de l'observateur par rapport au plan de f1. 
-            // Si oui, f2 est derrière f1, on doit échanger l'ordre
-            obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
-            if (d1 > epsilon_f) obs_side1 = 1; 
+            // Test 6 : Is f2 entirely on the opposite side of f1's plane relative to the observer?
+            obs_side1 = 0;
+            if (d1 > epsilon_f) obs_side1 = 1;
             else if (d1 < -epsilon_f) obs_side1 = -1;
-            else goto skipT6_float; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
-            
+            else goto skipT6_float;
+
             all_opposite_side = 1;
-            for (k=0; k<n2; k++) {
-                    int v = faces->vertex_indices_buffer[offset2+k]-1;
-                    int side;
-                    test_val = a1*vtx->xo[v] + b1*vtx->yo[v] + c1*vtx->zo[v] + d1;
-                    if  (test_val > epsilon_f) side = 1;
-                    else side = -1;
-                    if (obs_side1 == side) { 
+            for (k = 0; k < n2; ++k) {
+                int v = faces->vertex_indices_buffer[offset2 + k] - 1;
+                test_val = a1 * float_xo[v] + b1 * float_yo[v] + c1 * float_zo[v] + d1;
+                int side = (test_val > epsilon_f) ? 1 : ((test_val < -epsilon_f) ? -1 : 0);
+                if (side == 0) continue; /* ignore vertices exactly on the plane */
+                if (obs_side1 == side) { 
                     all_opposite_side = 0; 
                     break; 
-                    }
+                }
             }
             if (all_opposite_side == 1) goto do_swap;
-            // f2 est du coté opposé de l'observateur, donc f2 est derrière f1 ==> échange nécessaire
 
             skipT6_float: ;
 
-            // Test 7 : Test si f1 est du même côté de l'observateur par rapport au plan de f2. 
-            // Si oui, f1 est devant f2, on doit échanger l'ordre
-            obs_side2 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
-            if (d2 > epsilon_f) obs_side2 = 1; 
+            // Test 7 : Is f1 entirely on the same side of f2's plane as the observer?
+            obs_side2 = 0;
+            if (d2 > epsilon_f) obs_side2 = 1;
             else if (d2 < -epsilon_f) obs_side2 = -1;
-            else goto skipT7_float; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+            else goto skipT7_float;
             all_same_side = 1;
-            for (k=0; k<n1; k++) {
-                int v = faces->vertex_indices_buffer[offset1+k]-1;
-                int side;
-                test_val = a2*vtx->xo[v] + b2*vtx->yo[v] + c2*vtx->zo[v] + d2;
-                //test_value = a1*vtx->xo[v] + b1*vtx->yo[v] + c1*vtx->zo[v] + d1;
-                if  (test_val > epsilon_f) side = 1;
-                else side = -1;
+            for (k = 0; k < n1; ++k) {
+                int v = faces->vertex_indices_buffer[offset1 + k] - 1;
+                test_val = a2 * float_xo[v] + b2 * float_yo[v] + c2 * float_zo[v] + d2;
+                int side = (test_val > epsilon_f) ? 1 : ((test_val < -epsilon_f) ? -1 : 0);
+                if (side == 0) continue; /* ignore vertices exactly on the plane */
                 if (obs_side2 != side) { 
                     all_same_side = 0; 
                     break; 
-                    }
-            }
-                if (all_same_side == 0) goto skipT7_float;
-                // f1 n'est pas du même côté de l'observateur, donc f1 n'est pas devant f2
-                // on ne doit pas échanger l'ordre des faces
-                else {
-                    goto do_swap;
                 }
+            }
+            if (all_same_side == 0) goto skipT7_float;
+            else {
+                goto do_swap;
+            }
 
             // Si on arrive ici, les tests 1..5 n'ont pas conclu :
             // appliquer l'algorithme original de Newell/Newell/Sancha
