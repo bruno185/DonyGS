@@ -1736,7 +1736,8 @@ void painter_newell_sancha_float(Model3D* model, int face_count) {
             } else { a2 = f_plane_a[f2]; b2 = f_plane_b[f2]; c2 = f_plane_c[f2]; d2 = f_plane_d[f2]; }
 
             /* Align epsilon with fixed-point painter */
-            float epsilon_f = 0.001f;
+            // float epsilon_f = 0.001f;
+            float epsilon_f = 0.01f;
 
             // Test 4
             int obs_side1 = 0;
