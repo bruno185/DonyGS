@@ -49,6 +49,10 @@ Complément :
 Dans la partie before (partie 1) de painter_correct  on marque target comme déplacée et on mémorise sa nouvelle position. Puis dans la partie after (partie 2) si on doit déplacer un face, et que cette face a déjà été déplacée, on ne peut pas la déplacer à un indice supérieur (mais on peut la déplacer à un indice inférieur). Fais juste ça, rien de plus.
 
 
+SUPER (abandonné) :
+tu va faire une version 2 de painter_correct, qui va s'appeler painter_super. Elle fera exactement la même chose mais : dans la partie after, si target est déplaccée, mémorise cette face et l'indice. Si elle doit ensuite etre déplacée, elle ne peut être placée à un indice inférieur. Il y a donc 2 marquages  : un pour les before (existant) et un our les after (à faire dans painter_super). Refais ensuite une passe before + after, en respectant les marques.
+
+
 TODO:
 Parfait — je vais analyser rapidement quelles parties de painter_correct sont de bons candidats pour une réécriture en assembleur et proposer un plan sûr.Parfait! Voici une analyse courte et un plan proposé pour décider si (et quoi) réécrire en assembleur. Ma recommandation: mesurer d'abord, optimiser en C quand possible, puis réécrire un petit noyau en assembleur si ça paye.
 
