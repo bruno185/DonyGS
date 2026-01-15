@@ -930,10 +930,6 @@ void painter_newell_sancha(Model3D* model, int face_count) {
             debug_two_faces(model, f1, f2);
             }
 
-            if ((f1 == 3 && f2 == 44) || (f1 == 44 && f2 == 3)) {
-                printf("Debug breakpoint on faces 3 and 44\n");
-                keypress();
-            }
 
             // Skip pairs already declared ordered by previous swaps or tests.
             // ordered_pairs stores definitive relations discovered earlier in the pass to
@@ -4877,8 +4873,9 @@ static void show_help_pager(void) {
         "P: Toggle frame-only polygons (default: OFF)",
         "B: Toggle back-face culling (observer-space D<=0)",
         "I: Toggle display of inconclusive face pairs",
-        "D: Inspect face ordering BEFORE selected face (misplaced faces shown in orange)",
-        "S: Inspect faces AFTER selected face that should be BEFORE it (misplaced shown in pink)",
+        "V: Show single face (arrows to navigate, any key to exit)",
+        "D: Inspect faces BEFORE selected (orange) - Press 'A' for all or 'O' for overlaps",
+        "S: Inspect faces AFTER selected (pink) - Press 'A' for all or 'O' for overlaps",
         "O: Check projected polygon overlap for two faces",
         "E/e: Pan left (2D screen offset, 5 px)",
         "R/r: Pan right (2D screen offset, 5 px)",
