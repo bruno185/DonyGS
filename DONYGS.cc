@@ -89,6 +89,11 @@ static int cull_back_faces = 1; // default: enabled
 // 2D panning offsets (pixels) - used by drawing routines (frame-only, drawPolygons, drawFace)
 static int pan_dx = 0;
 static int pan_dy = 0;
+
+// User-selected colors: -1 means not set (use defaults), 0-15 are colors, 16=random
+static int user_fill_color = -1;  // Interior color
+static int user_frame_color = -1; // Frame color
+
 #define PAINTER_MODE_FAST 0
 #define PAINTER_MODE_FIXED 1
 #define PAINTER_MODE_FLOAT 2
@@ -4653,13 +4658,20 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
             } else {
                 if (framePolyOnly) {
                     // Frame-only rendering (no fill)
-                    SetSolidPenPat(7);
+                    int frame_color = (user_frame_color == 16) ? (face_id % 15 + 1) : (user_frame_color >= 0 ? user_frame_color : 7);
+                    SetSolidPenPat(frame_color);
                     FramePoly(polyHandle);
                     SetSolidPenPat(14); // keep fill pen as default for next faces
                 } else {
+                    // Fill color
+                    int fill_color = (user_fill_color == 16) ? (face_id % 15 + 1) : (user_fill_color >= 0 ? user_fill_color : 14);
+                    SetSolidPenPat(fill_color);
                     GetPenPat(pat);
                     FillPoly(polyHandle, pat);
-                    SetSolidPenPat(7);
+                    
+                    // Frame color
+                    int frame_color = (user_frame_color == 16) ? (face_id % 15 + 1) : (user_frame_color >= 0 ? user_frame_color : 7);
+                    SetSolidPenPat(frame_color);
                     FramePoly(polyHandle);
                     SetSolidPenPat(14); // restore fill pen
                 }
@@ -4874,6 +4886,10 @@ static void show_help_pager(void) {
         "2: Set painter to NORMAL (Fixed32/64)",
         "3: Set painter to FLOAT (float-based)",
         "4: Set painter to CORRECT (painter_correct) - tries to fix ordering by local moves",
+        "6: Set both colors to RANDOM mode",
+        "7: Choose fill color (0-15, 16=random, -1=default)",
+        "8: Choose frame color (0-15, 16=random, -1=default)",
+        "9: Reset colors to defaults (fill=14, frame=7)",
         "P: Toggle frame-only polygons (default: OFF)",
         "B: Toggle back-face culling (observer-space D<=0)",
         "I: Toggle display of inconclusive face pairs",
@@ -5114,6 +5130,12 @@ segment "code22";
                 else printf("    Painter mode: FLOAT (float-based)\n\n");
                 printf("    Back-face culling: %s\n", cull_back_faces ? "ON" : "OFF");
                 printf("    Pan offset: (%d, %d)\n", pan_dx, pan_dy);
+                if (user_fill_color == 16) printf("    Fill color: Random\n");
+                else if (user_fill_color >= 0) printf("    Fill color: %d\n", user_fill_color);
+                else printf("    Fill color: Default (14)\n");
+                if (user_frame_color == 16) printf("    Frame color: Random\n");
+                else if (user_frame_color >= 0) printf("    Frame color: %d\n", user_frame_color);
+                else printf("    Frame color: Default (7)\n");
                 printf ("Processing time: %d ticks (1/60 sec.)\n", last_process_time_end - last_process_time_start);
                 printf("===================================\n");
                 printf("\n");
@@ -5302,9 +5324,55 @@ segment "code22";
                 printf("Painter mode: CORRECT (painter_correct)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
+            case 55: // '7' - choose fill color
+                {
+                    printf("Enter fill color (0-15, 16=random, -1=default): ");
+                    int c = -1;
+                    if (scanf("%d", &c) == 1) {
+                        if (c >= -1 && c <= 16) {
+                            user_fill_color = c;
+                            if (c == 16) printf("Fill color set to RANDOM\n");
+                            else if (c >= 0) printf("Fill color set to %d\n", c);
+                            else printf("Fill color reset to DEFAULT (14)\n");
+                        } else {
+                            printf("Invalid color (must be -1 to 16)\n");
+                        }
+                    }
+                    int ch; while ((ch = getchar()) != '\n' && ch != EOF);
+                    goto loopReDraw;
+                }
 
+            case 56: // '8' - choose frame color
+                {
+                    printf("Enter frame color (0-15, 16=random, -1=default): ");
+                    int c = -1;
+                    if (scanf("%d", &c) == 1) {
+                        if (c >= -1 && c <= 16) {
+                            user_frame_color = c;
+                            if (c == 16) printf("Frame color set to RANDOM\n");
+                            else if (c >= 0) printf("Frame color set to %d\n", c);
+                            else printf("Frame color reset to DEFAULT (7)\n");
+                        } else {
+                            printf("Invalid color (must be -1 to 16)\n");
+                        }
+                    }
+                    int ch; while ((ch = getchar()) != '\n' && ch != EOF);
+                    goto loopReDraw;
+                }
 
-case 80:  // 'P' - toggle frame-only polygon rendering
+            case 57: // '9' - reset colors to default
+                user_fill_color = -1;
+                user_frame_color = -1;
+                printf("Colors reset to defaults\n");
+                goto loopReDraw;
+
+            case 54: // '6' - quick random mode for both colors
+                user_fill_color = 16;
+                user_frame_color = 16;
+                printf("Colors set to RANDOM mode\n");
+                goto loopReDraw;
+
+            case 80:  // 'P' - toggle frame-only polygon rendering
 case 112: // 'p'
                 framePolyOnly ^= 1;
                 printf("Frame-only polygons: %s\n", framePolyOnly ? "ON" : "OFF");
