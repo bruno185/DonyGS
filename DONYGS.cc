@@ -2308,6 +2308,71 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
 }
 
 segment "code04";
+/* showFace
+ * --------
+ * Purpose:
+ *  - Display a single face in filled mode (green) over the wireframe model.
+ * Behavior:
+ *  - Prompts user for a face id (0..face_count-1).
+ *  - Draws the entire model in wireframe mode.
+ *  - Overlays the selected face in filled green (pen 10).
+ */
+void showFace(Model3D* model, ObserverParams* params, const char* filename) {
+    if (!model || !params) return;
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+    if (face_count <= 0) { printf("No faces in model\n"); return; }
+
+    // Prompt user for face id
+    printf("Enter face id (0..%d) to display: ", face_count - 1);
+    int sel = -1;
+    if (scanf("%d", &sel) != 1) {
+        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
+        printf("Input cancelled\n");
+        return;
+    }
+    // consume remaining chars on the line
+    {
+        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
+    }
+    
+    int target_face = sel;
+    if (target_face < 0 || target_face >= face_count) {
+        printf("Invalid face id\n");
+        return;
+    }
+
+    printf("Displaying face %d...\n", target_face);
+    printf("Press any key to show.\n");
+    keypress();
+    
+    startgraph(mode);
+
+    // Backup display flags
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+
+    // Draw entire model in wireframe
+    int old_frame = framePolyOnly;
+    framePolyOnly = 1; // wireframe mode
+    drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+
+    // Overlay selected face in filled green (pen 10)
+    faces->display_flag[target_face] = 1;
+    drawFace(model, target_face, 10, 1);
+
+    MoveTo(2, 195);
+    printf("Face %d\n", target_face);
+    keypress();
+    endgraph();
+    DoText();
+
+    // Restore state
+    framePolyOnly = old_frame;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+}
+
 /* inspect_faces_before
  * --------------------
  * Purpose:
@@ -2412,7 +2477,7 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     } else {
         printf("Overlap with target: none\n");
     }
-    if (overlaps) free(overlaps);
+    // Note: overlaps will be freed at the end of the function
 
     printf("\n");
     keypress();
@@ -2507,8 +2572,8 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     faces->display_flag[target_face] = 1;
     drawFace(model, target_face, 10, 1);
 
-    MoveTo(5, 195);
-    printf("%d face(s) should be after face %d\n", misplaced_count, target_face);
+    MoveTo(2, 195);
+    printf("%d face(s) should be after face %d, %d overlap%s\n", misplaced_count, target_face, overlap_count, overlap_count > 1 ? "s" : "");
     keypress();
     endgraph();
     DoText();
@@ -2517,6 +2582,69 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     framePolyOnly = old_frame;
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
+
+    // If there are misplaced faces, offer to fix by moving target before the smallest index
+    if (misplaced_count > 0) {
+        printf("\nPress 'A' to move face %d considering ALL misplaced faces, 'O' for overlaps only, or any other key to skip: ", target_face);
+        int key = 0;
+        asm {
+            sep #0x20
+        waitkey:
+            lda >0xC000
+            bpl waitkey
+            and #0x007f
+            sta >0xC010
+            sta key
+            rep #0x30
+        }
+        
+        if (key == 'A' || key == 'a' || key == 'O' || key == 'o') {
+            int min_pos = face_count; // start with max possible
+            int target_to_move_before = -1;
+            int use_overlaps = (key == 'O' || key == 'o');
+            
+            // Determine which list to use and check if available
+            if (use_overlaps && overlap_count == 0) {
+                printf("\nNo overlaps to process.\n");
+            } else {
+                // Find the smallest position among selected faces
+                int count_to_check = use_overlaps ? overlap_count : misplaced_count;
+                int *faces_to_check = use_overlaps ? overlaps : misplaced;
+                
+                for (int i = 0; i < count_to_check; ++i) {
+                    int f = faces_to_check[i];
+                    // Find position in sorted list
+                    for (int si = 0; si < face_count; ++si) {
+                        if (faces->sorted_face_indices[si] == f) {
+                            if (si < min_pos) {
+                                min_pos = si;
+                                target_to_move_before = f;
+                            }
+                            break;
+                        }
+                    }
+                }
+                
+                if (target_to_move_before >= 0 && min_pos < face_count) {
+                    printf("\nMoving face %d (currently at pos %d) to position %d (before face %d) - mode: %s...\n", 
+                           target_face, pos, min_pos, target_to_move_before, use_overlaps ? "overlaps" : "all");
+                    
+                    // Move target_face to min_pos (before the misplaced face with smallest index)
+                    move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, min_pos);
+                    
+                    printf("Done! Face %d has been moved.\n", target_face);
+                    printf("Press any key to continue...\n");
+                    keypress();
+                } else {
+                    printf("\nError: could not determine target position.\n");
+                }
+            }
+        } else {
+            printf("\nSkipped.\n");
+        }
+    }
+
+    if (overlaps) free(overlaps);
     free(misplaced);
     cull_back_faces = old_cull;
 }
@@ -2611,7 +2739,7 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     } else {
         printf("Overlap with target: none\n");
     }
-    if (overlaps) free(overlaps);
+    // Note: overlaps will be freed at the end of the function
     printf("\n");
     keypress();
 
@@ -2683,8 +2811,8 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     drawFace(model, target_face, 10, 1);
 
 
-    MoveTo(5, 195);
-    printf("%d face(s) should be before face %d\n", misplaced_count, target_face);
+    MoveTo(2, 195);
+    printf("%d face(s) should be before face %d, %d overlap%s\n", misplaced_count, target_face, overlap_count, overlap_count > 1 ? "s" : "");
     keypress();
     endgraph();
     DoText();
@@ -2692,6 +2820,69 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     framePolyOnly = old_frame;
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
+
+    // If there are misplaced faces, offer to fix by moving target after the largest index
+    if (misplaced_count > 0) {
+        printf("\nPress 'A' to move face %d considering ALL misplaced faces, 'O' for overlaps only, or any other key to skip: ", target_face);
+        int key = 0;
+        asm {
+            sep #0x20
+        waitkey:
+            lda >0xC000
+            bpl waitkey
+            and #0x007f
+            sta >0xC010
+            sta key
+            rep #0x30
+        }
+        
+        if (key == 'A' || key == 'a' || key == 'O' || key == 'o') {
+            int max_pos = -1;
+            int target_to_move_after = -1;
+            int use_overlaps = (key == 'O' || key == 'o');
+            
+            // Determine which list to use and check if available
+            if (use_overlaps && overlap_count == 0) {
+                printf("\nNo overlaps to process.\n");
+            } else {
+                // Find the largest position among selected faces
+                int count_to_check = use_overlaps ? overlap_count : misplaced_count;
+                int *faces_to_check = use_overlaps ? overlaps : misplaced;
+                
+                for (int i = 0; i < count_to_check; ++i) {
+                    int f = faces_to_check[i];
+                    // Find position in sorted list
+                    for (int si = 0; si < face_count; ++si) {
+                        if (faces->sorted_face_indices[si] == f) {
+                            if (si > max_pos) {
+                                max_pos = si;
+                                target_to_move_after = f;
+                            }
+                            break;
+                        }
+                    }
+                }
+                
+                if (target_to_move_after >= 0 && max_pos >= 0) {
+                    printf("\nMoving face %d (currently at pos %d) to position %d (after face %d) - mode: %s...\n", 
+                           target_face, pos, max_pos, target_to_move_after, use_overlaps ? "overlaps" : "all");
+                    
+                    // Move target_face to max_pos (after the misplaced face with largest index)
+                    move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, max_pos);
+                    
+                    printf("Done! Face %d has been moved.\n", target_face);
+                    printf("Press any key to continue...\n");
+                    keypress();
+                } else {
+                    printf("\nError: could not determine target position.\n");
+                }
+            }
+        } else {
+            printf("\nSkipped.\n");
+        }
+    }
+
+    if (overlaps) free(overlaps);
     free(misplaced);
     cull_back_faces = old_cull;
 }
@@ -5000,6 +5191,12 @@ segment "code22";
             case 100: // 'd'
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 inspect_faces_before(model, &params, filename);
+                goto loopReDraw;
+
+            case 86:  // 'V' - show a single face in filled mode
+            case 118: // 'v'
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                showFace(model, &params, filename);
                 goto loopReDraw;
 
             case 83: // 'S' - inspect faces that are AFTER target but should be BEFORE (new)
