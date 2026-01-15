@@ -93,6 +93,10 @@ static int pan_dy = 0;
 // User-selected colors: -1 means not set (use defaults), 0-15 are colors, 16=random
 static int user_fill_color = -1;  // Interior color
 static int user_frame_color = -1; // Frame color
+// Random color buffers (allocated per face when random mode is active)
+static unsigned char* random_fill_colors = NULL;
+static unsigned char* random_frame_colors = NULL;
+static int random_colors_capacity = 0;
 
 #define PAINTER_MODE_FAST 0
 #define PAINTER_MODE_FIXED 1
@@ -4658,19 +4662,52 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
             } else {
                 if (framePolyOnly) {
                     // Frame-only rendering (no fill)
-                    int frame_color = (user_frame_color == 16) ? (face_id % 15 + 1) : (user_frame_color >= 0 ? user_frame_color : 7);
+                    int frame_color;
+                    if (user_frame_color == 17) {
+                        // Same as fill color
+                        if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
+                            frame_color = random_fill_colors[face_id];
+                        } else if (user_fill_color >= 0) {
+                            frame_color = user_fill_color;
+                        } else {
+                            frame_color = 14; // default fill color
+                        }
+                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
+                        frame_color = random_frame_colors[face_id];
+                    } else if (user_frame_color >= 0) {
+                        frame_color = user_frame_color;
+                    } else {
+                        frame_color = 7;
+                    }
                     SetSolidPenPat(frame_color);
                     FramePoly(polyHandle);
                     SetSolidPenPat(14); // keep fill pen as default for next faces
                 } else {
                     // Fill color
-                    int fill_color = (user_fill_color == 16) ? (face_id % 15 + 1) : (user_fill_color >= 0 ? user_fill_color : 14);
+                    int fill_color;
+                    if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
+                        fill_color = random_fill_colors[face_id];
+                    } else if (user_fill_color >= 0) {
+                        fill_color = user_fill_color;
+                    } else {
+                        fill_color = 14;
+                    }
                     SetSolidPenPat(fill_color);
                     GetPenPat(pat);
                     FillPoly(polyHandle, pat);
                     
                     // Frame color
-                    int frame_color = (user_frame_color == 16) ? (face_id % 15 + 1) : (user_frame_color >= 0 ? user_frame_color : 7);
+                    int frame_color;
+                    if (user_frame_color == 17) {
+                        // Same as fill color
+                        frame_color = fill_color;
+                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
+                        frame_color = random_frame_colors[face_id];
+                    } else if (user_frame_color >= 0) {
+                        frame_color = user_frame_color;
+                    } else {
+                        frame_color = 7;
+                    }
                     SetSolidPenPat(frame_color);
                     FramePoly(polyHandle);
                     SetSolidPenPat(14); // restore fill pen
@@ -4689,6 +4726,25 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
 }
 
 segment "code18";
+
+// Generate random colors for all faces
+void generate_random_colors(int face_count) {
+    if (face_count <= 0) return;
+    
+    // Ensure capacity
+    if (random_colors_capacity < face_count) {
+        random_fill_colors = (unsigned char*)realloc(random_fill_colors, face_count);
+        random_frame_colors = (unsigned char*)realloc(random_frame_colors, face_count);
+        random_colors_capacity = face_count;
+    }
+    
+    // Generate random colors (1-15, skip 0 which is black background)
+    for (int i = 0; i < face_count; i++) {
+        random_fill_colors[i] = (rand() % 15) + 1;
+        random_frame_colors[i] = (rand() % 15) + 1;
+    }
+}
+
 // Diagnostic: Frame in white all polygons listed in `inconclusive_pairs`.
 //
 // This helper iterates the recorded ambiguous pairs and draws a white outline around both
@@ -5326,12 +5382,36 @@ segment "code22";
 
             case 55: // '7' - choose fill color
                 {
-                    printf("Enter fill color (0-15, 16=random, -1=default): ");
+                    printf("\n=== Fill color selection ===\n");
+                    printf("Available colors:\n");
+                    printf(" 0 : black\n");
+                    printf(" 1 : grey\n");
+                    printf(" 2 : brown\n");
+                    printf(" 3 : purple\n");
+                    printf(" 4 : blue\n");
+                    printf(" 5 : green\n");
+                    printf(" 6 : orange\n");
+                    printf(" 7 : red\n");
+                    printf(" 8 : rose\n");
+                    printf(" 9 : yellow\n");
+                    printf("10 : light green\n");
+                    printf("11 : aqua\n");
+                    printf("12 : pale purple\n");
+                    printf("13 : light blue\n");
+                    printf("14 : light gray\n");
+                    printf("15 : white\n");
+                    printf("16 : random\n\n");
+                    printf("Enter fill color: ");
                     int c = -1;
                     if (scanf("%d", &c) == 1) {
                         if (c >= -1 && c <= 16) {
                             user_fill_color = c;
-                            if (c == 16) printf("Fill color set to RANDOM\n");
+                            if (c == 16) {
+                                if (model != NULL) {
+                                    generate_random_colors(model->faces.face_count);
+                                }
+                                printf("Fill color set to RANDOM (new colors generated)\n");
+                            }
                             else if (c >= 0) printf("Fill color set to %d\n", c);
                             else printf("Fill color reset to DEFAULT (14)\n");
                         } else {
@@ -5344,16 +5424,42 @@ segment "code22";
 
             case 56: // '8' - choose frame color
                 {
-                    printf("Enter frame color (0-15, 16=random, -1=default): ");
+                    printf("\n=== Frame color selection ===\n");
+                    printf("Available colors:\n");
+                    printf(" 0 : black\n");
+                    printf(" 1 : grey\n");
+                    printf(" 2 : brown\n");
+                    printf(" 3 : purple\n");
+                    printf(" 4 : blue\n");
+                    printf(" 5 : green\n");
+                    printf(" 6 : orange\n");
+                    printf(" 7 : red\n");
+                    printf(" 8 : rose\n");
+                    printf(" 9 : yellow\n");
+                    printf("10 : light green\n");
+                    printf("11 : aqua\n");
+                    printf("12 : pale purple\n");
+                    printf("13 : light blue\n");
+                    printf("14 : light gray\n");
+                    printf("15 : white\n");
+                    printf("16 : random\n");
+                    printf("17 : same as fill\n\n");
+                    printf("Enter frame color: ");
                     int c = -1;
                     if (scanf("%d", &c) == 1) {
-                        if (c >= -1 && c <= 16) {
+                        if (c >= -1 && c <= 17) {
                             user_frame_color = c;
-                            if (c == 16) printf("Frame color set to RANDOM\n");
+                            if (c == 16) {
+                                if (model != NULL) {
+                                    generate_random_colors(model->faces.face_count);
+                                }
+                                printf("Frame color set to RANDOM (new colors generated)\n");
+                            }
+                            else if (c == 17) printf("Frame color set to SAME AS FILL\n");
                             else if (c >= 0) printf("Frame color set to %d\n", c);
                             else printf("Frame color reset to DEFAULT (7)\n");
                         } else {
-                            printf("Invalid color (must be -1 to 16)\n");
+                            printf("Invalid color (must be -1 to 17)\n");
                         }
                     }
                     int ch; while ((ch = getchar()) != '\n' && ch != EOF);
@@ -5369,7 +5475,10 @@ segment "code22";
             case 54: // '6' - quick random mode for both colors
                 user_fill_color = 16;
                 user_frame_color = 16;
-                printf("Colors set to RANDOM mode\n");
+                if (model != NULL) {
+                    generate_random_colors(model->faces.face_count);
+                }
+                printf("Colors set to RANDOM mode (new colors generated)\n");
                 goto loopReDraw;
 
             case 80:  // 'P' - toggle frame-only polygon rendering

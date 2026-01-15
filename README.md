@@ -156,6 +156,23 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `3` | FLOAT | Floating-point painter |
 | `4` | CORRECT | Advanced ordering correction |
 
+#### Color Management
+| Key | Action | Description |
+|-----|--------|-------------|
+| `6` | Random Colors | Set both fill and frame colors to random mode (new colors on each press) |
+| `7` | Choose Fill Color | Select interior color (0-15) or random mode (16) |
+| `8` | Choose Frame Color | Select outline color (0-15) or random mode (16) |
+| `9` | Reset Colors | Restore default colors (fill=white/14, frame=red/7) |
+
+**Color Palette (0-15):**
+- 0: black, 1: grey, 2: brown, 3: purple, 4: blue, 5: green
+- 6: orange, 7: red, 8: rose, 9: yellow, 10: light green, 11: aqua
+- 12: pale purple, 13: light blue, 14: light gray, 15: white
+- 16: random (generates unique colors per face)
+
+![Color Selection](Screenshots/color_selection.png)
+![Random Colors](Screenshots/random_colors.png)
+
 #### Diagnostic Tools
 | Key | Action | Description |
 |-----|--------|-------------|
@@ -183,15 +200,20 @@ Observer-space culling eliminates faces oriented away from the viewer:
 
 1. **Load Model** with `N` key
 2. **Position Camera** using arrow keys and `A`/`Z`
-3. **Select Rendering Mode** (`1`-`4`) based on geometry complexity
-4. **Enable Inspection** with `I` to see inconclusive pairs
-5. **Investigate Artifacts**:
+3. **Customize Colors** (optional):
+   - Press `6` for random colors
+   - Press `7` to choose a specific fill color
+   - Press `8` to choose a specific frame color
+   - Press `9` to reset to defaults
+4. **Select Rendering Mode** (`1`-`4`) based on geometry complexity
+5. **Enable Inspection** with `I` to see inconclusive pairs
+6. **Investigate Artifacts**:
    - Press `V` to view individual faces
    - Use `D` to inspect faces before problematic face
    - Use `S` to inspect faces after
    - Press `O` to check specific overlap conditions
-6. **Adjust View** with `E`/`R`/`T`/`Y` for precise framing
-7. **Export Data** with `F` for external analysis
+7. **Adjust View** with `E`/`R`/`T`/`Y` for precise framing
+8. **Export Data** with `F` for external analysis
 
 ### Face Inspection Mode
 
@@ -321,6 +343,7 @@ This copies the compiled binary to a bootable disk image for use with emulators 
 - **2026-01-12**: Implemented diagnostic tools (inspect, overlap check)
 - **2026-01-14**: Added interactive face navigation and showFace viewer
 - **2026-01-15**: Optimized debug code with preprocessor directives (-5KB, +2% speed)
+- **2026-01-15**: Implemented custom color management system with random color generation
 
 ## Credits
 
