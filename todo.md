@@ -1,5 +1,19 @@
 # Notes 
 
+NOTE: 2026-01-15 - Commits 1f089f3 & 8a537d0 : Interactive face inspection and navigation
+- `inspect_faces_before` & `inspect_faces_after`: Added dual-mode interactive move
+  * Touche 'A': déplace target en considérant TOUTES les faces mal placées
+  * Touche 'O': déplace target en considérant SEULEMENT les faces avec overlap
+  * Affichage du nombre d'overlaps dans le message de statut
+  * Gestion mémoire: tableau overlaps conservé jusqu'à la fin pour les opérations de déplacement
+- Nouvelle fonction `showFace` (touche 'V'):
+  * Affiche une face en filled vert sur le modèle en wireframe
+  * Navigation interactive sans quitter le mode graphique:
+    - Flèches gauche/droite: face ID précédente/suivante (avec wraparound)
+    - Flèches haut/bas: position suivante/précédente dans sorted_face_indices
+    - N'importe quelle autre touche: sortie
+  * Affichage de l'ID de la face et de sa position dans la liste triée
+- Compile et push effectués (branche main).
 
 REMOVED: 2026-01-14 - Commit 067edb4 : painter_super removed (see commit for original implementation)
 - Reason: experimental mode regressed intermittently; removed per request.
@@ -88,17 +102,17 @@ Dites-moi quelle option vous voulez et je m’en occupe.
 voilà ce qu'on va faire : dans une nouvelle fonciton painter (painter_correct, par exemple), tu vas :
 
 Pour chaque face, que j'appelle target :
-1/ faire un test exactement comme inspect_before (sans les output à l'écran). Si tu trouves 1 ou plusieurs faces mal placées ET qui overlap avec target,(qui devraient être après dans la liste), place target dans la liste AVANT le face trouvée aayant le plus petit indice.
+1/ faire un test exactement comme inspect_before (sans les output à l'écran). Si tu trouves 1 ou plusieurs faces mal placées ET qui overlap avec target,(qui devraient être après dans la liste), place target dans la liste AVANT le face trouvée ayant le plus petit indice.
 2/ fait un test exactement comme inspect_after (sans les output à l'écran). Si tu trouves 1 ou plusieurs faces mal placées ET qui overlap avec target, (qui devraient être avant dans la liste), place target dans la liste APRES le face trouvée aayant le plus grand indice.
 Fais le 
 
 Complément : 
 Dans la partie before (partie 1) de painter_correct  on marque target comme déplacée et on mémorise sa nouvelle position. Puis dans la partie after (partie 2) si on doit déplacer un face, et que cette face a déjà été déplacée, on ne peut pas la déplacer à un indice supérieur (mais on peut la déplacer à un indice inférieur). Fais juste ça, rien de plus.
 
+# inspect_faces_before & inspect_faces_after
+a la fin de la fonction inspect_faces_before, après l'affichage des polygones, si le nombre de faces mal placées > 0, il faut permettre à l'utilisateur d'appuyer sur la touche F pour permuter les faces en déplacçant target (= la face choisie par l'utilisateur) AVANT le face trouvée ayant le plus petit indice.
 
-
-
-
+Fais la même chose avec inspect_faces_after : si le nombre de faces mal placées > 0, il faut permettre à l'utilisateur d'appuyer sur la touche F pour permuter les faces en déplacçant target (= la face choisie par l'utilisateur) APRES le face trouvée aayant le plus grand indice.
 
 
 Créer tout d'abord une fonction before qui prend 2 id de face en argument.
