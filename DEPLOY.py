@@ -17,6 +17,9 @@ PRG = "DONYGS"  # Program name without extension
 lang = ".cc"
 AppleDiskPath = "F:\\Bruno\\Dev\\AppleWin\\GS\\activeGS\\Live.Install.po"
 ProdosDir = "/LIVE.INSTALL/"
+# Local workspace disk image
+LocalDiskPath = "OBJ.po"
+LocalProdosDir = "/ORCA/"
 # ===============================================
 #
 def run_command(command, description=""):
@@ -179,6 +182,40 @@ def main():
         sys.exit(1)
 
     cleanup_intermediate_files()
+    print()
+
+    # --------------- Copy to Local Disk Image ---------------
+    print("=" * 50)
+    print("      Copying to Local Disk (OBJ.po)")
+    print("=" * 50)
+    
+    if os.path.exists(LocalDiskPath):
+        # Delete existing file from local disk (ignore errors)
+        print(f"Removing existing {file_to_copy} from {LocalDiskPath}...")
+        result = subprocess.run(
+            f'Cadius.exe DELETEFILE "{LocalDiskPath}" {LocalProdosDir}{file_to_copy}',
+            shell=True, capture_output=True, text=True
+        )
+        output = result.stdout + result.stderr
+        if output:
+            print(output)
+        
+        # Add new file to local disk
+        print(f"Adding {file_to_copy} to {LocalDiskPath}...")
+        result = subprocess.run(
+            f'Cadius.exe ADDFILE "{LocalDiskPath}" {LocalProdosDir} .\\{file_to_copy}',
+            shell=True, capture_output=True, text=True
+        )
+        output = result.stdout + result.stderr
+        if output:
+            print(output)
+        if "error" in output.lower():
+            print("WARNING: Error copying to local disk image (OBJ.po)")
+        else:
+            print(f"✓ Successfully copied to {LocalDiskPath}")
+    else:
+        print(f"WARNING: Local disk image {LocalDiskPath} not found - skipping local copy")
+    
     print()
 
     # --------------- Done ---------------
