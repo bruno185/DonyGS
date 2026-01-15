@@ -2316,6 +2316,9 @@ segment "code04";
  *  - Prompts user for a face id (0..face_count-1).
  *  - Draws the entire model in wireframe mode.
  *  - Overlays the selected face in filled green (pen 10).
+ *  - Navigate: Left/Right arrows = prev/next face ID
+ *              Up/Down arrows = next/prev position in sorted list
+ *  - ESC to exit
  */
 void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     if (!model || !params) return;
@@ -2343,28 +2346,81 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     }
 
     printf("Displaying face %d...\n", target_face);
+    printf("Use arrow keys to navigate (Left/Right: face ID, Up/Down: sorted list), any other key to exit.\n");
     printf("Press any key to show.\n");
     keypress();
     
-    startgraph(mode);
-
     // Backup display flags
     unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
     for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
 
-    // Draw entire model in wireframe
     int old_frame = framePolyOnly;
     framePolyOnly = 1; // wireframe mode
-    drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+    
+    // Navigation loop
+    int quit = 0;
+    while (!quit) {
+        startgraph(mode);
+        
+        // Draw entire model in wireframe
+        drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
 
-    // Overlay selected face in filled green (pen 10)
-    faces->display_flag[target_face] = 1;
-    drawFace(model, target_face, 10, 1);
+        // Overlay selected face in filled green (pen 10)
+        faces->display_flag[target_face] = 1;
+        drawFace(model, target_face, 10, 1);
 
-    MoveTo(2, 195);
-    printf("Face %d\n", target_face);
-    keypress();
-    endgraph();
+        // Find position in sorted list for display
+        int pos_in_sorted = -1;
+        for (int i = 0; i < face_count; ++i) {
+            if (faces->sorted_face_indices[i] == target_face) {
+                pos_in_sorted = i;
+                break;
+            }
+        }
+
+        MoveTo(2, 195);
+        if (pos_in_sorted >= 0) {
+            printf("Face %d (sorted pos %d)", target_face, pos_in_sorted);
+        } else {
+            printf("Face %d", target_face);
+        }
+        
+        // Wait for key
+        int key = 0;
+        asm {
+            sep #0x20
+        waitkey:
+            lda >0xC000
+            bpl waitkey
+            and #0x007f
+            sta >0xC010
+            sta key
+            rep #0x30
+        }
+        
+        endgraph();
+        
+        // Process key - only arrow keys continue, any other key exits
+        if (key == 8) { // Left arrow - previous face ID
+            target_face--;
+            if (target_face < 0) target_face = face_count - 1;
+        } else if (key == 21) { // Right arrow - next face ID
+            target_face++;
+            if (target_face >= face_count) target_face = 0;
+        } else if (key == 11) { // Up arrow - next position in sorted list
+            if (pos_in_sorted >= 0 && pos_in_sorted < face_count - 1) {
+                target_face = faces->sorted_face_indices[pos_in_sorted + 1];
+            }
+        } else if (key == 10) { // Down arrow - previous position in sorted list
+            if (pos_in_sorted > 0) {
+                target_face = faces->sorted_face_indices[pos_in_sorted - 1];
+            }
+        } else {
+            // Any other key exits
+            quit = 1;
+        }
+    }
+    
     DoText();
 
     // Restore state
