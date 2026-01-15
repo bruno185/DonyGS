@@ -3860,7 +3860,7 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
         return -1;  // Return -1 on error
     }
     
-    printf("\nReading vertices from file...'%s':\n", filename);
+    printf("\nReading vertices from file...'%s': ", filename);
     
     // Read file line by line
     while (fgets(line, sizeof(line), file) != NULL) {
@@ -3967,8 +3967,10 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
         owner->auto_suggested_proj_scale = FLOAT_TO_FIXED(s);
         owner->auto_fit_ready = 1;
 
+    #if ENABLE_DEBUG_SAVE
         printf("[INFO] readVertices: applied bbox center cx=%.4f cy=%.4f cz=%.4f\n", FIXED_TO_FLOAT(owner->auto_center_x), FIXED_TO_FLOAT(owner->auto_center_y), FIXED_TO_FLOAT(owner->auto_center_z));
         printf("[INFO] readVertices: brute auto-fit suggestion: distance=%.4f proj_scale=%.2f\n", FIXED_TO_FLOAT(owner->auto_suggested_distance), s);
+    #endif
     }
 
     // printf("\n\nAnalyse terminee. %d lignes lues.\n", line_number - 1);
@@ -3997,7 +3999,7 @@ int readFaces_model(const char* filename, Model3D* model) {
         return -1;
     }
     
-    printf("\nReading faces from file '%s' :\n", filename);
+    printf("\nReading faces from file '%s' :", filename);
     
     int buffer_pos = 0;  // Current position in the packed buffer
     
@@ -4955,7 +4957,7 @@ segment "code22";
 
     newmodel:
         printf("===================================\n");
-        printf("       3D OBJ file viewer\n");
+        printf("       3D OBJ file explorer\n");
         printf("===================================\n\n");
         printf("A tribute to Robert DONY\n");
         printf("Author of \"Calcul des parties cachees\" (Masson, 1986)\n\n");
