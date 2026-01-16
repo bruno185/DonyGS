@@ -1431,38 +1431,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     FaceArrays3D* faces = &model->faces;
     if (face_count <= 0) return 0;
 
-    /* CRITICAL FIX for models with doubled faces (same geometry, reversed vertex order):
-     * 
-     * Problem: When culling is OFF, both front and back versions of doubled faces are
-     * visible (display_flag=1 for all). This causes geometric plane tests to fail because:
-     *   - Back-faces have plane_d <= 0, invalidating obs_side tests in pair_plane_before/after
-     *   - Doubled faces (e.g., face 9 and its twin face 10) conflict geometrically
-     *   - The painter cannot determine correct ordering between a face and its back-facing twin
-     * 
-     * Solution: Temporarily recalculate display_flag to identify true front-faces (plane_d > 0),
-     * even when user has culling disabled. This allows geometric tests to work on front-faces
-     * only, avoiding conflicts with their back-facing twins.
-     * 
-     * Effect: Geometric corrections apply only to front-faces; back-faces remain at their
-     * z_mean sorted position. When rendered with culling OFF, both are drawn but order is
-     * based on the corrected front-face positions, eliminating artifacts.
-     */
     int old_cull = cull_back_faces;
-    int* saved_display_flags = NULL;
-    if (!cull_back_faces) {
-        /* User has culling OFF: save current display_flags (all 1s) and recalculate based
-         * on plane orientation to distinguish front-faces from back-faces */
-        saved_display_flags = (int*)malloc(face_count * sizeof(int));
-        if (saved_display_flags) {
-            for (int i = 0; i < face_count; ++i) saved_display_flags[i] = faces->display_flag[i];
-            /* Recalculate display_flag: 1 for front-faces (d > 0), 0 for back-faces (d <= 0) */
-            for (int i = 0; i < face_count; ++i) {
-                faces->display_flag[i] = (faces->plane_d[i] > 0) ? 1 : 0;
-            }
-        }
-    }
-    
-    /* Prepare sorting state: sort all faces but geometric tests will only correct front-faces */
     cull_back_faces = 0;
     painter_newell_sancha_fast(model, face_count);
 
@@ -1484,6 +1453,11 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     unsigned char *ov_cache = (unsigned char*)malloc(n * n * sizeof(unsigned char)); if (!ov_cache) { free(rel_cache); printf("Error: painter_correct malloc ov_cache failed\n"); return 0; }
     for (int i = 0; i < n * n; ++i) ov_cache[i] = 255; /* 255 = unknown, 0=no-overlap, 1=overlap */
 
+    /* NOTE: If face ordering issues persist with culling OFF, consider moving all
+     * back-faces (plane_d <= 0) to the beginning of sorted_face_indices before
+     * applying geometric corrections. This ensures back-faces are drawn first,
+     * before all front-faces, which may help with some edge cases. */
+
     /* Inverse map for quick position lookup: face_id -> index in sorted_face_indices */
     int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc pos_of_face failed\n"); return 0; }
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
@@ -1504,6 +1478,9 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         int best_before = -1; /* smallest index of misplaced face */
         for (int i = 0; i < pos; ++i) {
             int f = faces->sorted_face_indices[i];
+
+            /* Skip back-faces: geometric tests only work for front-faces */
+            if (faces->plane_d[f] <= 0 || faces->plane_d[target] <= 0) continue;
 
             /* depth (Z) quick rejection (cheap): if Z ranges do not overlap skip */
             if (faces->z_max[f] <= faces->z_min[target]) continue;
@@ -1552,6 +1529,9 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         for (int i = pos + 1; i < face_count; ++i) {
             int f = faces->sorted_face_indices[i];
 
+            /* Skip back-faces: geometric tests only work for front-faces */
+            if (faces->plane_d[f] <= 0 || faces->plane_d[target] <= 0) continue;
+
             /* depth (Z) quick rejection (cheap) */
             if (faces->z_max[f] <= faces->z_min[target]) continue;
             if (faces->z_max[target] <= faces->z_min[f]) continue;
@@ -1593,11 +1573,6 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         printf(" %d",target);
     }
 
-    /* Restore original display_flag state if we modified it for culling-OFF case */
-    if (saved_display_flags) {
-        for (int i = 0; i < face_count; ++i) faces->display_flag[i] = saved_display_flags[i];
-        free(saved_display_flags);
-    }
     cull_back_faces = old_cull;
     free(rel_cache); free(ov_cache); free(pos_of_face); free(min_allowed_pos);
     return moves;
@@ -2256,10 +2231,6 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
     
-    /* Skip if either face is a back-face (display_flag=0): geometric plane tests
-     * require front-facing orientation (d > 0) to work correctly */
-    // if (!faces->display_flag[f1] || !faces->display_flag[f2]) return 0;
-    
     Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
     int k;
     int n1 = faces->vertex_count[f1];
@@ -2308,10 +2279,6 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
 static int pair_plane_before(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    
-    /* Skip if either face is a back-face (display_flag=0): geometric plane tests
-     * require front-facing orientation (d > 0) to work correctly */
-    // if (!faces->display_flag[f1] || !faces->display_flag[f2]) return 0;
     
     Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
     int k;
