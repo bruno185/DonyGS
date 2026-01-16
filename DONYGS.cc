@@ -1453,10 +1453,29 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     unsigned char *ov_cache = (unsigned char*)malloc(n * n * sizeof(unsigned char)); if (!ov_cache) { free(rel_cache); printf("Error: painter_correct malloc ov_cache failed\n"); return 0; }
     for (int i = 0; i < n * n; ++i) ov_cache[i] = 255; /* 255 = unknown, 0=no-overlap, 1=overlap */
 
-    /* NOTE: If face ordering issues persist with culling OFF, consider moving all
-     * back-faces (plane_d <= 0) to the beginning of sorted_face_indices before
-     * applying geometric corrections. This ensures back-faces are drawn first,
-     * before all front-faces, which may help with some edge cases. */
+    /* Partition faces: back-faces (plane_d <= 0) go to beginning, front-faces after.
+     * Maintain z_mean order within each partition using stable partitioning.
+     * This ensures back-faces are drawn first, and geometric corrections are only
+     * applied to front-faces (where plane equations are valid). */
+    int *temp_indices = (int*)malloc(n * sizeof(int)); if (!temp_indices) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc temp_indices failed\n"); return 0; }
+    int back_idx = 0, front_idx = 0;
+    /* First pass: count and separate */
+    for (int i = 0; i < n; ++i) {
+        int f = faces->sorted_face_indices[i];
+        if (faces->plane_d[f] <= 0) {
+            temp_indices[back_idx++] = f;  /* back-faces at beginning */
+        }
+    }
+    int front_start_pos = back_idx;  /* Mark where front-faces start */
+    for (int i = 0; i < n; ++i) {
+        int f = faces->sorted_face_indices[i];
+        if (faces->plane_d[f] > 0) {
+            temp_indices[front_start_pos + front_idx++] = f;  /* front-faces after */
+        }
+    }
+    /* Copy back to sorted_face_indices */
+    for (int i = 0; i < n; ++i) faces->sorted_face_indices[i] = temp_indices[i];
+    free(temp_indices);
 
     /* Inverse map for quick position lookup: face_id -> index in sorted_face_indices */
     int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc pos_of_face failed\n"); return 0; }
@@ -1467,20 +1486,24 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
 
     printf("Faces:");
 
-    /* For each face id (0..face_count-1) treat that as target */
-    for (int target = 0; target < face_count; ++target) {
-        /* Find current position of target via inverse map */
-        int pos = pos_of_face[target];
-        if (pos < 0) continue;
-        if (pos >= n) continue; /* not present for some reason */
+    /* Two independent passes: 
+     * 1) Correct back-faces order within themselves (indices 0 to front_start_pos-1)
+     * 2) Correct front-faces order within themselves (indices front_start_pos to n-1)
+     * This ensures back-faces stay before front-faces while both groups benefit from corrections. */
 
-        /* 1) BEFORE test: check faces placed before target */
-        int best_before = -1; /* smallest index of misplaced face */
+    /* PASS 1: Correct back-faces (plane_d <= 0) - only if culling is OFF */
+    if (old_cull == 0) { /* Skip this pass entirely if culling is ON (back-faces won't be displayed) */
+        for (int target = 0; target < face_count; ++target) {
+            if (faces->plane_d[target] > 0) continue; /* Skip front-faces in this pass */
+
+        int pos = pos_of_face[target];
+        if (pos < 0 || pos >= front_start_pos) continue; /* Must be in back-face section */
+
+        /* 1) BEFORE test: check back-faces placed before target */
+        int best_before = -1;
         for (int i = 0; i < pos; ++i) {
             int f = faces->sorted_face_indices[i];
-
-            /* Skip back-faces: geometric tests only work for front-faces */
-            if (faces->plane_d[f] <= 0 || faces->plane_d[target] <= 0) continue;
+            if (i >= front_start_pos) break; /* Don't cross into front-face section */
 
             /* depth (Z) quick rejection (cheap): if Z ranges do not overlap skip */
             if (faces->z_max[f] <= faces->z_min[target]) continue;
@@ -1521,16 +1544,82 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
             if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
         }
 
-        /* 2) AFTER test: check faces placed after target */
-        /* recompute pos if necessary (ensure we have current location) */
+        /* 2) AFTER test: check back-faces placed after target (within back-face section) */
         pos = pos_of_face[target];
-        if (pos < 0 || pos >= n) continue;
-        int best_after = -1; /* largest index of misplaced face */
-        for (int i = pos + 1; i < face_count; ++i) {
+        if (pos < 0 || pos >= front_start_pos) continue;
+        int best_after = -1;
+        for (int i = pos + 1; i < front_start_pos; ++i) { /* Stay within back-face section */
             int f = faces->sorted_face_indices[i];
 
-            /* Skip back-faces: geometric tests only work for front-faces */
-            if (faces->plane_d[f] <= 0 || faces->plane_d[target] <= 0) continue;
+            /* depth (Z) quick rejection (cheap) */
+            if (faces->z_max[f] <= faces->z_min[target]) continue;
+            if (faces->z_max[target] <= faces->z_min[f]) continue;
+
+            /* bounding-box quick rejection (cheap) */
+            if (faces->maxx[f] <= faces->minx[target]) continue;
+            if (faces->maxx[target] <= faces->minx[f]) continue;
+            if (faces->maxy[f] <= faces->miny[target]) continue;
+            if (faces->maxy[target] <= faces->miny[f]) continue;
+
+            if (!projected_polygons_overlap(model, f, target)) continue;
+            if (pair_plane_before(model, f, target)) { best_after = i; }
+        }
+        if (best_after != -1) {
+            int insert_idx;
+            if (best_after < pos) insert_idx = best_after + 1; else insert_idx = best_after;
+            if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
+            /* Ensure we don't move into front-face section */
+            if (insert_idx >= front_start_pos) insert_idx = front_start_pos - 1;
+            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
+            pos = pos_of_face[target];
+            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+        }
+        
+        printf(" %d",target);
+        }
+    } /* End of PASS 1 (back-faces) */
+
+    /* PASS 2: Correct front-faces (plane_d > 0) */
+    for (int target = 0; target < face_count; ++target) {
+        if (faces->plane_d[target] <= 0) continue; /* Skip back-faces in this pass */
+
+        int pos = pos_of_face[target];
+        if (pos < 0 || pos < front_start_pos) continue; /* Must be in front-face section */
+
+        /* 1) BEFORE test: check front-faces placed before target (don't test back-faces) */
+        int best_before = -1;
+        for (int i = front_start_pos; i < pos; ++i) { /* Start from front-face section */
+            int f = faces->sorted_face_indices[i];
+
+            /* depth (Z) quick rejection (cheap) */
+            if (faces->z_max[f] <= faces->z_min[target]) continue;
+            if (faces->z_max[target] <= faces->z_min[f]) continue;
+
+            /* bounding-box quick rejection (cheap) */
+            if (faces->maxx[f] <= faces->minx[target]) continue;
+            if (faces->maxx[target] <= faces->minx[f]) continue;
+            if (faces->maxy[f] <= faces->miny[target]) continue;
+            if (faces->maxy[target] <= faces->miny[f]) continue;    
+
+            if (!projected_polygons_overlap(model, f, target)) continue;
+            if (pair_plane_after(model, f, target)) {
+                if (best_before == -1 || i < best_before) best_before = i;
+            }
+        }
+        if (best_before != -1) {
+            /* Ensure best_before is not in back-face section */
+            if (best_before < front_start_pos) best_before = front_start_pos;
+            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
+            pos = pos_of_face[target];
+            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+        }
+
+        /* 2) AFTER test: check front-faces placed after target */
+        pos = pos_of_face[target];
+        if (pos < 0 || pos >= n) continue;
+        int best_after = -1;
+        for (int i = pos + 1; i < face_count; ++i) {
+            int f = faces->sorted_face_indices[i];
 
             /* depth (Z) quick rejection (cheap) */
             if (faces->z_max[f] <= faces->z_min[target]) continue;
