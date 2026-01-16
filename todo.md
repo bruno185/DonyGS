@@ -45,6 +45,7 @@ avec les angle 350 / 50, avion, les faces 3 et 44 sont en overlap, et sont inver
 
 TODO:
 aVérifier les angles h = 240, h = 330, h = 190.
+Nouveau : 220 !
 
 
 
