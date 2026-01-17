@@ -1342,19 +1342,20 @@ void painter_newell_sancha(Model3D* model, int face_count) {
     }  
 }
 
-
 /* Float-based painter: reproduces Windows numeric behaviour exactly
    Implemented as non-destructive function; enable via env var USE_FLOAT_PAINTER=1 */
 
 /* painter_correct
  * ----------------
  * Deterministically adjust `faces->sorted_face_indices` in-place using the
- * exact checks performed by `inspect_faces_before` and `inspect_faces_after`.
+ * exact geometric plane tests performed by `pair_plane_before` and `pair_plane_after`.
  *
  * Algorithm overview (safe & conservative):
- *  - For each face id `target`, run two checks:
+ *  - First, partition faces into back-faces (plane_d <= 0) and front-faces (plane_d > 0)
+ *    while preserving z_mean order within each group.
+ *  - For each face id `target` within its partition, run two checks:
  *      1) Inspect faces *before* `target` in the current order. If one or more
- *         of these faces are *misplaced* (the pairwise tests indicate they
+ *         of these faces are *misplaced* (the pairwise plane tests indicate they
  *         should be after `target`) AND their projected polygons *overlap*
  *         (strict 2D overlap; touching-only is NOT overlap here), then move
  *         `target` to be *before* the earliest such misplaced face.
@@ -1366,14 +1367,14 @@ void painter_newell_sancha(Model3D* model, int face_count) {
  *  - We first perform a fast axis-aligned bounding-box (AABB) rejection for
  *    each candidate pair. Only if bounding boxes intersect do we call the
  *    heavier `projected_polygons_overlap` (edge-intersection + containment)
- *    and the pairwise `pair_order_relation` tests.
+ *    and the pairwise plane tests (`pair_plane_before`/`pair_plane_after`).
  *  - `projected_polygons_overlap` treats touching-only cases (shared edge or
  *    single vertex) as NON-overlap; this is intentional and consistent with
  *    the rest of the program.
- *  - The implementation may use per-run caches (O(n^2) memory) to avoid
- *    recomputing overlap/ordering tests for the same pair multiple times.
  *  - The routine only performs local moves that are conservative with respect
  *    to the pair tests — it does not attempt global reordering heuristics.
+ *  - Back-faces are corrected only if backface culling is OFF; otherwise they
+ *    won't be rendered and correction would be wasted effort.
  *
  * Return value: number of element moves applied to `sorted_face_indices`.
  */
@@ -1437,27 +1438,12 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
 
     int moves = 0;
     int n = face_count;
-    /* Per-run caches to avoid recomputing expensive tests:
-     * - rel_cache[f*n + t] stores the result of pair_order_relation(f, t):
-     *     2 = unknown, -1/0/1 valid results
-     * - ov_cache[f*n + t] stores projected overlap: 255 = unknown, 0 = no, 1 = yes
-     *
-     * These caches use O(n^2) memory but can drastically reduce runtime on
-     * models where the same pair is queried often. We allocate them here once
-     * per call and free at the end. If `n` is very large this may be disabled
-     * or replaced by a smaller LRU cache to bound memory.
-     */
-
-    signed char *rel_cache = (signed char*)malloc(n * n * sizeof(signed char)); if (!rel_cache) { printf("Error: painter_correct malloc rel_cache failed\n"); return 0; }
-    for (int i = 0; i < n * n; ++i) rel_cache[i] = 2; /* 2 = unknown, values -1,0,1 valid */
-    unsigned char *ov_cache = (unsigned char*)malloc(n * n * sizeof(unsigned char)); if (!ov_cache) { free(rel_cache); printf("Error: painter_correct malloc ov_cache failed\n"); return 0; }
-    for (int i = 0; i < n * n; ++i) ov_cache[i] = 255; /* 255 = unknown, 0=no-overlap, 1=overlap */
 
     /* Partition faces: back-faces (plane_d <= 0) go to beginning, front-faces after.
      * Maintain z_mean order within each partition using stable partitioning.
-     * This ensures back-faces are drawn first, and geometric corrections are only
-     * applied to front-faces (where plane equations are valid). */
-    int *temp_indices = (int*)malloc(n * sizeof(int)); if (!temp_indices) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc temp_indices failed\n"); return 0; }
+     * Both groups will be independently corrected (back-faces only if culling OFF).
+     * This separation ensures plane equation tests remain valid within each group. */
+    int *temp_indices = (int*)malloc(n * sizeof(int)); if (!temp_indices) { printf("Error: painter_correct malloc temp_indices failed\n"); return 0; }
     int back_idx = 0, front_idx = 0;
     /* First pass: count and separate */
     for (int i = 0; i < n; ++i) {
@@ -1478,10 +1464,10 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     free(temp_indices);
 
     /* Inverse map for quick position lookup: face_id -> index in sorted_face_indices */
-    int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { free(rel_cache); free(ov_cache); printf("Error: painter_correct malloc pos_of_face failed\n"); return 0; }
+    int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { printf("Error: painter_correct malloc pos_of_face failed\n"); return 0; }
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
     /* Per-target minimal allowed index once moved: -1 means not moved yet. */
-    int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(rel_cache); free(ov_cache); free(pos_of_face); printf("Error: painter_correct malloc min_allowed_pos failed\n"); return 0; }
+    int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(pos_of_face); printf("Error: painter_correct malloc min_allowed_pos failed\n"); return 0; }
     for (int i = 0; i < n; ++i) min_allowed_pos[i] = -1;
 
     printf("Faces:");
@@ -1524,9 +1510,6 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
              * containment tests; expensive but necessary for correctness).
              */
             if (!projected_polygons_overlap(model, f, target)) continue;
-            /* pair_order_relation is relatively heavy; we cache its result to avoid
-             * recalculating for the same pair multiple times during a run.
-             */
 
             /* Use specialized plane-only 'after' test for BEFORE loop: quick check
              * to see if `f` is geometrically after (in front of) `target`.
@@ -1620,6 +1603,8 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         int best_after = -1;
         for (int i = pos + 1; i < face_count; ++i) {
             int f = faces->sorted_face_indices[i];
+            /* Note: loop goes to face_count which may include back-faces, but they
+             * have plane_d <= 0 so they won't interfere with front-face tests */
 
             /* depth (Z) quick rejection (cheap) */
             if (faces->z_max[f] <= faces->z_min[target]) continue;
@@ -1663,7 +1648,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     }
 
     cull_back_faces = old_cull;
-    free(rel_cache); free(ov_cache); free(pos_of_face); free(min_allowed_pos);
+    free(pos_of_face); free(min_allowed_pos);
     return moves;
 }
 
@@ -2313,8 +2298,23 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
 
 
 /* Specialized plane-only checks for painter_correct fast path
- * - pair_plane_after(f1,f2): returns 1 if f1 is geometrically after f2 (Test6 or Test7)
- * - pair_plane_before(f1,f2): returns 1 if f1 is geometrically before f2 (Test4 or Test5)
+ * ------------------------------------------------------------
+ * These functions implement the geometric depth tests from Newell-Sancha algorithm
+ * using only plane equations (no bounding box checks - caller must do those first).
+ *
+ * - pair_plane_after(f1,f2): returns 1 if f1 is geometrically after (in front of) f2
+ *   Implements Test6: all vertices of f2 on opposite side of f1's plane from observer
+ *   Falls back to Test7: all vertices of f1 on same side of f2's plane as observer
+ *
+ * - pair_plane_before(f1,f2): returns 1 if f1 is geometrically before (behind) f2  
+ *   Implements Test4: all vertices of f2 on same side of f1's plane as observer
+ *   Falls back to Test5: all vertices of f1 on opposite side of f2's plane from observer
+ *
+ * Both functions:
+ *   - Use Fixed64 arithmetic for plane equation evaluation
+ *   - Apply epsilon tolerance (0.01) to handle near-coplanar cases
+ *   - Return 0 if tests are inconclusive
+ *   - Are only valid for front-faces (plane_d > 0); back-faces need special handling
  */
 static int pair_plane_after(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
@@ -2328,6 +2328,9 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
     int offset2 = faces->vertex_indices_ptr[f2];
     Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
 
+    /* Test6: Check if all vertices of f2 are on the opposite side of f1's plane from the observer.
+     * If observer is in front of f1 (d1 > 0) and all f2 vertices are behind f1's plane,
+     * then f1 occludes f2 -> f1 is after (should be drawn later). */
     int obs_side1 = 0; int side; int all_opposite_side;
     obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
     if (obs_side1 != 0) {
@@ -2344,7 +2347,8 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
         }
         if (all_opposite_side) return 1;
     }
-    /* Test7 fallback (symmetric) */
+    /* Test7 fallback: Check if all vertices of f1 are on the same side of f2's plane as the observer.
+     * If observer is in front of f2 and all f1 vertices are also in front, then f1 is after f2. */
     Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
     int obs_side2 = 0; int all_same_side = 0;
     obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
@@ -2377,6 +2381,9 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
     int offset2 = faces->vertex_indices_ptr[f2];
     Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
 
+    /* Test4: Check if all vertices of f2 are on the same side of f1's plane as the observer.
+     * If observer is in front of f1 and all f2 vertices are also in front,
+     * then f2 occludes f1 -> f1 is before (should be drawn first). */
     int obs_side1 = 0; int side; int all_same_side;
     obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
     if (obs_side1 != 0) {
@@ -2393,7 +2400,8 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
         }
         if (all_same_side) return 1;
     }
-    /* Test5 fallback */
+    /* Test5 fallback: Check if all vertices of f1 are on opposite side of f2's plane from observer.
+     * If observer is in front of f2 and all f1 vertices are behind f2's plane, then f1 is before f2. */
     Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
     int obs_side2 = 0; int all_opposite_side = 0;
     obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
@@ -3969,7 +3977,7 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
         return -1;  // Return -1 on error
     }
     
-    printf("\nReading vertices from file...'%s': ", filename);
+    printf("\nReading vertices from file '%s' ", filename);
     
     // Read file line by line
     while (fgets(line, sizeof(line), file) != NULL) {
@@ -4108,7 +4116,7 @@ int readFaces_model(const char* filename, Model3D* model) {
         return -1;
     }
     
-    printf("\nReading faces from file '%s' :", filename);
+    printf("\nReading faces from file '%s' ", filename);
     
     int buffer_pos = 0;  // Current position in the packed buffer
     
