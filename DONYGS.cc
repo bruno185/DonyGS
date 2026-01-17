@@ -103,7 +103,7 @@ static int random_colors_capacity = 0;
 #define PAINTER_MODE_FLOAT 2
 #define PAINTER_MODE_CORRECT 3
 
-static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct,4=super (set with '5')
+static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct
 
 // Runtime toggle kept for compatibility; main() may set this and we propagate to painter_mode
 static int use_float_painter = 0;
