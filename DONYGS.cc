@@ -5615,10 +5615,13 @@ case 98:  // 'b'
 
             case 78:  // 'N' - load new model
             case 110: // 'n'
-                // Reset painter mode to FAST when loading a new model
+                // Reset all parameters to startup defaults when loading a new model
                 painter_mode = PAINTER_MODE_FAST;
-                // Reset 2D pan offsets when loading a new model
                 pan_dx = 0; pan_dy = 0;
+                cull_back_faces = 1;
+                user_fill_color = -1;
+                user_frame_color = -1;
+                s_global_proj_scale_fixed = INT_TO_FIXED(100);
                 destroyModel3D(model);
                 goto newmodel;
 
