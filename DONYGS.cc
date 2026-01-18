@@ -102,8 +102,9 @@ static int random_colors_capacity = 0;
 #define PAINTER_MODE_FIXED 1
 #define PAINTER_MODE_FLOAT 2
 #define PAINTER_MODE_CORRECT 3
+#define PAINTER_MODE_CORRECTV2 4
 
-static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct
+static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct,4=correctV2
 
 // Runtime toggle kept for compatibility; main() may set this and we propagate to painter_mode
 static int use_float_painter = 0;
@@ -1649,6 +1650,269 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
 
     cull_back_faces = old_cull;
     free(pos_of_face); free(min_allowed_pos);
+    return moves;
+}
+
+/* painter_correctV2
+ * ------------------
+ * Version V2: Three-pass algorithm with partitioning and cross-section boundary test
+ * 1. Partitions faces like painter_correct (back-faces / front-faces)
+ * 2. PASS 1: Correct back-faces among themselves
+ * 3. PASS 2: Correct front-faces among themselves  
+ * 4. PASS 3 (only if culling OFF): Cross-section test between back/front boundary
+ *    - For each back-face, test overlap with ALL front-faces
+ *    - If overlap + back-face closer (z_mean) → move back-face after front-face
+ */
+static int painter_correctV2(Model3D* model, int face_count, int debug) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (face_count <= 0) return 0;
+
+    int old_cull = cull_back_faces;
+    cull_back_faces = 0;
+    /* Seed initial ordering like painter_correct (z-mean fast pass) */
+    painter_newell_sancha_fast(model, face_count);
+    int moves = 0;
+    int n = face_count;
+
+    // Partition faces: back-faces (plane_d <= 0) go to beginning, front-faces after
+    int *temp_indices = (int*)malloc(n * sizeof(int)); if (!temp_indices) { printf("Error: painter_correctV2 malloc temp_indices failed\n"); return 0; }
+    int back_idx = 0, front_idx = 0;
+    for (int i = 0; i < n; ++i) {
+        int f = faces->sorted_face_indices[i];
+        if (faces->plane_d[f] <= 0) {
+            temp_indices[back_idx++] = f;
+        }
+    }
+    int front_start_pos = back_idx;
+    for (int i = 0; i < n; ++i) {
+        int f = faces->sorted_face_indices[i];
+        if (faces->plane_d[f] > 0) {
+            temp_indices[front_start_pos + front_idx++] = f;
+        }
+    }
+    for (int i = 0; i < n; ++i) faces->sorted_face_indices[i] = temp_indices[i];
+    free(temp_indices);
+
+    int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { printf("Error: painter_correctV2 malloc pos_of_face failed\n"); return 0; }
+    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+    int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(pos_of_face); printf("Error: painter_correctV2 malloc min_allowed_pos failed\n"); return 0; }
+    for (int i = 0; i < n; ++i) min_allowed_pos[i] = -1;
+
+
+    // PASS 1: Correct back-faces (plane_d <= 0) - only if culling is OFF
+    if (old_cull == 0) {
+        for (int target = 0; target < face_count; ++target) {
+            if (faces->plane_d[target] > 0) continue;
+            int pos = pos_of_face[target];
+            if (pos < 0 || pos >= front_start_pos) continue;
+            int best_before = -1;
+            for (int i = 0; i < pos; ++i) {
+                int f = faces->sorted_face_indices[i];
+                if (i >= front_start_pos) break;
+                if (faces->z_max[f] <= faces->z_min[target]) continue;
+                if (faces->z_max[target] <= faces->z_min[f]) continue;
+                if (faces->maxx[f] <= faces->minx[target]) continue;
+                if (faces->maxx[target] <= faces->minx[f]) continue;
+                if (faces->maxy[f] <= faces->miny[target]) continue;
+                if (faces->maxy[target] <= faces->miny[f]) continue;
+                if (!projected_polygons_overlap(model, f, target)) continue;
+                if (pair_plane_after(model, f, target)) {
+                    if (best_before == -1 || i < best_before) best_before = i;
+                }
+            }
+            if (best_before != -1) {
+                moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
+                pos = pos_of_face[target];
+                if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+            }
+            pos = pos_of_face[target];
+            if (pos < 0 || pos >= front_start_pos) continue;
+            int best_after = -1;
+            for (int i = pos + 1; i < front_start_pos; ++i) {
+                int f = faces->sorted_face_indices[i];
+                if (faces->z_max[f] <= faces->z_min[target]) continue;
+                if (faces->z_max[target] <= faces->z_min[f]) continue;
+                if (faces->maxx[f] <= faces->minx[target]) continue;
+                if (faces->maxx[target] <= faces->minx[f]) continue;
+                if (faces->maxy[f] <= faces->miny[target]) continue;
+                if (faces->maxy[target] <= faces->miny[f]) continue;
+                if (!projected_polygons_overlap(model, f, target)) continue;
+                if (pair_plane_before(model, f, target)) { best_after = i; }
+            }
+            if (best_after != -1) {
+                int insert_idx;
+                if (best_after < pos) insert_idx = best_after + 1; else insert_idx = best_after;
+                if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
+                if (insert_idx >= front_start_pos) insert_idx = front_start_pos - 1;
+                moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
+                pos = pos_of_face[target];
+                if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+            }
+        }
+    }
+
+    // PASS 2: Correct front-faces (plane_d > 0)
+    for (int target = 0; target < face_count; ++target) {
+        if (faces->plane_d[target] <= 0) continue;
+        int pos = pos_of_face[target];
+        if (pos < 0 || pos < front_start_pos) continue;
+        int best_before = -1;
+        for (int i = front_start_pos; i < pos; ++i) {
+            int f = faces->sorted_face_indices[i];
+            if (faces->z_max[f] <= faces->z_min[target]) continue;
+            if (faces->z_max[target] <= faces->z_min[f]) continue;
+            if (faces->maxx[f] <= faces->minx[target]) continue;
+            if (faces->maxx[target] <= faces->minx[f]) continue;
+            if (faces->maxy[f] <= faces->miny[target]) continue;
+            if (faces->maxy[target] <= faces->miny[f]) continue;
+            if (!projected_polygons_overlap(model, f, target)) continue;
+            if (pair_plane_after(model, f, target)) {
+                if (best_before == -1 || i < best_before) best_before = i;
+            }
+        }
+        if (best_before != -1) {
+            if (best_before < front_start_pos) best_before = front_start_pos;
+            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
+            pos = pos_of_face[target];
+            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+        }
+        pos = pos_of_face[target];
+        if (pos < 0 || pos < front_start_pos) continue;
+        int best_after = -1;
+        for (int i = pos + 1; i < face_count; ++i) {
+            int f = faces->sorted_face_indices[i];
+            if (faces->z_max[f] <= faces->z_min[target]) continue;
+            if (faces->z_max[target] <= faces->z_min[f]) continue;
+            if (faces->maxx[f] <= faces->minx[target]) continue;
+            if (faces->maxx[target] <= faces->minx[f]) continue;
+            if (faces->maxy[f] <= faces->miny[target]) continue;
+            if (faces->maxy[target] <= faces->miny[f]) continue;
+            if (!projected_polygons_overlap(model, f, target)) continue;
+            if (pair_plane_before(model, f, target)) { best_after = i; }
+        }
+        if (best_after != -1) {
+            int insert_idx;
+            if (best_after < pos) insert_idx = best_after + 1; else insert_idx = best_after;
+            if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
+            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
+            pos = pos_of_face[target];
+            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+        }
+    }
+
+    // PASS 3: Cross-section test between back/front boundary (only if culling is OFF)
+
+    /* If culling is OFF: run a Z-only sort (fast) to scan faces from far/near and
+     * detect trailing back-faces and overlapping front-faces for diagnostics.
+     * We save the order after passes 1/2, do the Z-sort, inspect from the end
+     * (highest index) backwards until we encounter a non-backface, logging each
+     * backface found and any front faces that overlap it, then restore snapshot. */
+    if (old_cull == 0) {
+        int *snapshot = (int*)malloc(n * sizeof(int));
+        if (!snapshot) { printf("Error: painter_correctV2 malloc snapshot failed\n"); return 0; }
+        for (int i = 0; i < n; ++i) snapshot[i] = faces->sorted_face_indices[i];
+
+        /* Z-only sort (fast) */
+        painter_newell_sancha_fast(model, face_count);
+
+        FILE *logf = fopen("incfaces.log", "a");
+        int total_scanned = 0, total_logged = 0, total_ov = 0, total_tch = 0, total_none = 0, total_moves = 0;
+        /* Scan from highest index downwards */
+        for (int idx = n - 1; idx >= 0; --idx) {
+            int bf = faces->sorted_face_indices[idx];
+            total_scanned++;
+            /* If we hit a front-face, stop and restore original order */
+            if (faces->plane_d[bf] > 0) {
+                break;
+            }
+            /* It's a back-face: log detailed info */
+            total_logged++;
+            int orig_pos = pos_of_face[bf];
+            if (logf) fprintf(logf, "BACK idx=%d pos=%d face=%d zmean=%.6f ", idx, orig_pos, bf, FIXED_TO_FLOAT(faces->z_mean[bf]));
+            /* Find front faces that overlap or touch this back-face */
+            int found = 0;
+            int per_ov = 0, per_tch = 0;
+            for (int j = 0; j < n; ++j) {
+                int ff = faces->sorted_face_indices[j];
+                if (faces->plane_d[ff] <= 0) continue; /* only front faces */
+                /* Z quick reject */
+                if (faces->z_max[ff] <= faces->z_min[bf]) continue;
+                if (faces->z_max[bf] <= faces->z_min[ff]) continue;
+                /* bbox tests (strict and non-strict to detect touching-only) */
+                int bbox_strict = !(faces->maxx[ff] <= faces->minx[bf] || faces->maxx[bf] <= faces->minx[ff]
+                                    || faces->maxy[ff] <= faces->miny[bf] || faces->maxy[bf] <= faces->miny[ff]);
+                int bbox_touch = !(faces->maxx[ff] < faces->minx[bf] || faces->maxx[bf] < faces->minx[ff]
+                                   || faces->maxy[ff] < faces->miny[bf] || faces->maxy[bf] < faces->miny[ff]);
+                if (!bbox_touch) continue; /* no even-touch bbox => skip */
+                int overlapping = 0;
+                if (bbox_strict) {
+                    if (projected_polygons_overlap(model, ff, bf)) overlapping = 1;
+                }
+                if (overlapping || bbox_touch) {
+                    int orig_pos_ff = pos_of_face[ff];
+                    if (logf) fprintf(logf, "FF idx=%d pos=%d face=%d zmean=%.6f%s ", j, orig_pos_ff, ff, FIXED_TO_FLOAT(faces->z_mean[ff]), overlapping?"(ov)":"(tch)");
+                    found++; if (overlapping) { per_ov++; total_ov++; } else { per_tch++; total_tch++; }
+
+                    /* Decide ordering: try plane tests (bf vs ff) first */
+                    int plane_after = pair_plane_after(model, bf, ff); /* 1 if bf after ff */
+                    int plane_before = pair_plane_before(model, bf, ff); /* 1 if bf before ff */
+                    int decision = 0; /* 1 => move bf after ff, -1 => keep bf before ff */
+                    const char *reason = NULL;
+                    if (plane_after == 1 && plane_before == 0) { decision = 1; reason = "plane_after"; }
+                    else if (plane_before == 1 && plane_after == 0) { decision = -1; reason = "plane_before"; }
+                    else {
+                        /* inconclusive: fallback to zmean */
+                        float zbf = FIXED_TO_FLOAT(faces->z_mean[bf]);
+                        float zff = FIXED_TO_FLOAT(faces->z_mean[ff]);
+                        if (zbf < zff) { decision = 1; reason = "zmean"; } else { decision = -1; reason = "zmean"; }
+                    }
+
+                    /* Apply decision: if move needed, update snapshot and pos_of_face */
+                    if (decision == 1) {
+                        int from = pos_of_face[bf];
+                        int to = pos_of_face[ff] + 1; /* insert after ff */
+                        if (from < to) to--; /* account for removal shifting */
+                        if (from != to) {
+                            int tmp = snapshot[from];
+                            if (from < to) {
+                                for (int s = from; s < to; ++s) { snapshot[s] = snapshot[s+1]; pos_of_face[snapshot[s]] = s; }
+                                snapshot[to] = tmp; pos_of_face[tmp] = to;
+                            } else {
+                                for (int s = from; s > to; --s) { snapshot[s] = snapshot[s-1]; pos_of_face[snapshot[s]] = s; }
+                                snapshot[to] = tmp; pos_of_face[tmp] = to;
+                            }
+                            /* Log move */
+                            if (logf) fprintf(logf, "  ACTION move bf->after ff (reason=%s) from=%d to=%d\n", reason, from, to);
+                            total_moves++;
+                        } else {
+                            if (logf) fprintf(logf, "  ACTION decision=%s but already at desired pos\n", reason);
+                        }
+                    }
+                }
+            }
+            if (!found) { if (logf) fprintf(logf, "none"); total_none++; }
+            if (logf) fprintf(logf, " -- overlaps=%d touch=%d\n", per_ov, per_tch);
+        }
+        if (logf) {
+            fprintf(logf, "SUMMARY scanned=%d logged=%d total_ov=%d total_tch=%d total_none=%d total_moves=%d\n", total_scanned, total_logged, total_ov, total_tch, total_none, total_moves);
+            fclose(logf);
+        }
+
+        /* Restore original order from passes 1/2 */
+        for (int i = 0; i < n; ++i) faces->sorted_face_indices[i] = snapshot[i];
+        free(snapshot);
+    }
+
+    // XXXXXXXXXXXXXXXX fin cross-section test XXXXXXXXXXXXXXXX
+
+    cull_back_faces = old_cull;
+    free(pos_of_face);
+    free(min_allowed_pos);
+    // Affichage identique à painter_correct
+    printf("Faces:");
+    for (int i = 0; i < n; ++i) printf(" %d", faces->sorted_face_indices[i]);
+    printf("\n");
     return moves;
 }
 
@@ -3916,6 +4180,9 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     } else if (painter_mode == PAINTER_MODE_CORRECT) {
         /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
         painter_correct(model, model->faces.face_count, 0);
+    } else if (painter_mode == PAINTER_MODE_CORRECTV2) {
+        /* painter_correctV2: experimental face splitting version */
+        painter_correctV2(model, model->faces.face_count, 0);
     } else {
         // PAINTER_MODE_FLOAT
         painter_newell_sancha_float(model, model->faces.face_count);
@@ -3926,7 +4193,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     {
         long elapsed = t_end - t_start;
         double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
-        const char* pname = (painter_mode==PAINTER_MODE_FAST)?"painter_newell_sancha_fast":(painter_mode==PAINTER_MODE_FIXED?"painter_newell_sancha":(painter_mode==PAINTER_MODE_CORRECT?"painter_correct":"painter_newell_sancha_float"));
+        const char* pname = (painter_mode==PAINTER_MODE_FAST)?"painter_newell_sancha_fast":(painter_mode==PAINTER_MODE_FIXED?"painter_newell_sancha":(painter_mode==PAINTER_MODE_CORRECT?"painter_correct":(painter_mode==PAINTER_MODE_CORRECTV2?"painter_correctV2":"painter_newell_sancha_float")));
         printf("[TIMING] %s: %ld ticks (%.2f ms)\n", pname, elapsed, ms);
         keypress();
     }
@@ -5291,6 +5558,7 @@ segment "code22";
                 if (painter_mode == PAINTER_MODE_FAST) printf("    Painter mode: FAST (simple face sorting only)\n");
                 else if (painter_mode == PAINTER_MODE_FIXED) printf("    Painter mode: NORMAL (Fixed32/64)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECT) printf("    Painter mode: CORRECT (painter_correct)\n");
+                else if (painter_mode == PAINTER_MODE_CORRECTV2) printf("    Painter mode: CORRECT V2 (painter_correctV2 with face splitting detection)\n");
                 else printf("    Painter mode: FLOAT (float-based)\n\n");
                 printf("    Back-face culling: %s\n", cull_back_faces ? "ON" : "OFF");
                 printf("    Pan offset: (%d, %d)\n", pan_dx, pan_dy);
@@ -5486,6 +5754,11 @@ segment "code22";
             case 52: // '4' - set CORRECT painter (runs painter_correct)
                 painter_mode = PAINTER_MODE_CORRECT;
                 printf("Painter mode: CORRECT (painter_correct)\n");
+                if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
+
+            case 53: // '5' - set CORRECTV2 painter (runs painter_correctV2 with face splitting detection)
+                painter_mode = PAINTER_MODE_CORRECTV2;
+                printf("Painter mode: CORRECT V2 (painter_correctV2)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
             case 55: // '7' - choose fill color
