@@ -154,6 +154,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `T` / `Y` | Pan Up/Down | 2D screen offset (10 pixels) |
 | `0` | Reset Pan | Return to center position (0, 0) |
 | `C` | Toggle Colors | Show/hide color palette |
+| `J` | Toggle Jitter | Toggle stylized rendering that applies a random per-vertex 2D offset (0..10 px) |
 | `P` | Wireframe Mode | Toggle between filled and frame-only polygons |
 | `B` | Back-Face Culling | Enable/disable observer-space culling |
 

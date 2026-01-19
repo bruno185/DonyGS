@@ -1957,9 +1957,9 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     free(pos_of_face);
     free(min_allowed_pos);
     // Affichage identique à painter_correct
-    printf("Faces:");
-    for (int i = 0; i < n; ++i) printf(" %d", faces->sorted_face_indices[i]);
-    printf("\n");
+    // printf("Faces:");
+    // for (int i = 0; i < n; ++i) printf(" %d", faces->sorted_face_indices[i]);
+    // printf("\n");
     return moves;
 }
 
@@ -5568,6 +5568,7 @@ static void show_help_pager(void) {
         "Arrow Up/Down: Increase/Decrease vertical angle",
         "W/X: Increase/Decrease screen rotation angle",
         "C: Toggle color palette display",
+        "J: Toggle jittered rendering (stylized per-vertex 0..7 px offset)",
         "1: Set painter to FAST (simple face sorting only)",
         "2: Set painter to NORMAL (Fixed32/64)",
         "3: Set painter to FLOAT (float-based)",
@@ -6164,6 +6165,7 @@ case 98:  // 'b'
                 user_fill_color = -1;
                 user_frame_color = -1;
                 s_global_proj_scale_fixed = INT_TO_FIXED(100);
+                jitter = 0; /* reset jitter when loading new model */
                 destroyModel3D(model);
                 goto newmodel;
 
