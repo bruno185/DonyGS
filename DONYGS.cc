@@ -89,6 +89,8 @@ static int cull_back_faces = 1; // default: enabled
 // 2D panning offsets (pixels) - used by drawing routines (frame-only, drawPolygons, drawFace)
 static int pan_dx = 0;
 static int pan_dy = 0;
+static int jitter = 0; /* Toggle: 1 = use jittered drawPolygons_jitter, 0 = normal */
+static int jitter_max = 7; /* maximum random pixel offset (0..10) */
 
 // User-selected colors: -1 means not set (use defaults), 0-15 are colors, 16=random
 static int user_fill_color = -1;  // Interior color
@@ -645,6 +647,7 @@ void getObserverParams(ObserverParams* params, Model3D* model);
  *   - Off-screen vertices handled correctly
  */
 void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_count_total);
+void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total);
 void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count);
 
 
@@ -2783,7 +2786,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         startgraph(mode);
         
         // Draw entire model in wireframe
-        drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+        if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
 
         // Overlay selected face in filled green (pen 10)
         faces->display_flag[target_face] = 1;
@@ -3033,7 +3036,7 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     int old_frame = framePolyOnly;
     framePolyOnly = 1; // wireframe
     // Wireframe preview: handled via the `framePolyOnly` flag and `drawPolygons()` (no separate `processModelWireframe()` function)
-    drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
 
 
     // 2) Overlay misplaced faces in orange (pen 6)
@@ -3276,7 +3279,7 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     int old_frame = framePolyOnly;
     framePolyOnly = 1; // wireframe
     // Wireframe preview: handled via the `framePolyOnly` flag and `drawPolygons()` (no separate `processModelWireframe()` function)
-    drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
 
     for (int i = 0; i < misplaced_count; ++i) {
         int f = misplaced[i];
@@ -3422,7 +3425,7 @@ void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char
 
     // Show the entire model in wireframe first, then overlay the two faces
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1; // ensure all faces visible for wireframe
-    drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
 
     // Overlay explicit colored faces (ensure visibility); force the two faces visible and draw indices
     unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
@@ -3508,7 +3511,7 @@ void display_model_face_ids(Model3D* model, ObserverParams* params, const char* 
     int old_frame = framePolyOnly;
     framePolyOnly = 1; // wireframe for clear labels
 
-    drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
 
     int screenScale = mode / 320;
     // Draw each face in the current sorted order (use existing faces->sorted_face_indices)
@@ -5141,6 +5144,173 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
 //     printf("Triangles: %d, Quads: %d\n", triangle_count, quad_count);
 }
 
+#if 0
+// drawPolygons_jitter: same behavior as drawPolygons but applies a small random
+// pixel offset (0..jitter_max) to each vertex 2D coordinate prior to drawing.
+// This function is intentionally a copy of drawPolygons() with the per-vertex
+// jitter applied when filling the QuickDraw polygon points. It keeps bbox
+// culling decisions unchanged (bbox uses unjittered coords) to avoid spurious
+// off-screen skips.
+void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total) {
+    int i, j;
+    VertexArrays3D* vtx = &model->vertices;
+    FaceArrays3D* faces = &model->faces;
+    Handle polyHandle;
+    DynamicPolygon *poly;
+    int min_x, max_x, min_y, max_y;
+    int valid_faces_drawn = 0;
+    int invalid_faces_skipped = 0;
+    int triangle_count = 0;
+    int quad_count = 0;
+    Pattern pat;
+    
+    // Precompute screen scale and screen bounds for culling
+    int screenScale = mode / 320;
+    int screenW = screenScale * (CENTRE_X * 2);
+    int screenH = screenScale * (CENTRE_Y * 2);
+
+    if (globalPolyHandle == NULL) {
+        int max_polySize = 2 + 8 + (MAX_FACE_VERTICES * 4);
+        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
+        if (globalPolyHandle == NULL) {
+            printf("Error: Unable to allocate global polygon handle\n");
+            return;
+        }
+    }
+    
+    polyHandle = globalPolyHandle;
+    
+    if (poly_handle_locked) { 
+        HUnlock(polyHandle); 
+        poly_handle_locked = 0; 
+    }
+    HLock(polyHandle); 
+    poly_handle_locked = 1;
+
+    SetPenMode(0);
+    SetSolidPenPat(14);
+
+    int start_face = 0;
+    int max_faces_to_draw = face_count;
+    for (i = start_face; i < start_face + max_faces_to_draw; i++) {
+        int face_id = faces->sorted_face_indices[i];
+        if (faces->display_flag[face_id] == 0) continue;
+        if (faces->vertex_count[face_id] >= 3) {
+            int offset = faces->vertex_indices_ptr[face_id];
+            int vcount_face = faces->vertex_count[face_id];
+            int *indices_base = &faces->vertex_indices_buffer[offset];
+
+            int all_valid = 1;
+            for (j = 0; j < vcount_face; ++j) {
+                int vi = indices_base[j] - 1;
+                if (vi < 0 || vi >= vtx->vertex_count) { all_valid = 0; break; }
+            }
+            if (!all_valid) { invalid_faces_skipped++; continue; }
+
+            int polySize = 2 + 8 + (vcount_face * 4);
+            poly = (DynamicPolygon *)*polyHandle;
+            poly->polySize = polySize;
+
+            int *x2d = vtx->x2d;
+            int *y2d = vtx->y2d;
+
+            int first_vi = indices_base[0] - 1;
+            int x = x2d[first_vi];
+            int y = y2d[first_vi];
+            int jx = rand() % (jitter_max + 1);
+            int jy = rand() % (jitter_max + 1);
+            poly->polyPoints[0].h = screenScale * (x + pan_dx) + jx;
+            poly->polyPoints[0].v = y + pan_dy + jy;
+            min_x = max_x = x;
+            min_y = max_y = y;
+
+            for (j = 1; j < vcount_face; ++j) {
+                int vi = indices_base[j] - 1;
+                x = x2d[vi];
+                y = y2d[vi];
+                jx = rand() % (jitter_max + 1);
+                jy = rand() % (jitter_max + 1);
+                poly->polyPoints[j].h = screenScale * (x + pan_dx) + jx;
+                poly->polyPoints[j].v = y + pan_dy + jy;
+                if (x < min_x) min_x = x;
+                if (x > max_x) max_x = x;
+                if (y < min_y) min_y = y;
+                if (y > max_y) max_y = y;
+            }
+
+            poly->polyBBox.h1 = min_x + pan_dx;
+            poly->polyBBox.v1 = min_y + pan_dy;
+            poly->polyBBox.h2 = max_x + pan_dx;
+            poly->polyBBox.v2 = max_y + pan_dy;
+
+            int sc_min_x = screenScale * (min_x + pan_dx);
+            int sc_max_x = screenScale * (max_x + pan_dx);
+            int sc_min_y = (min_y + pan_dy);
+            int sc_max_y = (max_y + pan_dy);
+            if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) {
+                // Off-screen; skip drawing
+            } else {
+                if (framePolyOnly) {
+                    int frame_color;
+                    if (user_frame_color == 17) {
+                        if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
+                            frame_color = random_fill_colors[face_id];
+                        } else if (user_fill_color >= 0) {
+                            frame_color = user_fill_color;
+                        } else {
+                            frame_color = 14; // default fill color
+                        }
+                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
+                        frame_color = random_frame_colors[face_id];
+                    } else if (user_frame_color >= 0) {
+                        frame_color = user_frame_color;
+                    } else {
+                        frame_color = 7;
+                    }
+                    SetSolidPenPat(frame_color);
+                    FramePoly(polyHandle);
+                    SetSolidPenPat(14); // keep fill pen as default for next faces
+                } else {
+                    int fill_color;
+                    if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
+                        fill_color = random_fill_colors[face_id];
+                    } else if (user_fill_color >= 0) {
+                        fill_color = user_fill_color;
+                    } else {
+                        fill_color = 14;
+                    }
+                    SetSolidPenPat(fill_color);
+                    GetPenPat(pat);
+                    FillPoly(polyHandle, pat);
+                    
+                    int frame_color;
+                    if (user_frame_color == 17) {
+                        // Same as fill color
+                        frame_color = fill_color;
+                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
+                        frame_color = random_frame_colors[face_id];
+                    } else if (user_frame_color >= 0) {
+                        frame_color = user_frame_color;
+                    } else {
+                        frame_color = 7;
+                    }
+                    SetSolidPenPat(frame_color);
+                    FramePoly(polyHandle);
+                    SetSolidPenPat(14); // restore fill pen
+                }
+                valid_faces_drawn++;
+                if (vcount_face == 3) triangle_count++;
+                else if (vcount_face == 4) quad_count++;
+            }
+        } else {
+            invalid_faces_skipped++;
+        }
+    }
+    // Print statistics after drawing
+//     printf("Display statistics: %d valid faces drawn, %d invalid faces skipped\n", valid_faces_drawn, invalid_faces_skipped);
+//     printf("Triangles: %d, Quads: %d\n", triangle_count, quad_count);
+#endif
+
 segment "code18";
 
 // Generate random colors for all faces
@@ -5161,7 +5331,48 @@ void generate_random_colors(int face_count) {
     }
 }
 
-// Diagnostic: Frame in white all polygons listed in `inconclusive_pairs`.
+// drawPolygons_jitter: same behavior as drawPolygons but applies a small random
+// pixel offset (0..jitter_max) to each vertex 2D coordinate prior to drawing.
+// This function mirrors `drawPolygons()` but applies per-vertex jitter at render time.
+void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total) {
+    if (!model) return;
+    VertexArrays3D* vtx = &model->vertices;
+
+    int vcount = vertex_count_total;
+    if (vcount <= 0) { drawPolygons(model, vertex_count, face_count, vertex_count_total); return; }
+
+    // Backup original coordinates
+    int *saved_x = (int*)malloc(vcount * sizeof(int));
+    int *saved_y = (int*)malloc(vcount * sizeof(int));
+    if (!saved_x || !saved_y) {
+        if (saved_x) free(saved_x);
+        if (saved_y) free(saved_y);
+        // Fallback to normal draw
+        drawPolygons(model, vertex_count, face_count, vertex_count_total);
+        return;
+    }
+
+    for (int i = 0; i < vcount; ++i) {
+        saved_x[i] = vtx->x2d[i];
+        saved_y[i] = vtx->y2d[i];
+        int dx = rand() % (jitter_max + 1); // 0..jitter_max
+        int dy = rand() % (jitter_max + 1);
+        vtx->x2d[i] = saved_x[i] + dx;
+        vtx->y2d[i] = saved_y[i] + dy;
+    }
+
+    // Draw using modified coordinates
+    drawPolygons(model, vertex_count, face_count, vertex_count_total);
+
+    // Restore original coordinates
+    for (int i = 0; i < vcount; ++i) {
+        vtx->x2d[i] = saved_x[i];
+        vtx->y2d[i] = saved_y[i];
+    }
+
+    free(saved_x);
+    free(saved_y);
+}// Diagnostic: Frame in white all polygons listed in `inconclusive_pairs`.
 //
 // This helper iterates the recorded ambiguous pairs and draws a white outline around both
 // polygons in each pair so developers can visually inspect cases where the painter could
@@ -5549,7 +5760,7 @@ segment "code22";
                 // Initialize QuickDraw
                 startgraph(mode);
                 // Draw 3D object
-                drawPolygons(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count);
+                if (jitter) drawPolygons_jitter(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count); else drawPolygons(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count);
                 // display available colors
                 if (colorpalette == 1) { 
                     DoColor(); 
@@ -5737,6 +5948,12 @@ segment "code22";
             case 105: // 'i'
                 show_inconclusive ^= 1;
                 printf("Inconclusive pairs display: %s\n", show_inconclusive ? "ON" : "OFF");
+                goto loopReDraw;
+
+            case 74:  // 'J' - toggle jittered rendering
+            case 106: // 'j'
+                jitter ^= 1;
+                printf("Jitter rendering: %s\n", jitter ? "ON" : "OFF");
                 goto loopReDraw;
 
             case 68:  // 'D' - inspect face ordering and show misplaced faces
