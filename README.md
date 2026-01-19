@@ -189,8 +189,8 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | Key | Action | Description |
 |-----|--------|-------------|
 | `V` | Show Face | Display single face (arrows to navigate, any key exits) |
-| `D` | Inspect Before | Analyze faces before selected face in sorted order |
-| `S` | Inspect After | Analyze faces after selected face in sorted order |
+| `D` | Inspect Before | Analyze faces before selected face in sorted order (can apply moves with `A`/`O` during preview) |
+| `S` | Inspect After | Analyze faces after selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `O` | Overlap Check | Test projected polygon overlap between two faces |
 | `I` | Toggle Inconclusive | Show/hide inconclusive face pairs with frames |
 | `L` | Face ID Labels | Display face numbers centered on each polygon |
@@ -221,8 +221,8 @@ Observer-space culling eliminates faces oriented away from the viewer:
 5. **Enable Inspection** with `I` to see inconclusive pairs
 6. **Investigate Artifacts**:
    - Press `V` to view individual faces
-   - Use `D` to inspect faces before problematic face
-   - Use `S` to inspect faces after
+   - Use `D` to inspect faces before problematic face (in preview press `A` to move all or `O` to move overlaps)
+   - Use `S` to inspect faces after (in preview press `A` to move all or `O` to move overlaps)
    - Press `O` to check specific overlap conditions
 7. **Adjust View** with `E`/`R`/`T`/`Y` for precise framing
 8. **Export Data** with `F` for external analysis
