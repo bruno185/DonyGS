@@ -1719,12 +1719,13 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(pos_of_face); printf("Error: painter_correctV2 malloc min_allowed_pos failed\n"); return 0; }
     for (int i = 0; i < n; ++i) min_allowed_pos[i] = -1;
 
-
+    printf("Faces:");
     // PASS 1: Correct back-faces (plane_d <= 0) - only if culling is OFF
     // This pass attempts local moves within the back-face partition using
     // quick rejections (Z, bbox) followed by projected overlap and plane tests.
     if (old_cull == 0) {
         for (int target = 0; target < face_count; ++target) {
+            printf(" %d",target);
             if (faces->plane_d[target] > 0) continue;
             int pos = pos_of_face[target];
             if (pos < 0 || pos >= front_start_pos) continue;
@@ -1778,6 +1779,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     // Symmetric to PASS 1 but operating on front-face partition; same quick
     // rejection and plane-based logic is applied to refine local ordering.
     for (int target = 0; target < face_count; ++target) {
+        printf(" %d",target);
         if (faces->plane_d[target] <= 0) continue;
         int pos = pos_of_face[target];
         if (pos < 0 || pos < front_start_pos) continue;
@@ -1853,7 +1855,9 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
         /* Z-only sort (fast) */
         painter_newell_sancha_fast(model, face_count);
 
-        FILE *logf = fopen("incfaces.log", "a");
+        printf("\nCross-section back-face checks:");
+        /* FILE *logf = fopen("incfaces.log", "a"); */
+        FILE *logf = NULL; /* logging disabled */
         int total_scanned = 0, total_logged = 0, total_ov = 0, total_tch = 0, total_none = 0, total_moves = 0;
         /* Scan from highest index downwards */
         for (int idx = n - 1; idx >= 0; --idx) {
@@ -1864,9 +1868,10 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                 break;
             }
             /* It's a back-face: log detailed info */
+            printf(" %d",idx);
             total_logged++;
             int orig_pos = pos_of_face[bf];
-            if (logf) fprintf(logf, "BACK idx=%d pos=%d face=%d zmean=%.6f ", idx, orig_pos, bf, FIXED_TO_FLOAT(faces->z_mean[bf]));
+            /* if (logf) fprintf(logf, "BACK idx=%d pos=%d face=%d zmean=%.6f ", idx, orig_pos, bf, FIXED_TO_FLOAT(faces->z_mean[bf])); */
             /* Find front faces that overlap or touch this back-face */
             int found = 0;
             int per_ov = 0, per_tch = 0;
@@ -1888,7 +1893,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                 }
                 if (overlapping || bbox_touch) {
                     int orig_pos_ff = pos_of_face[ff];
-                    if (logf) fprintf(logf, "FF idx=%d pos=%d face=%d zmean=%.6f%s ", j, orig_pos_ff, ff, FIXED_TO_FLOAT(faces->z_mean[ff]), overlapping?"(ov)":"(tch)");
+                    /* if (logf) fprintf(logf, "FF idx=%d pos=%d face=%d zmean=%.6f%s ", j, orig_pos_ff, ff, FIXED_TO_FLOAT(faces->z_mean[ff]), overlapping?"(ov)":"(tch)"); */
                     found++; if (overlapping) { per_ov++; total_ov++; } else { per_tch++; total_tch++; }
 
                     /* Decide ordering: try plane tests (bf vs ff) first */
@@ -1920,28 +1925,27 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                                 snapshot[to] = tmp; pos_of_face[tmp] = to;
                             }
                             /* Log move */
-                            if (logf) fprintf(logf, "  ACTION move bf->after ff (reason=%s) from=%d to=%d\n", reason, from, to);
+                            /* if (logf) fprintf(logf, "  ACTION move bf->after ff (reason=%s) from=%d to=%d\n", reason, from, to); */
                             total_moves++;
                         } else {
-                            if (logf) fprintf(logf, "  ACTION decision=%s but already at desired pos\n", reason);
+                            /* if (logf) fprintf(logf, "  ACTION decision=%s but already at desired pos\n", reason); */
                         }
                     }
                 }
             }
-            if (!found) { if (logf) fprintf(logf, "none"); total_none++; }
-            if (logf) fprintf(logf, " -- overlaps=%d touch=%d\n", per_ov, per_tch);
+            if (!found) { /* if (logf) fprintf(logf, "none"); */ total_none++; }
+            /* if (logf) fprintf(logf, " -- overlaps=%d touch=%d\n", per_ov, per_tch); */
         }
-        if (logf) {
+        /* if (logf) {
             fprintf(logf, "SUMMARY scanned=%d logged=%d total_ov=%d total_tch=%d total_none=%d total_moves=%d\n", total_scanned, total_logged, total_ov, total_tch, total_none, total_moves);
             fclose(logf);
-        }
+        } */
 
         /* Restore original order from passes 1/2 */
         for (int i = 0; i < n; ++i) faces->sorted_face_indices[i] = snapshot[i];
         free(snapshot);
     }
 
-    // XXXXXXXXXXXXXXXX fin cross-section test XXXXXXXXXXXXXXXX
 
     cull_back_faces = old_cull;
     free(pos_of_face);

@@ -63,11 +63,20 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 - Higher precision calculations
 - Faster on platforms with FPU support
 
+
 #### CORRECT Mode (Key: `4`)
 - Extends NORMAL mode with local face reordering
 - Attempts to resolve ordering conflicts through strategic swaps
 - Best for geometries with many inconclusive pairs
 - Much slower
+
+#### CORRECT V2 Mode (Key: `5`)
+- Experimental variant: `painter_correctV2`
+- Improves robustness of face sorting when culling is OFF
+- Locally corrects cases where a BACK face appears in front and overlaps a FRONT face
+- Uses geometric plane tests and zmean as fallback for local corrections (no global reordering)
+- Diagnostic/log code is present but disabled by default (file output commented out, can be re-enabled for analysis)
+- Slower, mainly for pathological models or advanced debugging
 
 ### Mathematical Implementation
 
@@ -148,13 +157,15 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `P` | Wireframe Mode | Toggle between filled and frame-only polygons |
 | `B` | Back-Face Culling | Enable/disable observer-space culling |
 
+
 #### Rendering Modes
-| Key | Mode | Algorithm |
-|-----|------|-----------|
-| `1` | FAST | Simple Z-mean sorting (fastest) |
-| `2` | NORMAL | Full Newell-Sancha with Fixed32/64 |
-| `3` | FLOAT | Floating-point painter |
-| `4` | CORRECT | Advanced ordering correction |
+| Key | Mode        | Algorithm/Description |
+|-----|-------------|----------------------|
+| `1` | FAST        | Simple Z-mean sorting (fastest) |
+| `2` | NORMAL      | Full Newell-Sancha with Fixed32/64 |
+| `3` | FLOAT       | Floating-point painter |
+| `4` | CORRECT     | Advanced ordering correction |
+| `5` | CORRECT V2  | Experimental local correction (painter_correctV2) |
 
 #### Color Management
 | Key | Action | Description |
@@ -205,7 +216,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
    - Press `7` to choose a specific fill color
    - Press `8` to choose a specific frame color
    - Press `9` to reset to defaults
-4. **Select Rendering Mode** (`1`-`4`) based on geometry complexity
+4. **Select Rendering Mode** (`1`-`5`) based on geometry complexity
 5. **Enable Inspection** with `I` to see inconclusive pairs
 6. **Investigate Artifacts**:
    - Press `V` to view individual faces
