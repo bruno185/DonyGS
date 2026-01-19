@@ -1474,7 +1474,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(pos_of_face); printf("Error: painter_correct malloc min_allowed_pos failed\n"); return 0; }
     for (int i = 0; i < n; ++i) min_allowed_pos[i] = -1;
 
-    printf("Faces:");
+    printf("Back faces:");
 
     /* Two independent passes: 
      * 1) Correct back-faces order within themselves (indices 0 to front_start_pos-1)
@@ -1566,6 +1566,8 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         }
     } /* End of PASS 1 (back-faces) */
 
+
+    printf("\nFront faces:");
     /* PASS 2: Correct front-faces (plane_d > 0) */
     for (int target = 0; target < face_count; ++target) {
         if (faces->plane_d[target] <= 0) continue; /* Skip back-faces in this pass */
@@ -1722,7 +1724,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(pos_of_face); printf("Error: painter_correctV2 malloc min_allowed_pos failed\n"); return 0; }
     for (int i = 0; i < n; ++i) min_allowed_pos[i] = -1;
 
-    printf("Faces:");
+    printf("Back faces:");
     // PASS 1: Correct back-faces (plane_d <= 0) - only if culling is OFF
     // This pass attempts local moves within the back-face partition using
     // quick rejections (Z, bbox) followed by projected overlap and plane tests.
@@ -1781,6 +1783,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     // PASS 2: Correct front-faces (plane_d > 0)
     // Symmetric to PASS 1 but operating on front-face partition; same quick
     // rejection and plane-based logic is applied to refine local ordering.
+    printf("\n\nFront faces:");
     for (int target = 0; target < face_count; ++target) {
         printf(" %d",target);
         if (faces->plane_d[target] <= 0) continue;
@@ -1858,7 +1861,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
         /* Z-only sort (fast) */
         painter_newell_sancha_fast(model, face_count);
 
-        printf("\nCross-section back-face checks:");
+        printf("\n\nCross-section back-face checks:");
         /* FILE *logf = fopen("incfaces.log", "a"); */
         FILE *logf = NULL; /* logging disabled */
         int total_scanned = 0, total_logged = 0, total_ov = 0, total_tch = 0, total_none = 0, total_moves = 0;
