@@ -1664,6 +1664,24 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
  *    - If overlap + back-face closer (z_mean) → move back-face after front-face
  */
 static int painter_correctV2(Model3D* model, int face_count, int debug) {
+    /*
+     * painter_correctV2: experimental variation of painter_correct that keeps the
+     * same two-pass local correction (back-faces then front-faces) but adds
+     * diagnostics and limited corrective actions when culling is OFF. Goal:
+     *  - preserve the same stable ordering behavior as painter_correct for most
+     *    cases, and only intervene for pathological cases where a BACK face is
+     *    physically in front and overlaps FRONT faces (which painter_correct
+     *    cannot resolve via partitioned passes).
+     * Steps performed:
+     *  1) Seed an initial z-mean ordering (same as painter_correct)
+     *  2) Partition faces (back / front) and run Pass 1 (backs) and Pass 2 (fronts)
+     *  3) If culling is OFF: snapshot the two-pass result, run a Z-only sort and
+     *     scan closest faces backwards to find BACK faces that lie at the front
+     *     of the scene. For each such BACK face, detect FRONT faces that overlap
+     *     it and try to resolve ordering by geometric plane tests; if those are
+     *     inconclusive, use z_mean as a deterministic fallback.
+     *  4) Apply only local swaps (no global reordering) when a decisive test is found.
+     */
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
     if (face_count <= 0) return 0;
@@ -1676,6 +1694,8 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     int n = face_count;
 
     // Partition faces: back-faces (plane_d <= 0) go to beginning, front-faces after
+    // This mirrors painter_correct's partition so that passes 1/2 operate within
+    // homogenous groups (back-only then front-only) which simplifies plane tests.
     int *temp_indices = (int*)malloc(n * sizeof(int)); if (!temp_indices) { printf("Error: painter_correctV2 malloc temp_indices failed\n"); return 0; }
     int back_idx = 0, front_idx = 0;
     for (int i = 0; i < n; ++i) {
@@ -1701,6 +1721,8 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
 
 
     // PASS 1: Correct back-faces (plane_d <= 0) - only if culling is OFF
+    // This pass attempts local moves within the back-face partition using
+    // quick rejections (Z, bbox) followed by projected overlap and plane tests.
     if (old_cull == 0) {
         for (int target = 0; target < face_count; ++target) {
             if (faces->plane_d[target] > 0) continue;
@@ -1753,6 +1775,8 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     }
 
     // PASS 2: Correct front-faces (plane_d > 0)
+    // Symmetric to PASS 1 but operating on front-face partition; same quick
+    // rejection and plane-based logic is applied to refine local ordering.
     for (int target = 0; target < face_count; ++target) {
         if (faces->plane_d[target] <= 0) continue;
         int pos = pos_of_face[target];
@@ -1803,11 +1827,24 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
 
     // PASS 3: Cross-section test between back/front boundary (only if culling is OFF)
 
-    /* If culling is OFF: run a Z-only sort (fast) to scan faces from far/near and
-     * detect trailing back-faces and overlapping front-faces for diagnostics.
-     * We save the order after passes 1/2, do the Z-sort, inspect from the end
-     * (highest index) backwards until we encounter a non-backface, logging each
-     * backface found and any front faces that overlap it, then restore snapshot. */
+    /*
+     * Rationale:
+     *  - painter_correct separates backs and fronts; when culling is OFF a BACK
+     *    face can legitimately be physically in front of the scene and overlap
+     *    FRONT faces. Such cases require cross-partition handling.
+     * Approach:
+     *  - Save a snapshot of the ordering produced by passes 1+2 (so we can modify
+     *    locally without losing the original two-pass result if we choose to).
+     *  - Run a fast Z-only sort to get a global depth ordering, then scan from
+     *    nearest faces back until a FRONT face is encountered.
+     *  - For each BACK face encountered (i.e., back-face appearing near the front):
+     *     * find overlapping FRONT faces (bbox quick reject + projected overlap)
+     *     * try plane-based geometric tests between the BACK and each FRONT
+     *       (preferential decision). If inconclusive, fallback to comparing
+     *       z_mean as a deterministic tie-breaker.
+     *     * upon a decisive result, perform a local move in the snapshot ordering
+     *       so that the final ordering respects the concrete geometric decision.
+     */
     if (old_cull == 0) {
         int *snapshot = (int*)malloc(n * sizeof(int));
         if (!snapshot) { printf("Error: painter_correctV2 malloc snapshot failed\n"); return 0; }
