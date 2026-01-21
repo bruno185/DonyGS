@@ -188,7 +188,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 #### Diagnostic Tools
 | Key | Action | Description |
 |-----|--------|-------------|
-| `V` | Show Face | Display single face (arrows to navigate, any key exits) |
+| `V` | Show Face | Display single face (arrows to navigate); `Space` shows detailed textual info (ID, sorted position, vertices, transformed 3D and 2D coords, plane equation); `F` saves details to `Face<ID>.txt`; any other key exits |
 | `D` | Inspect Before | Analyze faces before selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `S` | Inspect After | Analyze faces after selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `O` | Overlap Check | Test projected polygon overlap between two faces |
@@ -245,8 +245,12 @@ This interactive tool helps diagnose and correct painter algorithm ordering issu
 ### Single Face Viewer (`V` key)
 
 - **Left/Right Arrows**: Navigate by face ID (decrement/increment)
-- **Up/Down Arrows**: Navigate through sorted face array
-- **Any Other Key**: Exit viewer and return to full model
+- **Up/Down Arrows**: Navigate through sorted face array- **Space**: Show detailed textual info about the current face:
+  - ID and position in the sorted list
+  - Vertex count and per-vertex data: index, model-space coordinates (x,y,z), observer-space coordinates (xo,yo,zo), and projected 2D coordinates (x2d,y2d)
+  - Plane equation coefficients `(a, b, c, d)`
+  - Press any key to return to the graphical overlay
+- **F**: When viewing textual info, press `F` (or `f`) to save the details to a file named `Face<ID>.txt` (example: `Face42.txt`). A confirmation message is shown and pressing any key returns to the overlay.- **Any Other Key**: Exit viewer and return to full model
 
 Useful for examining individual face geometry and understanding the sorting order.
 

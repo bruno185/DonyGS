@@ -2746,6 +2746,7 @@ segment "code04";
  *              Up/Down arrows = next/prev position in sorted list
  *  - ESC to exit
  */
+
 void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     if (!model || !params) return;
     FaceArrays3D* faces = &model->faces;
