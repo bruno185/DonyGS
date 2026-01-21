@@ -2746,7 +2746,6 @@ segment "code04";
  *              Up/Down arrows = next/prev position in sorted list
  *  - ESC to exit
  */
-
 void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     if (!model || !params) return;
     FaceArrays3D* faces = &model->faces;
@@ -2807,9 +2806,9 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
         MoveTo(2, 195);
         if (pos_in_sorted >= 0) {
-            printf("Face %d (sorted pos %d)", target_face, pos_in_sorted);
+            printf("Face %d (sorted pos %d), SPACE for details", target_face, pos_in_sorted);
         } else {
-            printf("Face %d", target_face);
+            printf("Face %d, SPACE for details", target_face);
         }
         
         // Wait for key
@@ -2841,6 +2840,86 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         } else if (key == 10) { // Down arrow - previous position in sorted list
             if (pos_in_sorted > 0) {
                 target_face = faces->sorted_face_indices[pos_in_sorted - 1];
+            }
+        } else if (key == 32) { // Space - show textual details about the face
+            // Switch to text mode and print detailed info, then return to graphics on keypress
+            DoText();
+            int vn = faces->vertex_count[target_face];
+            printf("\n=== Face detail (ID=%d) ===\n", target_face);
+            if (pos_in_sorted >= 0) printf("Position in sorted list: %d\n", pos_in_sorted);
+            printf("Vertex count: %d\n", vn);
+            int offt = faces->vertex_indices_ptr[target_face];
+            for (int k = 0; k < vn; ++k) {
+                int vid = faces->vertex_indices_buffer[offt + k] - 1;
+                printf("vertex[%d] idx=%d model=(%f,%f,%f) obs=(%f,%f,%f) x2d=%d y2d=%d\n",
+                       k, vid,
+                       FIXED_TO_FLOAT(model->vertices.x[vid]), FIXED_TO_FLOAT(model->vertices.y[vid]), FIXED_TO_FLOAT(model->vertices.z[vid]),
+                       FIXED_TO_FLOAT(model->vertices.xo[vid]), FIXED_TO_FLOAT(model->vertices.yo[vid]), FIXED_TO_FLOAT(model->vertices.zo[vid]),
+                       model->vertices.x2d[vid], model->vertices.y2d[vid]);
+            }
+            // Plane equation (float)
+            {
+                float a = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
+                float b = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
+                float c = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
+                float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
+                printf("Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
+            }
+            printf("\nPress 'F' to save to file Face%d.txt, any other key to return to graphics...\n", target_face);
+            fflush(stdout);
+            int tkey = 0;
+            asm {
+                sep #0x20
+            waitkey2:
+                lda >0xC000
+                bpl waitkey2
+                and #0x007f
+                sta >0xC010
+                sta tkey
+                rep #0x30
+            }
+            if (tkey == 'F' || tkey == 'f') {
+                char fname[64]; sprintf(fname, "Face%d.txt", target_face);
+                FILE *out = fopen(fname, "w");
+                if (out) {
+                    fprintf(out, "Face %d\n", target_face);
+                    if (pos_in_sorted >= 0) fprintf(out, "Position in sorted list: %d\n", pos_in_sorted);
+                    fprintf(out, "Vertex count: %d\n", vn);
+                    for (int k = 0; k < vn; ++k) {
+                        int vid = faces->vertex_indices_buffer[offt + k] - 1;
+                        fprintf(out, "v[%d] idx=%d model=(%f,%f,%f) obs=(%f,%f,%f) x2d=%d y2d=%d\n",
+                                k, vid,
+                                FIXED_TO_FLOAT(model->vertices.x[vid]), FIXED_TO_FLOAT(model->vertices.y[vid]), FIXED_TO_FLOAT(model->vertices.z[vid]),
+                                FIXED_TO_FLOAT(model->vertices.xo[vid]), FIXED_TO_FLOAT(model->vertices.yo[vid]), FIXED_TO_FLOAT(model->vertices.zo[vid]),
+                                model->vertices.x2d[vid], model->vertices.y2d[vid]);
+                    }
+                    float a = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
+                    float b = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
+                    float c = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
+                    float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
+                    fprintf(out, "Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
+                    fclose(out);
+                    printf("Saved to %s\n", fname); fflush(stdout);
+                } else {
+                    printf("Error: unable to open %s for writing\n", fname); fflush(stdout);
+                }
+                printf("Press any key to return to graphics...\n"); fflush(stdout);
+                int tmpk = 0;
+                asm {
+                    sep #0x20
+                waitkey3:
+                    lda >0xC000
+                    bpl waitkey3
+                    and #0x007f
+                    sta >0xC010
+                    sta tmpk
+                    rep #0x30
+                }
+                // Return to graphics (loop will redraw)
+                continue;
+            } else {
+                // Any other key returns to graphics
+                continue;
             }
         } else {
             // Any other key exits
