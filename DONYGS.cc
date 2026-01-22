@@ -1871,10 +1871,10 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                 break;
             }
 
-            /* It's a back-face: log detailed info */
-            printf(" %d",idx);
-            // XXXX
-            printf("\nface=%d", bf);
+            // /* It's a back-face: log detailed info */
+            // printf(" %d",idx);
+            // // XXXX
+            // printf("\nface=%d", bf);
 
             total_logged++;
             int orig_pos = pos_of_face[bf];
@@ -1884,7 +1884,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
             int per_ov = 0, per_tch = 0;
             for (int j = 0; j < n; ++j) {
                 int ff = faces->sorted_face_indices[j];
-                printf("\n  => testing ff=%d", ff);
+                // printf("\n  => testing ff=%d", ff);
 
                 if (faces->plane_d[ff] <= 0) continue; /* only front faces */
                 /* Z quick reject */
@@ -1909,10 +1909,10 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
 
                     // XXXX                     
                     int plane_after = pair_plane_after(model, bf, ff); /* 1 if bf after ff */
-                    printf("\nplane_after=%d", plane_after);
+                    // printf("\nplane_after=%d", plane_after);
 
                     int plane_before = pair_plane_before(model, bf, ff); /* 1 if bf before ff */
-                    printf("\nplane_before=%d", plane_before);
+                    // printf("\nplane_before=%d", plane_before);
                     // XXXX
 
                     int decision = 0; /* 1 => move bf after ff, -1 => keep bf before ff */
@@ -1927,9 +1927,9 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                     }
 
                     // XXXX
-                    printf("\ndecision=%d (%s)", decision, reason);
-                    keypress();
-                    printf("\n");
+                    // printf("\ndecision=%d (%s)", decision, reason);
+                    // keypress();
+                    // printf("\n");
                     // XXXX
 
                     /* Apply decision: if move needed, update snapshot and pos_of_face */
@@ -1956,7 +1956,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                         // Once a swap has been made (backface moved after a frontface),
                         // this backface should not be tested with other frontfaces.
                         // This prevents multiple swaps and ensures local ordering consistency.
-                        //break;
+                        //break; ==> NO : we nned to check all front faces to sort out the correct order
                     }
                 }
             }
@@ -1972,7 +1972,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
         for (int i = 0; i < n; ++i) faces->sorted_face_indices[i] = snapshot[i];
         free(snapshot);
     }
-
 
     cull_back_faces = old_cull;
     free(pos_of_face);
