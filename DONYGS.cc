@@ -1619,12 +1619,9 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
             /* bounding-box quick rejection (cheap) */
             // if (faces->maxx[f] <= faces->minx[target] || faces->maxx[target] <= faces->minx[f]
             //     || faces->maxy[f] <= faces->miny[target] || faces->maxy[target] <= faces->miny[f]) continue;
-            // XXX : ioptimisation 
             if (faces->maxx[f] <= faces->minx[target]) continue;
             if (faces->maxx[target] <= faces->minx[f]) continue;
             if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;
-            // XXX
 
             /* require actual projected polygon overlap before considering swap
              * (the overlap test is expensive; we avoid it whenever bbox rejects).
@@ -1859,7 +1856,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
         for (int i = 0; i < n; ++i) snapshot[i] = faces->sorted_face_indices[i];
 
         /* Z-only sort (fast) */
-        painter_newell_sancha_fast(model, face_count);
+        painter_newell_sancha(model, face_count);
 
         printf("\n\nCross-section back-face checks:");
         /* FILE *logf = fopen("incfaces.log", "a"); */
@@ -1873,8 +1870,12 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
             if (faces->plane_d[bf] > 0) {
                 break;
             }
+
             /* It's a back-face: log detailed info */
             printf(" %d",idx);
+            // XXXX
+            printf("\nface=%d", bf);
+
             total_logged++;
             int orig_pos = pos_of_face[bf];
             /* if (logf) fprintf(logf, "BACK idx=%d pos=%d face=%d zmean=%.6f ", idx, orig_pos, bf, FIXED_TO_FLOAT(faces->z_mean[bf])); */
@@ -1883,6 +1884,8 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
             int per_ov = 0, per_tch = 0;
             for (int j = 0; j < n; ++j) {
                 int ff = faces->sorted_face_indices[j];
+                printf("\n  => testing ff=%d", ff);
+
                 if (faces->plane_d[ff] <= 0) continue; /* only front faces */
                 /* Z quick reject */
                 if (faces->z_max[ff] <= faces->z_min[bf]) continue;
@@ -1903,8 +1906,15 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                     found++; if (overlapping) { per_ov++; total_ov++; } else { per_tch++; total_tch++; }
 
                     /* Decide ordering: try plane tests (bf vs ff) first */
+
+                    // XXXX                     
                     int plane_after = pair_plane_after(model, bf, ff); /* 1 if bf after ff */
+                    printf("\nplane_after=%d", plane_after);
+
                     int plane_before = pair_plane_before(model, bf, ff); /* 1 if bf before ff */
+                    printf("\nplane_before=%d", plane_before);
+                    // XXXX
+
                     int decision = 0; /* 1 => move bf after ff, -1 => keep bf before ff */
                     const char *reason = NULL;
                     if (plane_after == 1 && plane_before == 0) { decision = 1; reason = "plane_after"; }
@@ -1916,8 +1926,15 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                         if (zbf < zff) { decision = 1; reason = "zmean"; } else { decision = -1; reason = "zmean"; }
                     }
 
+                    // XXXX
+                    printf("\ndecision=%d (%s)", decision, reason);
+                    keypress();
+                    printf("\n");
+                    // XXXX
+
                     /* Apply decision: if move needed, update snapshot and pos_of_face */
-                    if (decision == 1) {
+                    // Only move bf after ff if bf is currently before ff in the sorted order
+                    if (decision == 1 && pos_of_face[bf] < pos_of_face[ff]) {
                         int from = pos_of_face[bf];
                         int to = pos_of_face[ff] + 1; /* insert after ff */
                         if (from < to) to--; /* account for removal shifting */
@@ -1936,6 +1953,10 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                         } else {
                             /* if (logf) fprintf(logf, "  ACTION decision=%s but already at desired pos\n", reason); */
                         }
+                        // Once a swap has been made (backface moved after a frontface),
+                        // this backface should not be tested with other frontfaces.
+                        // This prevents multiple swaps and ensures local ordering consistency.
+                        //break;
                     }
                 }
             }
@@ -2807,9 +2828,9 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         MoveTo(2, 195);
         // Orientation: front vs back (observer-space d > 0 => front)
         if (pos_in_sorted >= 0) {
-            printf("Face %d (sorted pos %d) [%s], SPACE for details", target_face, pos_in_sorted, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+            printf("Face %d (sorted pos %d) [%s], SPACE: details", target_face, pos_in_sorted, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
         } else {
-            printf("Face %d [%s], SPACE for details", target_face, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+            printf("Face %d [%s], SPACE: details", target_face, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
         }
         
         // Wait for key
@@ -2848,6 +2869,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             int vn = faces->vertex_count[target_face];
             printf("\n=== Face detail (ID=%d) ===\n", target_face);
             printf("Orientation: %s\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+            printf("Z min: %.6f\n", FIXED_TO_FLOAT(faces->z_min[target_face]));
             if (pos_in_sorted >= 0) printf("Position in sorted list: %d\n", pos_in_sorted);
             printf("Vertex count: %d\n", vn);
             int offt = faces->vertex_indices_ptr[target_face];
@@ -2902,6 +2924,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                     float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
                     fprintf(out, "Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
                     fprintf(out, "Orientation: %s\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+                                        fprintf(out, "Z min: %.6f\n", FIXED_TO_FLOAT(faces->z_min[target_face]));
                     fclose(out);
                     printf("Saved to %s\n", fname); fflush(stdout);
                 } else {
