@@ -2805,10 +2805,11 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         }
 
         MoveTo(2, 195);
+        // Orientation: front vs back (observer-space d > 0 => front)
         if (pos_in_sorted >= 0) {
-            printf("Face %d (sorted pos %d), SPACE for details", target_face, pos_in_sorted);
+            printf("Face %d (sorted pos %d) [%s], SPACE for details", target_face, pos_in_sorted, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
         } else {
-            printf("Face %d, SPACE for details", target_face);
+            printf("Face %d [%s], SPACE for details", target_face, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
         }
         
         // Wait for key
@@ -2846,6 +2847,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             DoText();
             int vn = faces->vertex_count[target_face];
             printf("\n=== Face detail (ID=%d) ===\n", target_face);
+            printf("Orientation: %s\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
             if (pos_in_sorted >= 0) printf("Position in sorted list: %d\n", pos_in_sorted);
             printf("Vertex count: %d\n", vn);
             int offt = faces->vertex_indices_ptr[target_face];
@@ -2865,6 +2867,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                 float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
                 printf("Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
             }
+            printf("Orientation: %s\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
             printf("\nPress 'F' to save to file Face%d.txt, any other key to return to graphics...\n", target_face);
             fflush(stdout);
             int tkey = 0;
@@ -2898,6 +2901,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                     float c = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
                     float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
                     fprintf(out, "Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
+                    fprintf(out, "Orientation: %s\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
                     fclose(out);
                     printf("Saved to %s\n", fname); fflush(stdout);
                 } else {
