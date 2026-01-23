@@ -2029,99 +2029,105 @@ void painter_newell_sanchaV2(Model3D* model, int face_count) {
     FaceArrays3D* faces = &model->faces;
     if (face_count <= 0) return;
 
-    int old_cull = cull_back_faces;
-    cull_back_faces = 0; /* consider cross-partition cases conservatively */
+    int i, j, vi, a, b;
+    int *indices_i;
+    int *indices_j;
+    int match;
+    int found;
 
-    /* Seed with full Newell-Sancha so plane coefficients, bboxes and z_mean are ready */
-    painter_newell_sancha(model, face_count);
-
+    // Allocate pair_done array to mark processed face pairs
     int n = face_count;
+    int *pair_done = NULL;
+    if (n > 0) {
+        pair_done = (int*)malloc(n * n * sizeof(int));
+        if (pair_done) {
+            for (i = 0; i < n * n; ++i) pair_done[i] = 0;
+        }
+    }
+
+    /* Nouvelle version sans partition back/front, double boucle sur toutes les faces selon culling */
+    painter_newell_sancha_fast(model, face_count);
     int moves = 0;
-    const int MAX_NEWELL_MOVES = (n > 0) ? (n * 4) : 100; /* safety cap */
 
-    /* Partition into back/front (fronts start at front_start_pos) */
-    int *temp_indices = (int*)malloc(n * sizeof(int)); if (!temp_indices) { cull_back_faces = old_cull; return; }
-    int back_idx = 0, front_idx = 0;
-    for (int i = 0; i < n; ++i) {
-        int f = faces->sorted_face_indices[i];
-        if (faces->plane_d[f] <= 0) temp_indices[back_idx++] = f;
-    }
-    int front_start_pos = back_idx;
-    for (int i = 0; i < n; ++i) {
-        int f = faces->sorted_face_indices[i];
-        if (faces->plane_d[f] > 0) temp_indices[front_start_pos + front_idx++] = f;
-    }
-    for (int i = 0; i < n; ++i) faces->sorted_face_indices[i] = temp_indices[i];
-    free(temp_indices);
+    int *pos_of_face = (int*)malloc(n * sizeof(int)); 
+    if (!pos_of_face) { if (pair_done) free(pair_done); return; }
 
-    int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { cull_back_faces = old_cull; return; }
-    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
-    int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(pos_of_face); cull_back_faces = old_cull; return; }
-    for (int i = 0; i < n; ++i) min_allowed_pos[i] = -1;
+    for (i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+    int *min_allowed_pos = (int*)malloc(n * sizeof(int)); 
+    if (!min_allowed_pos) { free(pos_of_face); if (pair_done) free(pair_done); return; }
+    for (i = 0; i < n; ++i) min_allowed_pos[i] = -1;
 
-    /* PASS 2-like behavior: only operate on front-face partition */
-    for (int target = 0; target < n && moves < MAX_NEWELL_MOVES; ++target) {
-        if (faces->plane_d[target] <= 0) continue; /* skip back-faces */
+    int failed_tests_count = 0;
+    // Buffer to store failed pairs (target, f)
+    int max_failed_pairs = n * n;
+    int *failed_pairs = (int*)malloc(2 * max_failed_pairs * sizeof(int));
+    int failed_pairs_count = 0;
+    for (int target = 0; target < n; ++target) {
+        if (cull_back_faces && faces->plane_d[target] <= 0) continue;
         int pos = pos_of_face[target];
-        if (pos < front_start_pos || pos >= n) continue; /* not in front partition */
-
-        /* BEFORE test: look for an earlier front-face that should be after target */
-        int best_before = -1;
-        for (int i = front_start_pos; i < pos; ++i) {
+        int best_move = -1;
+        int move_before = 0;
+        for (int i = 0; i < n; ++i) {
+            if (i == pos) continue;
             int f = faces->sorted_face_indices[i];
-            /* cheap Z quick reject */
-            if (faces->z_max[f] <= faces->z_min[target]) continue;
-            if (faces->z_max[target] <= faces->z_min[f]) continue;
-            /* bbox quick reject */
-            if (faces->maxx[f] <= faces->minx[target]) continue;
-            if (faces->maxx[target] <= faces->minx[f]) continue;
-            if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;
-            /* projected overlap */
-            if (!projected_polygons_overlap(model, f, target)) continue;
-            /* plane-based decision: if f is after target (f should be in front), target belongs before f */
-            if (pair_plane_after(model, f, target)) { best_before = i; break; }
+            if (cull_back_faces && faces->plane_d[f] <= 0) continue;
+            int idx1 = target * n + f;
+            int idx2 = f * n + target;
+            if (pair_done && (pair_done[idx1] || pair_done[idx2])) continue;
+            if (faces->z_max[f] <= faces->z_min[target]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
+            if (faces->z_max[target] <= faces->z_min[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
+            if (faces->maxx[f] <= faces->minx[target]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
+            if (faces->maxx[target] <= faces->minx[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
+            if (faces->maxy[f] <= faces->miny[target]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
+            if (faces->maxy[target] <= faces->miny[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
+            if (!projected_polygons_overlap(model, f, target)) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
+            if (i < pos) {
+                if (pair_plane_after(model, f, target)) { best_move = i; move_before = 1; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break; }
+            } else {
+                if (pair_plane_before(model, f, target)) { best_move = i; move_before = 0; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break; }
+            }
+            // Si tous les tests échouent, on comptabilise la paire
+            if (failed_pairs_count < max_failed_pairs) {
+                failed_pairs[2 * failed_pairs_count] = target;
+                failed_pairs[2 * failed_pairs_count + 1] = f;
+                failed_pairs_count++;
+                failed_tests_count++;
+            }
+            if (pair_done) pair_done[idx1] = pair_done[idx2] = 1;
         }
-        if (best_before != -1) {
-            /* Insert target before best_before (local move) */
-            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, best_before, pos_of_face);
-            pos = pos_of_face[target];
-            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-            if (moves >= MAX_NEWELL_MOVES) break;
-        }
-
-        /* AFTER test: look for a later front-face that should be before target */
-        pos = pos_of_face[target];
-        if (pos < front_start_pos || pos >= n) continue;
-        int best_after = -1;
-        for (int i = pos + 1; i < n; ++i) {
-            int f = faces->sorted_face_indices[i];
-            /* cheap Z quick reject */
-            if (faces->z_max[f] <= faces->z_min[target]) continue;
-            if (faces->z_max[target] <= faces->z_min[f]) continue;
-            /* bbox quick reject */
-            if (faces->maxx[f] <= faces->minx[target]) continue;
-            if (faces->maxx[target] <= faces->minx[f]) continue;
-            if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;
-            /* overlap */
-            if (!projected_polygons_overlap(model, f, target)) continue;
-            /* plane-based decision: if f is before target (f should be behind), target belongs after f */
-            if (pair_plane_before(model, f, target)) { best_after = i; break; }
-        }
-        if (best_after != -1) {
-            int insert_idx = (best_after < pos) ? (best_after + 1) : best_after;
-            if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
-            if (insert_idx >= n) insert_idx = n - 1;
-            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, insert_idx, pos_of_face);
-            pos = pos_of_face[target];
-            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-            if (moves >= MAX_NEWELL_MOVES) break;
+        if (best_move != -1) {
+            if (move_before) {
+                moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, best_move, pos_of_face);
+                pos = pos_of_face[target];
+                if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+            } else {
+                int insert_idx = (best_move < pos) ? (best_move + 1) : best_move;
+                if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
+                if (insert_idx >= n) insert_idx = n - 1;
+                moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, insert_idx, pos_of_face);
+                pos = pos_of_face[target];
+                if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+            }
         }
     }
-
+    printf("Number of cases where all tests failed: %d\n", failed_tests_count);
+    if (failed_pairs_count > 0) {
+        printf("Pairs where all tests failed:\n");
+        for (int k = 0; k < failed_pairs_count; ++k) {
+            if (k % 3 == 0) printf("  ");
+            printf("(face %d, face %d)", failed_pairs[2 * k], failed_pairs[2 * k + 1]);
+            if ((k % 3 == 2) || (k == failed_pairs_count - 1)) {
+                printf("\n");
+            } else {
+                printf(" ; ");
+            }
+        }
+        fflush(stdout);
+    }
+    keypress();
     free(pos_of_face); free(min_allowed_pos);
-    cull_back_faces = old_cull;
+    if (pair_done) free(pair_done);
+    if (failed_pairs) free(failed_pairs);
 }
 
 void painter_newell_sancha_float(Model3D* model, int face_count) {
