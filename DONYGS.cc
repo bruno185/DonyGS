@@ -36,11 +36,14 @@
  * Notes:
  *   - This file has evolved beyond the original Apple IIGS reference to include
  *     platform-specific frontends while preserving the algorithmic core.
+ *   - Experimental: `painter_correctV2` and the in-memory face-splitting logic
+ *     are work-in-progress and may be unstable on complex models; use with
+ *     caution and enable only for debugging/analysis.
  *   - The code is optimized for interactive use; use the FAST painter for
  *     high frame-rate, or FIXED/FLOAT modes for correctness on tricky geometry.
  *
  * Author: Bruno
- * Date: 2026-01-03
+ * Date: 2026-01-23
  * ============================================================================
  */
 
