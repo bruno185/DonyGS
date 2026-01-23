@@ -9,7 +9,7 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 
 ## Overview
 
-3D Explorer is an interactive 3D rendering application that reads simplified Wavefront OBJ files and displays them with real-time manipulation capabilities. The project demonstrates advanced rendering techniques on resource-constrained hardware (Apple IIGS with 3.58 MHz 65C816 CPU) through careful optimization and multiple algorithm implementations.
+3D Explorer is an interactive 3D rendering application that reads simplified Wavefront OBJ files and displays them with real-time manipulation capabilities. The project demonstrates advanced rendering techniques on resource-constrained hardware (Apple IIGS with 2.8 MHz 65C816 CPU) through careful optimization and multiple algorithm implementations.
 
 ### Key Features
 
