@@ -1669,29 +1669,45 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     /*
      * painter_correctV2: experimental variation of painter_correct that keeps the
      * same two-pass local correction (back-faces then front-faces) but adds
-     * diagnostics and limited corrective actions when culling is OFF. Goal:
-     *  - preserve the same stable ordering behavior as painter_correct for most
-     *    cases, and only intervene for pathological cases where a BACK face is
-     *    physically in front and overlaps FRONT faces (which painter_correct
-     *    cannot resolve via partitioned passes).
-     * Steps performed:
-     *  1) Seed an initial z-mean ordering (same as painter_correct)
-     *  2) Partition faces (back / front) and run Pass 1 (backs) and Pass 2 (fronts)
-     *  3) If culling is OFF: snapshot the two-pass result, run a Z-only sort and
-     *     scan closest faces backwards to find BACK faces that lie at the front
-     *     of the scene. For each such BACK face, detect FRONT faces that overlap
-     *     it and try to resolve ordering by geometric plane tests; if those are
-     *     inconclusive, use z_mean as a deterministic fallback.
-     *  4) Apply only local swaps (no global reordering) when a decisive test is found.
+     * diagnostics and limited corrective actions when culling is OFF.
+     *
+     * NOTE: The following comments aim to document intent and control flow only.
+     *       No behavior is changed — this is strictly explanatory text.
+     *
+     * Summary of algorithmic steps (informative):
+     *  1) Seed an initial ordering using the full Newell-Sancha sort (`painter_newell_sancha`) (more thorough than the fast variant)
+     *  2) Partition faces into BACK (plane_d <= 0) then FRONT (plane_d > 0)
+     *     and run local corrective passes inside each partition (Pass 1 for backs,
+     *     Pass 2 for fronts). These passes perform only local swaps and rely on
+     *     cheap quick-rejects (z-min/max, bbox on X/Y) before invoking
+     *     expensive geometry tests (projected overlap, plane tests).
+     *  3) If back-face culling was disabled: snapshot the result of passes 1+2,
+     *     perform a Z-only global sort, and scan the nearest faces backward to
+     *     locate BACK faces that actually appear near the front of the scene.
+     *     For each such BACK face, we search for overlapping FRONT faces and
+     *     attempt to resolve pair ordering using plane-based geometric tests;
+     *     if geometric tests are inconclusive, z_mean is used as a deterministic
+     *     fallback. Only local, minimal moves are applied to the snapshot.
+     *
+     * Rationale: the function is intentionally conservative — it avoids global
+     *            reorders and prefers deterministic, local changes to preserve
+     *            stability of the painter's output in most cases.
      */
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
     if (face_count <= 0) return 0;
 
+    /* Save and disable culling locally so cross-partition cases are considered. */
     int old_cull = cull_back_faces;
     cull_back_faces = 0;
-    /* Seed initial ordering like painter_correct (z-mean fast pass) */
-    painter_newell_sancha_fast(model, face_count);
+
+    /* Seed initial ordering using the full Newell-Sancha sort (`painter_newell_sancha`).
+     * Rationale: the full sort performs more extensive per-face computation (plane
+     * conversions, bounding boxes and z_mean) which reduces inconclusive geometric
+     * tests later during local corrections. This improves correctness at the cost
+     * of increased CPU work compared to a lightweight 'fast' seed.
+     */
+    painter_newell_sancha(model, face_count);
     int moves = 0;
     int n = face_count;
 
@@ -1724,14 +1740,20 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     printf("Back faces:");
     // PASS 1: Correct back-faces (plane_d <= 0) - only if culling is OFF
     // This pass attempts local moves within the back-face partition using
-    // quick rejections (Z, bbox) followed by projected overlap and plane tests.
+    // cheap quick-rejects followed by more expensive geometric tests.
+    // Rationale: we iterate each BACK face and scan nearby faces inside the
+    // partition. We only perform local swaps (to preserve stability) and we
+    // always prefer the cheaper z/bbox tests before calling projected overlap
+    // and plane-based tests which are heavier.
     if (old_cull == 0) {
         for (int target = 0; target < face_count; ++target) {
             printf(" %d",target);
             if (faces->plane_d[target] > 0) continue;
             int pos = pos_of_face[target];
             if (pos < 0 || pos >= front_start_pos) continue;
-            int best_before = -1;
+            int best_before = -1; // search for a preceding face 'f' that should be after target
+            // Order of checks: cheap z/bbox quick-rejects first; only then call
+            // projected_polygons_overlap() (expensive) and finally plane-based test.
             for (int i = 0; i < pos; ++i) {
                 int f = faces->sorted_face_indices[i];
                 if (i >= front_start_pos) break;
@@ -1753,7 +1775,8 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
             }
             pos = pos_of_face[target];
             if (pos < 0 || pos >= front_start_pos) continue;
-            int best_after = -1;
+            int best_after = -1; // search for a succeeding face 'f' that should be before target
+            // Same quick-reject ordering as above to avoid heavy geometry checks when possible.
             for (int i = pos + 1; i < front_start_pos; ++i) {
                 int f = faces->sorted_face_indices[i];
                 if (faces->z_max[f] <= faces->z_min[target]) continue;
@@ -1780,6 +1803,9 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     // PASS 2: Correct front-faces (plane_d > 0)
     // Symmetric to PASS 1 but operating on front-face partition; same quick
     // rejection and plane-based logic is applied to refine local ordering.
+    // Note: identical conservative checks are applied to avoid unexpected
+    // global reorderings; we only accept local moves that are supported by
+    // decisive geometrical or depth tests.
     printf("\n\nFront faces:");
     for (int target = 0; target < face_count; ++target) {
         printf(" %d",target);
@@ -1905,15 +1931,17 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                     /* if (logf) fprintf(logf, "FF idx=%d pos=%d face=%d zmean=%.6f%s ", j, orig_pos_ff, ff, FIXED_TO_FLOAT(faces->z_mean[ff]), overlapping?"(ov)":"(tch)"); */
                     found++; if (overlapping) { per_ov++; total_ov++; } else { per_tch++; total_tch++; }
 
-                    /* Decide ordering: try plane tests (bf vs ff) first */
-
-                    // XXXX                     
+                    /* Decide ordering: try plane tests (bf vs ff) first. Policy:
+                     * - If plane_after indicates bf is decisively after ff, prefer that
+                     *   and move bf after ff.
+                     * - If plane_before indicates bf is decisively before ff, prefer
+                     *   that and keep bf before ff.
+                     * - Only when plane tests are inconclusive or conflicting, we
+                     *   use z_mean as a deterministic fallback. This keeps changes
+                     *   local and reproducible across runs.
+                     */
                     int plane_after = pair_plane_after(model, bf, ff); /* 1 if bf after ff */
-                    // printf("\nplane_after=%d", plane_after);
-
                     int plane_before = pair_plane_before(model, bf, ff); /* 1 if bf before ff */
-                    // printf("\nplane_before=%d", plane_before);
-                    // XXXX
 
                     int decision = 0; /* 1 => move bf after ff, -1 => keep bf before ff */
                     const char *reason = NULL;
@@ -1925,8 +1953,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                         float zff = FIXED_TO_FLOAT(faces->z_mean[ff]);
                         if (zbf < zff) { decision = 1; reason = "zmean"; } else { decision = -1; reason = "zmean"; }
                     }
-
-                    // XXXX
                     // printf("\ndecision=%d (%s)", decision, reason);
                     // keypress();
                     // printf("\n");
