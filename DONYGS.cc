@@ -64,7 +64,6 @@
 #include <orca.h>       // ORCA specific functions (startgraph, etc.)
 #include <stdint.h>      // uint32_t, etc.
 
-
 #pragma memorymodel 1
 
 segment "data";
@@ -801,6 +800,7 @@ void debug_two_faces(Model3D* model, int f1, int f2) {
     endgraph();
     DoText();
 }
+
 
 void painter_newell_sancha(Model3D* model, int face_count) {
     if (use_float_painter) { painter_newell_sancha_float(model, face_count); return; }
@@ -1901,14 +1901,14 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                 break;
             }
 
-            // /* It's a back-face: log detailed info */
+            // /* It's abreak-face: log detailed info */
             // printf(" %d",idx);
             // // XXXX
             // printf("\nface=%d", bf);
 
             total_logged++;
             int orig_pos = pos_of_face[bf];
-            /* if (logf) fprintf(logf, "BACK idx=%d pos=%d face=%d zmean=%.6f ", idx, orig_pos, bf, FIXED_TO_FLOAT(faces->z_mean[bf])); */
+            /*(logf) fprintf(logf, "BACK idx=%d pos=%d face=%d zmean=%.6f ", idx, orig_pos, bf, FIXED_TO_FLOAT(faces->z_mean[bf])); */
             /* Find front faces that overlap or touch this back-face */
             int found = 0;
             int per_ov = 0, per_tch = 0;
@@ -2086,12 +2086,46 @@ void painter_newell_sanchaV2(Model3D* model, int face_count) {
             } else {
                 if (pair_plane_before(model, f, target)) { best_move = i; move_before = 0; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break; }
             }
-            // Si tous les tests échouent, on comptabilise la paire
-            if (failed_pairs_count < max_failed_pairs) {
-                failed_pairs[2 * failed_pairs_count] = target;
-                failed_pairs[2 * failed_pairs_count + 1] = f;
-                failed_pairs_count++;
-                failed_tests_count++;
+            // Si tous les tests échouent, utiliser ray_cast pour décider
+            int rc = ray_cast(model, target, f);
+            if (rc == 0) {
+                // échec, on comptabilise la paire
+                if (failed_pairs_count < max_failed_pairs) {
+                    failed_pairs[2 * failed_pairs_count] = target;
+                    failed_pairs[2 * failed_pairs_count + 1] = f;
+                    failed_pairs_count++;
+                    failed_tests_count++;
+                }
+            } else if (rc == 1) {
+                // target doit être placé juste avant f, seulement si pos > i
+                if (pos > i) {
+                    moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, i, pos_of_face);
+                    pos = pos_of_face[target];
+                    if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+                    if (pair_done) pair_done[idx1] = pair_done[idx2] = 1;
+                    break;
+                }
+            } else if (rc == -1) {
+                // target doit être placé après f, seulement si pos < i
+                if (pos < i) {
+                    int insert_idx = (i < pos) ? (i + 1) : i;
+                    if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
+                    if (insert_idx >= n) insert_idx = n - 1;
+                    moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, insert_idx, pos_of_face);
+                    pos = pos_of_face[target];
+                    if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
+                    if (pair_done) pair_done[idx1] = pair_done[idx2] = 1;
+                    break;
+                }
+            } else {
+                // erreur, on comptabilise la paire
+                if (failed_pairs_count < max_failed_pairs) {
+                    failed_pairs[2 * failed_pairs_count] = target;
+                    failed_pairs[2 * failed_pairs_count + 1] = f;
+                    failed_pairs_count++;
+                    failed_tests_count++;
+                }
+            break;
             }
             if (pair_done) pair_done[idx1] = pair_done[idx2] = 1;
         }
@@ -2897,6 +2931,101 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
         if (all_opposite_side) return 1;
     }
     return 0;
+}
+
+// ===================== RAY CAST & INSPECTOR PROTOTYPES =====================
+int ray_cast(Model3D* model, int f1, int f2);
+void inspect_ray_cast(Model3D* model);
+// Prototypes only at the top
+// ===================== RAY CAST & INSPECTOR IMPLEMENTATION =====================
+// Returns: 0 if error or undetermined, 1 if t1 < t2, -1 if t1 > t2,
+
+// ===================== RAY CAST & INSPECTOR IMPLEMENTATION =====================
+// Returns: 
+// 0 if error or undetermined
+// 1 if t1 farer than t2
+// -1 if t1 closer than t2
+
+int ray_cast(Model3D* model, int f1, int f2) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
+    // Internal calculations moved here, no more pointers needed
+    int minx1 = faces->minx[f1];
+    int maxx1 = faces->maxx[f1];
+    int miny1 = faces->miny[f1];
+    int maxy1 = faces->maxy[f1];
+    int minx2 = faces->minx[f2];
+    int maxx2 = faces->maxx[f2];
+    int miny2 = faces->miny[f2];
+    int maxy2 = faces->maxy[f2];
+    int ix0 = (minx1 > minx2) ? minx1 : minx2;
+    int ix1 = (maxx1 < maxx2) ? maxx1 : maxx2;
+    int iy0 = (miny1 > miny2) ? miny1 : miny2;
+    int iy1 = (maxy1 < maxy2) ? maxy1 : maxy2;
+    if (ix0 > ix1 || iy0 > iy1) return 0; // no intersection
+    int cx = (ix0 + ix1) / 2;
+    int cy = (iy0 + iy1) / 2;
+
+    // aspect = 16:10 ratio, facteur_x and facteur_y are scaling factors for screen coordinates
+    const float aspect = 1.6f; // 320.0f / 200.0f : 16:10 ratio
+    const float facteur_x = 0.01f; // 2.0f * aspect / 320.0f;
+    const float facteur_y = 0.01f; // 2.0f / 200.0f;
+
+    float Dx = (float)(cx) * facteur_x - aspect;
+    float Dy = 1.0f - (float)(cy) * facteur_y;
+    float Dz = 1.0f;
+
+    float A1 = (float)faces->plane_a[f1];
+    float B1 = (float)faces->plane_b[f1];
+    float C1 = (float)faces->plane_c[f1];
+    float D1 = (float)faces->plane_d[f1];
+    float A2 = (float)faces->plane_a[f2];
+    float B2 = (float)faces->plane_b[f2];
+    float C2 = (float)faces->plane_c[f2];
+    float D2 = (float)faces->plane_d[f2];
+
+    float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;
+    float denom2 = A2 * Dx + B2 * Dy + C2 * Dz;
+
+    if (fabsf(denom1) < 0.001f || fabsf(denom2) < 0.001f){
+        return 0;
+        // coplanar faces
+    }
+
+    float tf1 = -D1 / denom1;
+    float tf2 = -D2 / denom2;
+    if (tf1 > tf2) return 1;  // f1 is farther than f2
+    else if (tf1 < tf2) return -1; // f1 is closer than f2
+    else return 0;
+}
+
+void inspect_ray_cast(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+    if (face_count <= 0) { printf("No faces in model\n"); return; }
+    printf("Inspector: ray_cast between two faces. Computes intersection center and plane tests.\n");
+    printf("Enter face id 1 (0..%d): ", face_count - 1);
+    int f1 = -1;
+
+    if (scanf("%d", &f1) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
+    { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
+    if (f1 < 0 || f1 >= face_count) { printf("Invalid face id 1\n"); return; }
+    
+    printf("Enter face id 2 (0..%d): ", face_count - 1);
+    int f2 = -1;
+    if (scanf("%d", &f2) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
+    { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
+    if (f2 < 0 || f2 >= face_count) { printf("Invalid face id 2\n"); return; }
+    
+    int cmp = ray_cast(model, f1, f2);
+    if (cmp == 0) printf("undetermined\n");
+    else if (cmp == -1) printf("t1 < t2: face %d is in front\n", f1);
+    else if (cmp == 1) printf("t1 > t2: face %d is behind\n", f1);
+    else printf("Error in ray cast\n");
+    keypress();
 }
 
 segment "code04";
@@ -6440,6 +6569,11 @@ case 98:  // 'b'
             case 72:  // 'H'
             case 104: // 'h'
                 show_help_pager();
+                goto loopReDraw;
+
+            case 62: // '>' - interactive ray_cast inspector
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                inspect_ray_cast(model);
                 goto loopReDraw;
 
             case 27:  // ESC - quit
