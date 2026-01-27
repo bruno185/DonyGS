@@ -2956,6 +2956,7 @@ int ray_cast(Model3D* model, int f1, int f2) {
 
     float tf1 = -D1 / denom1;
     float tf2 = -D2 / denom2;
+
     if (tf1 > tf2) return 1;  // f1 is farther than f2
     else if (tf1 < tf2) return -1; // f1 is closer than f2
     else return 0;
@@ -3098,13 +3099,22 @@ void inspect_ray_cast(Model3D* model) {
         LineTo(sc_ix0, sc_iy0);
 
         // cross at center (use scaled center to avoid rounding mismatch)
-        // int sc_cx = (sc_ix0 + sc_ix1) / 2;
-        // int sc_cy = (sc_iy0 + sc_iy1) / 2;
-        // int d = 4 * screenScale; // scale cross size with horizontal scale for consistency
-        // MoveTo(sc_cx - d, sc_cy); LineTo(sc_cx + d, sc_cy);
-        // MoveTo(sc_cx, sc_cy - d); LineTo(sc_cx, sc_cy + d);
+        int sc_cx = (sc_ix0 + sc_ix1) / 2;
+        int sc_cy = (sc_iy0 + sc_iy1) / 2;
+        int d = 4 * screenScale; // scale cross size with horizontal scale for consistency
+        MoveTo(sc_cx - d, sc_cy); LineTo(sc_cx + d, sc_cy);
+        MoveTo(sc_cx, sc_cy - d); LineTo(sc_cx, sc_cy + d);
     }
-
+    // Show summary message in graphics mode
+    if (cmp != 0) {
+        int front = (cmp == -1) ? f1 : f2;
+        int back = (cmp == -1) ? f2 : f1;
+        MoveTo(3, 195);
+        printf("Face %d is in front of face %d\n", front, back);
+    } else {
+        MoveTo(3, 195);
+        printf("Ray_cast undetermined\n");
+    }
     keypress();
 
     // Restore
@@ -3113,7 +3123,6 @@ void inspect_ray_cast(Model3D* model) {
     framePolyOnly = old_frame;
     endgraph();
     DoText();
-    //keypress();
 }
 
 
