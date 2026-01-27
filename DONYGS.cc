@@ -3025,7 +3025,135 @@ void inspect_ray_cast(Model3D* model) {
     else if (cmp == -1) printf("t1 < t2: face %d is in front\n", f1);
     else if (cmp == 1) printf("t1 > t2: face %d is behind\n", f1);
     else printf("Error in ray cast\n");
+
+    // Wait for key to let user read textual result, then switch to graphical inspection
+    printf("Press any key to show graphical inspection...\n");
     keypress();
+
+    // --- Graphical inspection ---
+    VertexArrays3D* vtx = &model->vertices;
+    startgraph(mode);
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    if (backup_flags == NULL) {
+        printf("Memory allocation failed\n");
+        endgraph(); DoText(); return;
+    }
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+    int old_frame = framePolyOnly;
+    framePolyOnly = 1; // wireframe
+
+    // Ensure all faces visible for wireframe backdrop
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+
+    // Overlay filled faces: f1 = green (pen 10), f2 = orange (pen 6)
+    unsigned char saved_f1 = faces->display_flag[f1];
+    unsigned char saved_f2 = faces->display_flag[f2];
+    faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
+    drawFace(model, f1, 10, 1);
+    drawFace(model, f2, 6, 1);
+
+    // Draw red frame around both faces (outline)
+    SetSolidPenPat(7); // red
+    int screenScale = mode / 320;
+    // helper to outline a face (apply horizontal scaling and pan)
+    {
+        int offset = faces->vertex_indices_ptr[f1];
+        int *ib = &faces->vertex_indices_buffer[offset];
+        int vc = faces->vertex_count[f1];
+        if (vc >= 1) {
+            int vi0 = ib[0] - 1;
+            MoveTo(screenScale * (vtx->x2d[vi0] + pan_dx), vtx->y2d[vi0] + pan_dy);
+            for (int j = 1; j < vc; ++j) {
+                int vj = ib[j] - 1;
+                LineTo(screenScale * (vtx->x2d[vj] + pan_dx), vtx->y2d[vj] + pan_dy);
+            }
+            LineTo(screenScale * (vtx->x2d[vi0] + pan_dx), vtx->y2d[vi0] + pan_dy);
+        }
+    }
+    {
+        int offset = faces->vertex_indices_ptr[f2];
+        int *ib = &faces->vertex_indices_buffer[offset];
+        int vc = faces->vertex_count[f2];
+        if (vc >= 1) {
+            int vi0 = ib[0] - 1;
+            MoveTo(screenScale * (vtx->x2d[vi0] + pan_dx), vtx->y2d[vi0] + pan_dy);
+            for (int j = 1; j < vc; ++j) {
+                int vj = ib[j] - 1;
+                LineTo(screenScale * (vtx->x2d[vj] + pan_dx), vtx->y2d[vj] + pan_dy);
+            }
+            LineTo(screenScale * (vtx->x2d[vi0] + pan_dx), vtx->y2d[vi0] + pan_dy);
+        }
+    }
+
+    // Draw intersection rectangle of bounding boxes in white and a small white cross at center
+    // Recompute bboxes for f1 and f2 from current projected coords (handles zoom)
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int* ib1 = &faces->vertex_indices_buffer[offset1];
+    int vc1 = faces->vertex_count[f1];
+    int minx1, maxx1, miny1, maxy1;
+    if (vc1 > 0) {
+        int vi = ib1[0] - 1;
+        minx1 = maxx1 = vtx->x2d[vi];
+        miny1 = maxy1 = vtx->y2d[vi];
+        for (int ii = 1; ii < vc1; ++ii) {
+            vi = ib1[ii] - 1;
+            int x = vtx->x2d[vi]; int y = vtx->y2d[vi];
+            if (x < minx1) minx1 = x; if (x > maxx1) maxx1 = x;
+            if (y < miny1) miny1 = y; if (y > maxy1) maxy1 = y;
+        }
+    } else {
+        minx1 = faces->minx[f1]; maxx1 = faces->maxx[f1]; miny1 = faces->miny[f1]; maxy1 = faces->maxy[f1];
+    }
+    int offset2 = faces->vertex_indices_ptr[f2];
+    int* ib2 = &faces->vertex_indices_buffer[offset2];
+    int vc2 = faces->vertex_count[f2];
+    int minx2, maxx2, miny2, maxy2;
+    if (vc2 > 0) {
+        int vi = ib2[0] - 1;
+        minx2 = maxx2 = vtx->x2d[vi];
+        miny2 = maxy2 = vtx->y2d[vi];
+        for (int ii = 1; ii < vc2; ++ii) {
+            vi = ib2[ii] - 1;
+            int x = vtx->x2d[vi]; int y = vtx->y2d[vi];
+            if (x < minx2) minx2 = x; if (x > maxx2) maxx2 = x;
+            if (y < miny2) miny2 = y; if (y > maxy2) maxy2 = y;
+        }
+    } else {
+        minx2 = faces->minx[f2]; maxx2 = faces->maxx[f2]; miny2 = faces->miny[f2]; maxy2 = faces->maxy[f2];
+    }
+
+    int ix0 = (minx1 > minx2) ? minx1 : minx2;
+    int ix1 = (maxx1 < maxx2) ? maxx1 : maxx2;
+    int iy0 = (miny1 > miny2) ? miny1 : miny2;
+    int iy1 = (maxy1 < maxy2) ? maxy1 : maxy2;
+    if (ix0 <= ix1 && iy0 <= iy1) {
+        int sc_ix0 = screenScale * (ix0 + pan_dx);
+        int sc_ix1 = screenScale * (ix1 + pan_dx);
+        int sc_iy0 = (iy0 + pan_dy);
+        int sc_iy1 = (iy1 + pan_dy);
+        SetSolidPenPat(15); // white
+        MoveTo(sc_ix0, sc_iy0); LineTo(sc_ix1, sc_iy0);
+        LineTo(sc_ix1, sc_iy1); LineTo(sc_ix0, sc_iy1);
+        LineTo(sc_ix0, sc_iy0);
+
+        // cross at center (use scaled center to avoid rounding mismatch)
+        // int sc_cx = (sc_ix0 + sc_ix1) / 2;
+        // int sc_cy = (sc_iy0 + sc_iy1) / 2;
+        // int d = 4 * screenScale; // scale cross size with horizontal scale for consistency
+        // MoveTo(sc_cx - d, sc_cy); LineTo(sc_cx + d, sc_cy);
+        // MoveTo(sc_cx, sc_cy - d); LineTo(sc_cx, sc_cy + d);
+    }
+
+    keypress();
+
+    // Restore
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+    framePolyOnly = old_frame;
+    endgraph();
+    DoText();
+    //keypress();
 }
 
 
@@ -5338,8 +5466,9 @@ void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
         if (show_index) {
             int center_x = (min_x + max_x) / 2;
             int center_y = (min_y + max_y) / 2;
-            int screenCx = screenScale * center_x; // horizontal is scaled
-            int screenCy = center_y;              // vertical not scaled in this codebase
+            // Use same transformation as polygon points: horizontal scaled, vertical and pan applied
+            int screenCx = screenScale * (center_x + pan_dx);
+            int screenCy = center_y + pan_dy;
 
             char tmp[32];
             int len = snprintf(tmp, sizeof(tmp), "%d", face_id);
