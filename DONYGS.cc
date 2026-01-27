@@ -2086,47 +2086,7 @@ void painter_newell_sanchaV2(Model3D* model, int face_count) {
             } else {
                 if (pair_plane_before(model, f, target)) { best_move = i; move_before = 0; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break; }
             }
-            // Si tous les tests échouent, utiliser ray_cast pour décider
-            int rc = ray_cast(model, target, f);
-            if (rc == 0) {
-                // échec, on comptabilise la paire
-                if (failed_pairs_count < max_failed_pairs) {
-                    failed_pairs[2 * failed_pairs_count] = target;
-                    failed_pairs[2 * failed_pairs_count + 1] = f;
-                    failed_pairs_count++;
-                    failed_tests_count++;
-                }
-            } else if (rc == 1) {
-                // target doit être placé juste avant f, seulement si pos > i
-                if (pos > i) {
-                    moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, i, pos_of_face);
-                    pos = pos_of_face[target];
-                    if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-                    if (pair_done) pair_done[idx1] = pair_done[idx2] = 1;
-                    break;
-                }
-            } else if (rc == -1) {
-                // target doit être placé après f, seulement si pos < i
-                if (pos < i) {
-                    int insert_idx = (i < pos) ? (i + 1) : i;
-                    if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
-                    if (insert_idx >= n) insert_idx = n - 1;
-                    moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, insert_idx, pos_of_face);
-                    pos = pos_of_face[target];
-                    if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-                    if (pair_done) pair_done[idx1] = pair_done[idx2] = 1;
-                    break;
-                }
-            } else {
-                // erreur, on comptabilise la paire
-                if (failed_pairs_count < max_failed_pairs) {
-                    failed_pairs[2 * failed_pairs_count] = target;
-                    failed_pairs[2 * failed_pairs_count + 1] = f;
-                    failed_pairs_count++;
-                    failed_tests_count++;
-                }
-            break;
-            }
+
             if (pair_done) pair_done[idx1] = pair_done[idx2] = 1;
         }
         if (best_move != -1) {
