@@ -856,12 +856,12 @@ void painter_newell_sancha(Model3D* model, int face_count) {
     qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
     qsort_faces_ptr_for_cmp = NULL;
     long t_end = GetTick();
-    if (!PERFORMANCE_MODE)
-    {
-        long elapsed = t_end - t_start;
-        double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
-        printf("[TIMING] initial sort (qsort): %ld ticks (%.2f ms)\n", elapsed, ms);
-    }
+    // if (!PERFORMANCE_MODE)
+    // {
+    //     long elapsed = t_end - t_start;
+    //     double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
+    //     printf("[TIMING] initial sort (qsort): %ld ticks (%.2f ms)\n", elapsed, ms);
+    // }
    
     // * * * * *
     // Etape 2 : Boucle de correction d'ordre (adjacent-swap / bubble-like passes)
@@ -2928,23 +2928,24 @@ int ray_cast(Model3D* model, int f1, int f2) {
     int cx = (ix0 + ix1) / 2;
     int cy = (iy0 + iy1) / 2;
 
-    // aspect = 16:10 ratio, facteur_x and facteur_y are scaling factors for screen coordinates
-    const float aspect = 1.6f; // 320.0f / 200.0f : 16:10 ratio
-    const float facteur_x = 0.01f; // 2.0f * aspect / 320.0f;
-    const float facteur_y = 0.01f; // 2.0f / 200.0f;
-
-    float Dx = (float)(cx) * facteur_x - aspect;
-    float Dy = 1.0f - (float)(cy) * facteur_y;
+    /* Compute ray direction in observer-space using projection scale
+       Projection in compute2DFromObserver is: x2d = centre_x + proj_scale * (xo/zo)
+       Therefore a screen coordinate cx corresponds to x = (cx - centre_x) / proj_scale in observer units.
+    */
+    float proj_scale = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
+    float Dx = ((float)cx - (float)CENTRE_X) / proj_scale;
+    float Dy = ((float)CENTRE_Y - (float)cy) / proj_scale;
     float Dz = 1.0f;
 
-    float A1 = (float)faces->plane_a[f1];
-    float B1 = (float)faces->plane_b[f1];
-    float C1 = (float)faces->plane_c[f1];
-    float D1 = (float)faces->plane_d[f1];
-    float A2 = (float)faces->plane_a[f2];
-    float B2 = (float)faces->plane_b[f2];
-    float C2 = (float)faces->plane_c[f2];
-    float D2 = (float)faces->plane_d[f2];
+    /* Convert fixed-plane coefficients (Fixed64) to floats correctly */
+    float A1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
+    float B1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
+    float C1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
+    float D1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
+    float A2 = (float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
+    float B2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
+    float C2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
+    float D2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
 
     float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;
     float denom2 = A2 * Dx + B2 * Dy + C2 * Dz;
@@ -2956,7 +2957,184 @@ int ray_cast(Model3D* model, int f1, int f2) {
 
     float tf1 = -D1 / denom1;
     float tf2 = -D2 / denom2;
+    printf("Ray cast results: tf1=%.6f, tf2=%.6f\n", tf1, tf2);
+    keypress();
 
+/*
+    // ============================================
+    // DEBUG COMPLET - Écriture dans cast.txt
+    // ============================================
+
+    FILE* debug_file = fopen("cast.txt", "a");  // "a" pour append (ajouter à la fin)
+    if (debug_file == NULL) {
+        printf("ERREUR: Impossible d'ouvrir cast.txt\n");
+        return 0;
+    }
+
+    fprintf(debug_file, "\n");
+    fprintf(debug_file, "================================================================\n");
+    fprintf(debug_file, "                  RAY_CAST DEBUG COMPLET                        \n");
+    fprintf(debug_file, "================================================================\n");
+
+    // 1. Info sur les faces comparées
+    fprintf(debug_file, "\n[1] FACES COMPAREES:\n");
+    fprintf(debug_file, "    Face f1 = %d\n", f1);
+    fprintf(debug_file, "    Face f2 = %d\n", f2);
+
+    // 2. Bounding boxes et intersection
+    fprintf(debug_file, "\n[2] BOUNDING BOXES 2D:\n");
+    fprintf(debug_file, "    f1: [%d,%d] -> [%d,%d]\n", minx1, miny1, maxx1, maxy1);
+    fprintf(debug_file, "    f2: [%d,%d] -> [%d,%d]\n", minx2, miny2, maxx2, maxy2);
+    fprintf(debug_file, "    Intersection: [%d,%d] -> [%d,%d]\n", ix0, iy0, ix1, iy1);
+    fprintf(debug_file, "    Centre teste: (%d, %d)\n", cx, cy);
+
+    // 3. Direction du rayon
+    fprintf(debug_file, "\n[3] RAYON 3D:\n");
+    fprintf(debug_file, "    Origine: (0, 0, 0)\n");
+    fprintf(debug_file, "    Direction: (%.6f, %.6f, %.6f)\n", Dx, Dy, Dz);
+    float ray_length = sqrtf(Dx*Dx + Dy*Dy + Dz*Dz);
+    fprintf(debug_file, "    Longueur: %.6f %s\n", ray_length, 
+        (fabsf(ray_length - 1.0f) < 0.01f) ? "(normalise)" : "(NON normalise)");
+
+    // 4. Équations des plans
+    fprintf(debug_file, "\n[4] EQUATIONS DES PLANS:\n");
+    fprintf(debug_file, "    f1: %.2f*x + %.2f*y + %.2f*z + %.2f = 0\n", A1, B1, C1, D1);
+    fprintf(debug_file, "    f2: %.2f*x + %.2f*y + %.2f*z + %.2f = 0\n", A2, B2, C2, D2);
+
+    // Normaliser les normales pour voir leur direction
+    float len1 = sqrtf(A1*A1 + B1*B1 + C1*C1);
+    float len2 = sqrtf(A2*A2 + B2*B2 + C2*C2);
+    fprintf(debug_file, "    Normale f1: (%.3f, %.3f, %.3f) [longueur=%.2f]\n", 
+        A1/len1, B1/len1, C1/len1, len1);
+    fprintf(debug_file, "    Normale f2: (%.3f, %.3f, %.3f) [longueur=%.2f]\n", 
+        A2/len2, B2/len2, C2/len2, len2);
+
+    // 5. Produits scalaires (denominateurs)
+    fprintf(debug_file, "\n[5] PRODUITS SCALAIRES (normale . rayon):\n");
+    fprintf(debug_file, "    denom1 = %.6f %s\n", denom1, 
+        (denom1 < 0) ? "(face frontale)" : "(face arriere)");
+    fprintf(debug_file, "    denom2 = %.6f %s\n", denom2, 
+        (denom2 < 0) ? "(face frontale)" : "(face arriere)");
+
+    // 6. Distances calculées
+    fprintf(debug_file, "\n[6] DISTANCES (parametre t):\n");
+    fprintf(debug_file, "    tf1 = -D1/denom1 = -(%.2f)/(%.2f) = %.6f\n", D1, denom1, tf1);
+    fprintf(debug_file, "    tf2 = -D2/denom2 = -(%.2f)/(%.2f) = %.6f\n", D2, denom2, tf2);
+    fprintf(debug_file, "    |tf1| = %.6f\n", fabsf(tf1));
+    fprintf(debug_file, "    |tf2| = %.6f\n", fabsf(tf2));
+    fprintf(debug_file, "    Difference: |tf1 - tf2| = %.6f\n", fabsf(tf1 - tf2));
+
+    // 7. Points d'intersection 3D
+    fprintf(debug_file, "\n[7] POINTS D'INTERSECTION 3D:\n");
+    float x1 = Dx * tf1;
+    float y1 = Dy * tf1;
+    float z1 = Dz * tf1;
+    float x2 = Dx * tf2;
+    float y2 = Dy * tf2;
+    float z2 = Dz * tf2;
+    fprintf(debug_file, "    f1: (%.2f, %.2f, %.2f) -> Z = %.2f\n", x1, y1, z1, z1);
+    fprintf(debug_file, "    f2: (%.2f, %.2f, %.2f) -> Z = %.2f\n", x2, y2, z2, z2);
+
+    // Vérification: le point est-il bien sur le plan ?
+    float verif1 = A1*x1 + B1*y1 + C1*z1 + D1;
+    float verif2 = A2*x2 + B2*y2 + C2*z2 + D2;
+    fprintf(debug_file, "    Verification f1 (devrait etre 0): %.6f %s\n", verif1,
+        (fabsf(verif1) < 1.0f) ? "OK" : "ERREUR");
+    fprintf(debug_file, "    Verification f2 (devrait etre 0): %.6f %s\n", verif2,
+        (fabsf(verif2) < 1.0f) ? "OK" : "ERREUR");
+
+    // 8. Z des sommets réels des faces
+    fprintf(debug_file, "\n[8] Z DES SOMMETS (coordonnees 3D transformees):\n");
+
+    // Face f1
+    int off1 = faces->vertex_indices_ptr[f1];
+    int n1 = faces->vertex_count[f1];
+    float z_min1 = 999999.0f, z_max1 = -999999.0f, z_sum1 = 0.0f;
+    fprintf(debug_file, "    f1 sommets (%d): ", n1);
+    for (int k = 0; k < n1; ++k) {
+        int vi = faces->vertex_indices_buffer[off1 + k] - 1;
+        if (vi >= 0 && vi < vtx->vertex_count) {
+            // Use observer-space Z (vtx->zo) and convert from fixed to float for human-readable debug
+            float z = FIXED_TO_FLOAT(vtx->zo[vi]);
+            fprintf(debug_file, "%.3f ", z);
+            if (z < z_min1) z_min1 = z;
+            if (z > z_max1) z_max1 = z;
+            z_sum1 += z;
+        }
+    }
+    float z_avg1 = z_sum1 / (float)n1;
+    fprintf(debug_file, "\n    f1: Z_min=%.2f, Z_max=%.2f, Z_avg=%.2f\n", z_min1, z_max1, z_avg1);
+
+    // Face f2
+    int off2 = faces->vertex_indices_ptr[f2];
+    int n2 = faces->vertex_count[f2];
+    float z_min2 = 999999.0f, z_max2 = -999999.0f, z_sum2 = 0.0f;
+    fprintf(debug_file, "    f2 sommets (%d): ", n2);
+    for (int k = 0; k < n2; ++k) {
+        int vi = faces->vertex_indices_buffer[off2 + k] - 1;
+        if (vi >= 0 && vi < vtx->vertex_count) {
+            // Use observer-space Z (vtx->zo) and convert from fixed to float for human-readable debug
+            float z = FIXED_TO_FLOAT(vtx->zo[vi]);
+            fprintf(debug_file, "%.3f ", z);
+            if (z < z_min2) z_min2 = z;
+            if (z > z_max2) z_max2 = z;
+            z_sum2 += z;
+        }
+    }
+    float z_avg2 = z_sum2 / (float)n2;
+    fprintf(debug_file, "\n    f2: Z_min=%.2f, Z_max=%.2f, Z_avg=%.2f\n", z_min2, z_max2, z_avg2);
+
+    // 9. Comparaison des Z
+    fprintf(debug_file, "\n[9] ANALYSE DES Z:\n");
+    fprintf(debug_file, "    Comparaison des Z moyens: ");
+    if (z_avg1 < z_avg2) {
+        fprintf(debug_file, "f1 plus proche (%.2f < %.2f)\n", z_avg1, z_avg2);
+    } else {
+        fprintf(debug_file, "f2 plus proche (%.2f < %.2f)\n", z_avg2, z_avg1);
+    }
+
+    fprintf(debug_file, "    Comparaison des Z d'intersection: ");
+    if (z1 < z2) {
+        fprintf(debug_file, "f1 plus proche (%.2f < %.2f)\n", z1, z2);
+    } else {
+        fprintf(debug_file, "f2 plus proche (%.2f < %.2f)\n", z2, z1);
+    }
+
+    fprintf(debug_file, "    Comparaison des tf: ");
+    if (tf1 < tf2) {
+        fprintf(debug_file, "f1 plus proche (%.2f < %.2f)\n", tf1, tf2);
+    } else {
+        fprintf(debug_file, "f2 plus proche (%.2f < %.2f)\n", tf2, tf1);
+    }
+
+    // 10. Résultat final
+    int result;
+    if (tf1 > tf2) result = 1;
+    else if (tf1 < tf2) result = -1;
+    else result = 0;
+
+    fprintf(debug_file, "\n[10] RESULTAT:\n");
+    fprintf(debug_file, "    Code retourne: %d\n", result);
+    if (result == -1) {
+        fprintf(debug_file, "    -> f1 (face %d) est PLUS PROCHE que f2 (face %d)\n", f1, f2);
+    } else if (result == 1) {
+        fprintf(debug_file, "    -> f2 (face %d) est PLUS PROCHE que f1 (face %d)\n", f2, f1);
+    } else {
+        fprintf(debug_file, "    -> Faces a egale distance (ou coplanaires)\n");
+    }
+
+    fprintf(debug_file, "\n");
+    fprintf(debug_file, "================================================================\n");
+    fprintf(debug_file, "                      FIN DU DEBUG                              \n");
+    fprintf(debug_file, "================================================================\n");
+    fprintf(debug_file, "\n\n");
+
+    fclose(debug_file);
+
+    // ============================================
+    // FIN DU DEBUG
+    // ============================================
+*/
     if (tf1 > tf2) return 1;  // f1 is farther than f2
     else if (tf1 < tf2) return -1; // f1 is closer than f2
     else return 0;
@@ -4581,10 +4759,10 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
     }
 
     // Debug: show parsed observer angles in degrees
-    if (!PERFORMANCE_MODE)
-    {
-    printf("Observer angles (degrees) - H: %d, V: %d, W: %d\n", params->angle_h, params->angle_v, params->angle_w);
-    }
+    // if (!PERFORMANCE_MODE)
+    // {
+    // printf("Observer angles (degrees) - H: %d, V: %d, W: %d\n", params->angle_h, params->angle_v, params->angle_w);
+    // }
 }
 
 /**
@@ -4673,23 +4851,23 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
         }
     }
     long t_loop_end = GetTick();
-    if (!PERFORMANCE_MODE) {
-        long elapsed_loop = t_loop_end - t_loop_start;
-        double ms_loop = ((double)elapsed_loop * 1000.0) / 60.0; // 60 ticks per second
-        printf("[TIMING] transform+project loop: %ld ticks (%.2f ms)\n", elapsed_loop, ms_loop);
-    }
+    // if (!PERFORMANCE_MODE) {
+    //     long elapsed_loop = t_loop_end - t_loop_start;
+    //     double ms_loop = ((double)elapsed_loop * 1000.0) / 60.0; // 60 ticks per second
+    //     printf("[TIMING] transform+project loop: %ld ticks (%.2f ms)\n", elapsed_loop, ms_loop);
+    // }
 
     // Face sorting after transformation
     long t_start, t_end;
     t_start = GetTick();
     calculateFaceDepths(model, NULL, model->faces.face_count);
     t_end = GetTick();
-    if (!PERFORMANCE_MODE)
-    {
-        long elapsed = t_end - t_start;
-        double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
-        printf("[TIMING] calculateFaceDepths: %ld ticks (%.2f ms)\n", elapsed, ms);
-    }
+    // if (!PERFORMANCE_MODE)
+    // {
+    //     long elapsed = t_end - t_start;
+    //     double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
+    //     printf("[TIMING] calculateFaceDepths: %ld ticks (%.2f ms)\n", elapsed, ms);
+    // }
 
     if (framePolyOnly) goto skip_calc; // Skip face calculations for framed polygons only display
 
@@ -4718,14 +4896,14 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     }
     t_end = GetTick();
 
-    if (!PERFORMANCE_MODE)
-    {
-        long elapsed = t_end - t_start;
-        double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
-        const char* pname = (painter_mode==PAINTER_MODE_FAST)?"painter_newell_sancha_fast":(painter_mode==PAINTER_MODE_FIXED?"painter_newell_sancha":(painter_mode==PAINTER_MODE_CORRECT?"painter_correct":(painter_mode==PAINTER_MODE_CORRECTV2?"painter_correctV2":"painter_newell_sancha_float")));
-        printf("[TIMING] %s: %ld ticks (%.2f ms)\n", pname, elapsed, ms);
-        keypress();
-    }
+    // if (!PERFORMANCE_MODE)
+    // {
+    //     long elapsed = t_end - t_start;
+    //     double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
+    //     const char* pname = (painter_mode==PAINTER_MODE_FAST)?"painter_newell_sancha_fast":(painter_mode==PAINTER_MODE_FIXED?"painter_newell_sancha":(painter_mode==PAINTER_MODE_CORRECT?"painter_correct":(painter_mode==PAINTER_MODE_CORRECTV2?"painter_correctV2":"painter_newell_sancha_float")));
+    //     printf("[TIMING] %s: %ld ticks (%.2f ms)\n", pname, elapsed, ms);
+    //     keypress();
+    // }
     skip_calc:;
 }
 
@@ -5157,28 +5335,28 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
                     if (d64 <= 0) {
                         display_flag = 0;
                         ++culled_count;
-                        if (!PERFORMANCE_MODE) {
-                            printf("[DEBUG] CULL: Face %d culled (plane_d=%.6f)\n", i, FIXED64_TO_FLOAT(d64));
-                        }
+                        // if (!PERFORMANCE_MODE) {
+                        //     printf("[DEBUG] CULL: Face %d culled (plane_d=%.6f)\n", i, FIXED64_TO_FLOAT(d64));
+                        // }
                     }
                 }
             }
         }
 
         // Diagnostic: report suspiciously negative z_max values to help debug
-        if (!PERFORMANCE_MODE) {
-            float zmax_f = FIXED_TO_FLOAT(z_max);
-            if (zmax_f < -100.0f) {
-                printf("[DEBUG] Face %d: z_min=%.2f z_max=%.2f display_flag=%d n=%d\n", i, FIXED_TO_FLOAT(z_min), zmax_f, display_flag, n);
-                // Print per-vertex observer-space zo values
-                printf("[DEBUG]  vertex zo: ");
-                for (int jj = 0; jj < n; ++jj) {
-                    int vidx = face_arrays->vertex_indices_buffer[offset + jj] - 1;
-                    if (vidx >= 0) printf("(%d: %.2f) ", vidx, FIXED_TO_FLOAT(vtx->zo[vidx]));
-                }
-                printf("\n");
-            }
-        }
+        // if (!PERFORMANCE_MODE) {
+        //     float zmax_f = FIXED_TO_FLOAT(z_max);
+        //     if (zmax_f < -100.0f) {
+        //         printf("[DEBUG] Face %d: z_min=%.2f z_max=%.2f display_flag=%d n=%d\n", i, FIXED_TO_FLOAT(z_min), zmax_f, display_flag, n);
+        //         // Print per-vertex observer-space zo values
+        //         printf("[DEBUG]  vertex zo: ");
+        //         for (int jj = 0; jj < n; ++jj) {
+        //             int vidx = face_arrays->vertex_indices_buffer[offset + jj] - 1;
+        //             if (vidx >= 0) printf("(%d: %.2f) ", vidx, FIXED_TO_FLOAT(vtx->zo[vidx]));
+        //         }
+        //         printf("\n");
+        //     }
+        // }
 
         face_arrays->z_min[i] = z_min;  // Store minimum depth for this face (closest)
         face_arrays->z_max[i] = z_max;  // Store maximum depth for this face (farthest)
@@ -5200,9 +5378,9 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
         }
     }
 
-    if (cull_back_faces && !PERFORMANCE_MODE) {
-        printf("[DEBUG] calculateFaceDepths: culled %d faces by back-face test\n", culled_count);
-    }
+    // if (cull_back_faces && !PERFORMANCE_MODE) {
+    //     printf("[DEBUG] calculateFaceDepths: culled %d faces by back-face test\n", culled_count);
+    // }
 }
 
 
