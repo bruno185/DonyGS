@@ -2724,22 +2724,27 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     int oymax = maxy1 < maxy2 ? maxy1 : maxy2;
     if (oxmin > oxmax || oymin > oymax) return 0; /* integer bbox empty -> <1 pixel */
 
-    /* Sample up to 3x3 pixel centers inside integer bbox */
+    /* Sample up to 3x3 interior pixel centers using fractions 1/6,1/2,5/6 of the integer bbox.
+     * This places samples strictly inside the bbox (not on edges) and fixes cases where
+     * the overlap area is significant but the previous coarse sampling missed it.
+     */
     int ixmin = oxmin, ixmax = oxmax, iymin = oymin, iymax = oymax;
+    int W = ixmax - ixmin; int H = iymax - iymin;
     for (int sx = 0; sx < 3; ++sx) {
         for (int sy = 0; sy < 3; ++sy) {
-            int tx = ixmin + ((sx * (ixmax - ixmin)) / 2);
-            int ty = iymin + ((sy * (iymax - iymin)) / 2);
+            /* position = ixmin + round((2*sx+1)/6 * W) */
+            int tx = ixmin + (((2*sx + 1) * W + 3) / 6);
+            int ty = iymin + (((2*sy + 1) * H + 3) / 6);
             if (point_in_poly_int(tx, ty, faces, vtx, f1, n1) && point_in_poly_int(tx, ty, faces, vtx, f2, n2)) return 1;
         }
     }
-    /* No sampled integer pixel inside both polygons -> consider non-overlap (small area)
+    /* No sampled interior pixel found -> consider non-overlap (small area)
      * Log for debugging. */
-    FILE *lof = fopen("overlap.log","a");
-    if (lof) {
-        fprintf(lof, "Rejected small intersection (sampled): face1,%d,face2,%d,ox_bbox,%d,%d,%d,%d\n", f1, f2, oxmin, oymin, oxmax, oymax);
-        fclose(lof);
-    }
+    // FILE *lof = fopen("overlap.log","a");
+    // if (lof) {
+    //     fprintf(lof, "Rejected small intersection (sampled): face1,%d,face2,%d,ox_bbox,%d,%d,%d,%d\n", f1, f2, oxmin, oymin, oxmax, oymax);
+    //     fclose(lof);
+    // }
     return 0;
 }
 
