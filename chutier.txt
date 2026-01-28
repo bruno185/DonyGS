@@ -30,6 +30,8 @@ void fitModelToView(Model3D* model, ObserverParams* params, float target_max_dim
 }
 
 
+
+
 /**
  * painter_newell_sanchaV2 -- Variant using optimized bubble sort
  * --------------------------------------------------------------
@@ -567,3 +569,302 @@ static int move_element_remove_and_insert(int *arr, int n, int from, int insert_
 }
 
 /* End of archive block */
+
+
+
+/* DEBUG bloc dans ray_cast
+    // ============================================
+    // DEBUG COMPLET - Écriture dans cast.txt
+    // ============================================
+
+    FILE* debug_file = fopen("cast.txt", "a");  // "a" pour append (ajouter à la fin)
+    if (debug_file == NULL) {
+        printf("ERREUR: Impossible d'ouvrir cast.txt\n");
+        return 0;
+    }
+
+    fprintf(debug_file, "\n");
+    fprintf(debug_file, "================================================================\n");
+    fprintf(debug_file, "                  RAY_CAST DEBUG COMPLET                        \n");
+    fprintf(debug_file, "================================================================\n");
+
+    // 1. Info sur les faces comparées
+    fprintf(debug_file, "\n[1] FACES COMPAREES:\n");
+    fprintf(debug_file, "    Face f1 = %d\n", f1);
+    fprintf(debug_file, "    Face f2 = %d\n", f2);
+
+    // 2. Bounding boxes et intersection
+    fprintf(debug_file, "\n[2] BOUNDING BOXES 2D:\n");
+    fprintf(debug_file, "    f1: [%d,%d] -> [%d,%d]\n", minx1, miny1, maxx1, maxy1);
+    fprintf(debug_file, "    f2: [%d,%d] -> [%d,%d]\n", minx2, miny2, maxx2, maxy2);
+    fprintf(debug_file, "    Intersection: [%d,%d] -> [%d,%d]\n", ix0, iy0, ix1, iy1);
+    fprintf(debug_file, "    Centre teste: (%d, %d)\n", cx, cy);
+
+    // 3. Direction du rayon
+    fprintf(debug_file, "\n[3] RAYON 3D:\n");
+    fprintf(debug_file, "    Origine: (0, 0, 0)\n");
+    fprintf(debug_file, "    Direction: (%.6f, %.6f, %.6f)\n", Dx, Dy, Dz);
+    float ray_length = sqrtf(Dx*Dx + Dy*Dy + Dz*Dz);
+    fprintf(debug_file, "    Longueur: %.6f %s\n", ray_length, 
+        (fabsf(ray_length - 1.0f) < 0.01f) ? "(normalise)" : "(NON normalise)");
+
+    // 4. Équations des plans
+    fprintf(debug_file, "\n[4] EQUATIONS DES PLANS:\n");
+    fprintf(debug_file, "    f1: %.2f*x + %.2f*y + %.2f*z + %.2f = 0\n", A1, B1, C1, D1);
+    fprintf(debug_file, "    f2: %.2f*x + %.2f*y + %.2f*z + %.2f = 0\n", A2, B2, C2, D2);
+
+    // Normaliser les normales pour voir leur direction
+    float len1 = sqrtf(A1*A1 + B1*B1 + C1*C1);
+    float len2 = sqrtf(A2*A2 + B2*B2 + C2*C2);
+    fprintf(debug_file, "    Normale f1: (%.3f, %.3f, %.3f) [longueur=%.2f]\n", 
+        A1/len1, B1/len1, C1/len1, len1);
+    fprintf(debug_file, "    Normale f2: (%.3f, %.3f, %.3f) [longueur=%.2f]\n", 
+        A2/len2, B2/len2, C2/len2, len2);
+
+    // 5. Produits scalaires (denominateurs)
+    fprintf(debug_file, "\n[5] PRODUITS SCALAIRES (normale . rayon):\n");
+    fprintf(debug_file, "    denom1 = %.6f %s\n", denom1, 
+        (denom1 < 0) ? "(face frontale)" : "(face arriere)");
+    fprintf(debug_file, "    denom2 = %.6f %s\n", denom2, 
+        (denom2 < 0) ? "(face frontale)" : "(face arriere)");
+
+    // 6. Distances calculées
+    fprintf(debug_file, "\n[6] DISTANCES (parametre t):\n");
+    fprintf(debug_file, "    tf1 = -D1/denom1 = -(%.2f)/(%.2f) = %.6f\n", D1, denom1, tf1);
+    fprintf(debug_file, "    tf2 = -D2/denom2 = -(%.2f)/(%.2f) = %.6f\n", D2, denom2, tf2);
+    fprintf(debug_file, "    |tf1| = %.6f\n", fabsf(tf1));
+    fprintf(debug_file, "    |tf2| = %.6f\n", fabsf(tf2));
+    fprintf(debug_file, "    Difference: |tf1 - tf2| = %.6f\n", fabsf(tf1 - tf2));
+
+    // 7. Points d'intersection 3D
+    fprintf(debug_file, "\n[7] POINTS D'INTERSECTION 3D:\n");
+    float x1 = Dx * tf1;
+    float y1 = Dy * tf1;
+    float z1 = Dz * tf1;
+    float x2 = Dx * tf2;
+    float y2 = Dy * tf2;
+    float z2 = Dz * tf2;
+    fprintf(debug_file, "    f1: (%.2f, %.2f, %.2f) -> Z = %.2f\n", x1, y1, z1, z1);
+    fprintf(debug_file, "    f2: (%.2f, %.2f, %.2f) -> Z = %.2f\n", x2, y2, z2, z2);
+
+    // Vérification: le point est-il bien sur le plan ?
+    float verif1 = A1*x1 + B1*y1 + C1*z1 + D1;
+    float verif2 = A2*x2 + B2*y2 + C2*z2 + D2;
+    fprintf(debug_file, "    Verification f1 (devrait etre 0): %.6f %s\n", verif1,
+        (fabsf(verif1) < 1.0f) ? "OK" : "ERREUR");
+    fprintf(debug_file, "    Verification f2 (devrait etre 0): %.6f %s\n", verif2,
+        (fabsf(verif2) < 1.0f) ? "OK" : "ERREUR");
+
+    // 8. Z des sommets réels des faces
+    fprintf(debug_file, "\n[8] Z DES SOMMETS (coordonnees 3D transformees):\n");
+
+    // Face f1
+    int off1 = faces->vertex_indices_ptr[f1];
+    int n1 = faces->vertex_count[f1];
+    float z_min1 = 999999.0f, z_max1 = -999999.0f, z_sum1 = 0.0f;
+    fprintf(debug_file, "    f1 sommets (%d): ", n1);
+    for (int k = 0; k < n1; ++k) {
+        int vi = faces->vertex_indices_buffer[off1 + k] - 1;
+        if (vi >= 0 && vi < vtx->vertex_count) {
+            // Use observer-space Z (vtx->zo) and convert from fixed to float for human-readable debug
+            float z = FIXED_TO_FLOAT(vtx->zo[vi]);
+            fprintf(debug_file, "%.3f ", z);
+            if (z < z_min1) z_min1 = z;
+            if (z > z_max1) z_max1 = z;
+            z_sum1 += z;
+        }
+    }
+    float z_avg1 = z_sum1 / (float)n1;
+    fprintf(debug_file, "\n    f1: Z_min=%.2f, Z_max=%.2f, Z_avg=%.2f\n", z_min1, z_max1, z_avg1);
+
+    // Face f2
+    int off2 = faces->vertex_indices_ptr[f2];
+    int n2 = faces->vertex_count[f2];
+    float z_min2 = 999999.0f, z_max2 = -999999.0f, z_sum2 = 0.0f;
+    fprintf(debug_file, "    f2 sommets (%d): ", n2);
+    for (int k = 0; k < n2; ++k) {
+        int vi = faces->vertex_indices_buffer[off2 + k] - 1;
+        if (vi >= 0 && vi < vtx->vertex_count) {
+            // Use observer-space Z (vtx->zo) and convert from fixed to float for human-readable debug
+            float z = FIXED_TO_FLOAT(vtx->zo[vi]);
+            fprintf(debug_file, "%.3f ", z);
+            if (z < z_min2) z_min2 = z;
+            if (z > z_max2) z_max2 = z;
+            z_sum2 += z;
+        }
+    }
+    float z_avg2 = z_sum2 / (float)n2;
+    fprintf(debug_file, "\n    f2: Z_min=%.2f, Z_max=%.2f, Z_avg=%.2f\n", z_min2, z_max2, z_avg2);
+
+    // 9. Comparaison des Z
+    fprintf(debug_file, "\n[9] ANALYSE DES Z:\n");
+    fprintf(debug_file, "    Comparaison des Z moyens: ");
+    if (z_avg1 < z_avg2) {
+        fprintf(debug_file, "f1 plus proche (%.2f < %.2f)\n", z_avg1, z_avg2);
+    } else {
+        fprintf(debug_file, "f2 plus proche (%.2f < %.2f)\n", z_avg2, z_avg1);
+    }
+
+    fprintf(debug_file, "    Comparaison des Z d'intersection: ");
+    if (z1 < z2) {
+        fprintf(debug_file, "f1 plus proche (%.2f < %.2f)\n", z1, z2);
+    } else {
+        fprintf(debug_file, "f2 plus proche (%.2f < %.2f)\n", z2, z1);
+    }
+
+    fprintf(debug_file, "    Comparaison des tf: ");
+    if (tf1 < tf2) {
+        fprintf(debug_file, "f1 plus proche (%.2f < %.2f)\n", tf1, tf2);
+    } else {
+        fprintf(debug_file, "f2 plus proche (%.2f < %.2f)\n", tf2, tf1);
+    }
+
+    // 10. Résultat final
+    int result;
+    if (tf1 > tf2) result = 1;
+    else if (tf1 < tf2) result = -1;
+    else result = 0;
+
+    fprintf(debug_file, "\n[10] RESULTAT:\n");
+    fprintf(debug_file, "    Code retourne: %d\n", result);
+    if (result == -1) {
+        fprintf(debug_file, "    -> f1 (face %d) est PLUS PROCHE que f2 (face %d)\n", f1, f2);
+    } else if (result == 1) {
+        fprintf(debug_file, "    -> f2 (face %d) est PLUS PROCHE que f1 (face %d)\n", f2, f1);
+    } else {
+        fprintf(debug_file, "    -> Faces a egale distance (ou coplanaires)\n");
+    }
+
+    fprintf(debug_file, "\n");
+    fprintf(debug_file, "================================================================\n");
+    fprintf(debug_file, "                      FIN DU DEBUG                              \n");
+    fprintf(debug_file, "================================================================\n");
+    fprintf(debug_file, "\n\n");
+
+    fclose(debug_file);
+
+    // ============================================
+    // FIN DU DEBUG
+    // ============================================
+*/
+
+
+
+/* Compute centroid of intersection polygon between faces f1 and f2 in screen space.
+ * Uses Sutherland-Hodgman polygon clipping (f1 subject, f2 clip polygon) with strict
+ * inside test (points on edges are treated as outside) so touching-only cases yield
+ * zero-area result. Returns 1 and sets *outx,*outy when intersection has positive
+ * area; returns 0 otherwise.
+ */
+static int compute_intersection_centroid(Model3D* model, int f1, int f2, int* outx, int* outy, double* out_area) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    if (n1 <= 0 || n2 <= 0) { if (out_area) *out_area = 0.0; return 0; }
+
+    /* Build subject polygon (from f1) as doubles */
+    double* sx = (double*)malloc(sizeof(double) * n1);
+    double* sy = (double*)malloc(sizeof(double) * n1);
+    if (!sx || !sy) { if (sx) free(sx); if (sy) free(sy); if (out_area) *out_area = 0.0; return 0; }
+    int off1 = faces->vertex_indices_ptr[f1];
+    for (int i = 0; i < n1; ++i) {
+        int vid = faces->vertex_indices_buffer[off1 + i] - 1;
+        sx[i] = (double)vtx->x2d[vid];
+        sy[i] = (double)vtx->y2d[vid];
+    }
+    int curr_n = n1;
+
+    /* Temporary arrays for clipping --- allocate worst-case (n1 + n2) * 2 maybe */
+    double* tx = (double*)malloc(sizeof(double) * (n1 + n2 + 8));
+    double* ty = (double*)malloc(sizeof(double) * (n1 + n2 + 8));
+    if (!tx || !ty) { free(sx); free(sy); if (tx) free(tx); if (ty) free(ty); if (out_area) *out_area = 0.0; return 0; }
+
+    const double EPS = 1e-9;
+
+    int off2 = faces->vertex_indices_ptr[f2];
+    for (int j = 0; j < n2; ++j) {
+        int c1 = faces->vertex_indices_buffer[off2 + j] - 1;
+        int c2 = faces->vertex_indices_buffer[off2 + ((j + 1) % n2)] - 1;
+        double cx1 = (double)vtx->x2d[c1], cy1 = (double)vtx->y2d[c1];
+        double cx2 = (double)vtx->x2d[c2], cy2 = (double)vtx->y2d[c2];
+
+        if (curr_n == 0) break;
+        int out_n = 0;
+
+        for (int i = 0; i < curr_n; ++i) {
+            int ii = i;
+            int jj = (i + 1) % curr_n;
+            double sx1 = sx[ii], sy1 = sy[ii];
+            double sx2 = sx[jj], sy2 = sy[jj];
+
+            /* inside test: point is strictly to the left of clip edge (cx1->cx2) */
+            double cross1 = (cx2 - cx1) * (sy1 - cy1) - (cy2 - cy1) * (sx1 - cx1);
+            double cross2 = (cx2 - cx1) * (sy2 - cy1) - (cy2 - cy1) * (sx2 - cx1);
+            int in1 = (cross1 > EPS);
+            int in2 = (cross2 > EPS);
+
+            if (in1 && in2) {
+                /* both inside -> keep end */
+                tx[out_n] = sx2; ty[out_n] = sy2; out_n++;
+            } else if (in1 && !in2) {
+                /* leaving: emit intersection */
+                double denom = (sx1 - sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1 - cx2);
+                if (fabs(denom) > 1e-12) {
+                    double numx = (sx1*sy2 - sy1*sx2) * (cx1 - cx2) - (sx1 - sx2) * (cx1*cy2 - cy1*cx2);
+                    double numy = (sx1*sy2 - sy1*sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1*cy2 - cy1*cx2);
+                    double ix = numx / denom;
+                    double iy = numy / denom;
+                    tx[out_n] = ix; ty[out_n] = iy; out_n++;
+                }
+            } else if (!in1 && in2) {
+                /* entering: emit intersection then end point */
+                double denom = (sx1 - sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1 - cx2);
+                if (fabs(denom) > 1e-12) {
+                    double numx = (sx1*sy2 - sy1*sx2) * (cx1 - cx2) - (sx1 - sx2) * (cx1*cy2 - cy1*cx2);
+                    double numy = (sx1*sy2 - sy1*sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1*cy2 - cy1*cx2);
+                    double ix = numx / denom;
+                    double iy = numy / denom;
+                    tx[out_n] = ix; ty[out_n] = iy; out_n++;
+                }
+                tx[out_n] = sx2; ty[out_n] = sy2; out_n++;
+            } else {
+                /* both outside -> nothing */
+            }
+        }
+
+        /* swap tx->sx */
+        if (out_n == 0) { curr_n = 0; break; }
+        /* ensure capacity */
+        for (int k = 0; k < out_n; ++k) { sx[k] = tx[k]; sy[k] = ty[k]; }
+        curr_n = out_n;
+    }
+
+    int result = 0;
+    double final_area = 0.0;
+    if (curr_n >= 3) {
+        /* compute signed area and centroid */
+        double area2 = 0.0; /* 2*area */
+        double cx = 0.0, cy = 0.0;
+        for (int i = 0; i < curr_n; ++i) {
+            int j = (i + 1) % curr_n;
+            double a = sx[i] * sy[j] - sx[j] * sy[i];
+            area2 += a;
+            cx += (sx[i] + sx[j]) * a;
+            cy += (sy[i] + sy[j]) * a;
+        }
+        double area = 0.5 * area2;
+        final_area = area;
+        if (fabs(area) > 1e-6) {
+            cx = cx / (6.0 * area);
+            cy = cy / (6.0 * area);
+            *outx = (int) (cx >= 0.0 ? cx + 0.5 : cx - 0.5);
+            *outy = (int) (cy >= 0.0 ? cy + 0.5 : cy - 0.5);
+            result = 1;
+        }
+    }
+
+    if (out_area) *out_area = final_area;
+    free(sx); free(sy); free(tx); free(ty);
+    return result;
+}

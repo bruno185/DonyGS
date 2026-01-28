@@ -10,8 +10,7 @@
  *   projects to 2D screen coordinates and renders filled polygons.
  *
  * Highlights (2026):
- *   - Multi-platform targets: Apple IIGS (ORCA/C, QuickDraw), Win32 native
- *     viewer (GDI) and an SDL2-based viewer.
+ *   - Targets: Apple IIGS (ORCA/C, QuickDraw)
  *   - Painter modes:
  *       * FAST  : z_mean + bbox tests (very fast, less robust)
  *       * FIXED : full fixed-point Newell/Sancha implementation with pairwise
@@ -2522,6 +2521,68 @@ static int pair_order_relation(Model3D* model, int f1, int f2) {
     return 0;
 }
 
+/* check_sort
+ * ----------
+ * For every unordered pair of faces, if their 2D bounding boxes overlap,
+ * call `ray_cast(model, f1, f2)` and check that the current ordering in
+ * `faces->sorted_face_indices` matches the ray_cast result.
+ * Prints mismatches and returns the number of mismatches detected.
+ */
+int check_sort(Model3D* model, int face_count) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (face_count <= 0) return 0;
+
+    int n = face_count;
+    int *pos_of_face = (int*)malloc(sizeof(int) * n);
+    if (!pos_of_face) return 0;
+    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+
+    int checked = 0;
+    int mismatches = 0;
+    int undetermined = 0;
+    int skipped_by_cull = 0;
+
+    for (int f1 = 0; f1 < n; ++f1) {
+        if (faces->display_flag[f1] == 0) { ++skipped_by_cull; continue; }
+        if (cull_back_faces && faces->plane_d[f1] <= 0) { ++skipped_by_cull; continue; }
+        for (int f2 = f1 + 1; f2 < n; ++f2) {
+            if (faces->display_flag[f2] == 0) { ++skipped_by_cull; continue; }
+            if (cull_back_faces && faces->plane_d[f2] <= 0) { ++skipped_by_cull; continue; }
+            int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+            int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+            // Quick reject: no bbox overlap
+            if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
+            
+            // Use full projected polygon overlap test (touching-only treated as non-overlap)
+            if (!projected_polygons_overlap(model, f1, f2)) continue;
+
+            ++checked;
+            int pos1 = pos_of_face[f1];
+            int pos2 = pos_of_face[f2];
+            int rc = ray_cast(model, f1, f2);
+            if (rc == 0) { ++undetermined; continue; }
+            // rc == -1 -> f1 is closer than f2 -> f1 should be after f2 (pos1 > pos2)
+            if (rc == -1) {
+                if (!(pos1 > pos2)) {
+                    printf("check_sort: MISMATCH (ray says %d closer than %d): positions %d vs %d\n", f1, f2, pos1, pos2);
+                    ++mismatches;
+                }
+            } else if (rc == 1) {
+                // rc == 1 -> f1 is farther than f2 -> f1 should be before f2 (pos1 < pos2)
+                if (!(pos1 < pos2)) {
+                    printf("check_sort: MISMATCH (ray says %d farther than %d): positions %d vs %d\n", f1, f2, pos1, pos2);
+                    ++mismatches;
+                }
+            }
+        }
+    }
+
+    free(pos_of_face);
+    printf("check_sort: checked=%d mismatches=%d undetermined=%d skipped_by_cull=%d\n", checked, mismatches, undetermined, skipped_by_cull);
+    return mismatches;
+}
+
 segment "code02";
 /* projected_polygons_overlap
  * --------------------------
@@ -2581,6 +2642,8 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
+    /* Minimum area (pixels^2) considered as true overlap */
+    const double MIN_INTERSECTION_AREA_PIXELS = 1.0;
     /* Inform the user when an overlap check is performed (useful in interactive mode). */
     #if ENABLE_DEBUG_SAVE
     printf("Checking projected overlap for faces %d and %d (touching is considered NON-overlap)\n", f1, f2);
@@ -2591,7 +2654,8 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
 
     int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
     int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-    if (maxx1 < minx2 || maxx2 < minx1 || maxy1 < miny2 || maxy2 < miny1) return 0;
+    // Quick reject: if bboxes are disjoint OR only touching at edge/point -> NON-overlap
+    if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) return 0;
 
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
@@ -2600,6 +2664,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
      * This avoids expensive orientation tests for clearly separated edges.
      * We use <= in bbox checks so that touching-only edges are treated as
      * non-overlapping (consistent with the semantics). */
+    int candidate = 0;
     for (int i = 0; i < n1; ++i) {
         int i2 = (i+1) % n1;
         int va = faces->vertex_indices_buffer[off1 + i] - 1;
@@ -2618,34 +2683,63 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
             int cminy = cy < dy ? cy : dy; int cmaxy = cy > dy ? cy : dy;
             /* quick reject if edge AABBs do not overlap (<= to consider touching as non-overlap) */
             if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
-            if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) return 1;
+            if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) { candidate = 1; break; }
+        }
+        if (candidate) break;
+    }
+
+    /* Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
+     * Points on edge are considered outside (no overlap). If containment is detected
+     * mark candidate and verify by computing intersection area (centroid). */
+    if (!candidate) {
+        for (int ii = 0; ii < n1; ++ii) {
+            int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
+            if (vid < 0 || vid >= vtx->vertex_count) continue;
+            int px = vtx->x2d[vid], py = vtx->y2d[vid];
+            if (px < minx2 || px > maxx2 || py < miny2 || py > maxy2) continue;
+            if (point_in_poly_int(px, py, faces, vtx, f2, n2)) { candidate = 1; break; }
+        }
+    }
+    if (!candidate) {
+        for (int jj = 0; jj < n2; ++jj) {
+            int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
+            if (vid < 0 || vid >= vtx->vertex_count) continue;
+            int px = vtx->x2d[vid], py = vtx->y2d[vid];
+            if (px < minx1 || px > maxx1 || py < miny1 || py > maxy1) continue;
+            if (point_in_poly_int(px, py, faces, vtx, f1, n1)) { candidate = 1; break; }
         }
     }
 
-    // SUPPRESSION : Containment tests are disabled. 
-    //Risque : cas d'une face entièrement contenue dans l'autre non détecté (mais test Z aura trié)
-    /* Containment tests: only check if candidate point lies inside the other's bbox first
-     * (cheap) before doing the full ray-cast in point_in_poly_int. This skips expensive
-     * loops for points obviously outside the other polygon's bbox. */
-    // Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
-    // This avoids missing a containment when the polygon's first vertex lies on a shared
-    // boundary point (touching) which is treated as outside.
-    for (int ii = 0; ii < n1; ++ii) {
-        int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
-        if (vid < 0 || vid >= vtx->vertex_count) continue;
-        int px = vtx->x2d[vid], py = vtx->y2d[vid];
-        if (px < minx2 || px > maxx2 || py < miny2 || py > maxy2) continue;
-        if (point_in_poly_int(px, py, faces, vtx, f2, n2)) return 1;
-    }
+    if (!candidate) return 0;
 
-    for (int jj = 0; jj < n2; ++jj) {
-        int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
-        if (vid < 0 || vid >= vtx->vertex_count) continue;
-        int px = vtx->x2d[vid], py = vtx->y2d[vid];
-        if (px < minx1 || px > maxx1 || py < miny1 || py > maxy1) continue;
-        if (point_in_poly_int(px, py, faces, vtx, f1, n1)) return 1;
-    }
+    /* Candidate found: fast integer-pixel sampling inside the overlapping bbox.
+     * We avoid exact polygon clipping for performance: compute integer bbox of
+     * the overlap and sample a 3x3 grid of pixel centers. If any sampled pixel
+     * center lies strictly inside *both* polygons (point_in_poly_int), we accept
+     * the overlap (which implies roughly >=1 pixel area). Otherwise reject and log.
+     */
+    int oxmin = minx1 > minx2 ? minx1 : minx2;
+    int oxmax = maxx1 < maxx2 ? maxx1 : maxx2;
+    int oymin = miny1 > miny2 ? miny1 : miny2;
+    int oymax = maxy1 < maxy2 ? maxy1 : maxy2;
+    if (oxmin > oxmax || oymin > oymax) return 0; /* integer bbox empty -> <1 pixel */
 
+    /* Sample up to 3x3 pixel centers inside integer bbox */
+    int ixmin = oxmin, ixmax = oxmax, iymin = oymin, iymax = oymax;
+    for (int sx = 0; sx < 3; ++sx) {
+        for (int sy = 0; sy < 3; ++sy) {
+            int tx = ixmin + ((sx * (ixmax - ixmin)) / 2);
+            int ty = iymin + ((sy * (iymax - iymin)) / 2);
+            if (point_in_poly_int(tx, ty, faces, vtx, f1, n1) && point_in_poly_int(tx, ty, faces, vtx, f2, n2)) return 1;
+        }
+    }
+    /* No sampled integer pixel inside both polygons -> consider non-overlap (small area)
+     * Log for debugging. */
+    FILE *lof = fopen("overlap.log","a");
+    if (lof) {
+        fprintf(lof, "Rejected small intersection (sampled): face1,%d,face2,%d,ox_bbox,%d,%d,%d,%d\n", f1, f2, oxmin, oymin, oxmax, oymax);
+        fclose(lof);
+    }
     return 0;
 }
 
@@ -2787,6 +2881,7 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
  *   - Return 0 if tests are inconclusive
  *   - Are only valid for front-faces (plane_d > 0); back-faces need special handling
  */
+
 static int pair_plane_after(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -2895,6 +2990,7 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
 
 // ===================== RAY CAST & INSPECTOR PROTOTYPES =====================
 int ray_cast(Model3D* model, int f1, int f2);
+int check_sort(Model3D* model, int face_count);
 void inspect_ray_cast(Model3D* model);
 // Prototypes only at the top
 // ===================== RAY CAST & INSPECTOR IMPLEMENTATION =====================
@@ -2957,184 +3053,11 @@ int ray_cast(Model3D* model, int f1, int f2) {
 
     float tf1 = -D1 / denom1;
     float tf2 = -D2 / denom2;
-    printf("Ray cast results: tf1=%.6f, tf2=%.6f\n", tf1, tf2);
-    keypress();
+    // printf("Ray cast results: tf1=%.6f, tf2=%.6f\n", tf1, tf2);
+    // keypress();
 
-/*
-    // ============================================
-    // DEBUG COMPLET - Écriture dans cast.txt
-    // ============================================
+    // dDEBUG bloc here.
 
-    FILE* debug_file = fopen("cast.txt", "a");  // "a" pour append (ajouter à la fin)
-    if (debug_file == NULL) {
-        printf("ERREUR: Impossible d'ouvrir cast.txt\n");
-        return 0;
-    }
-
-    fprintf(debug_file, "\n");
-    fprintf(debug_file, "================================================================\n");
-    fprintf(debug_file, "                  RAY_CAST DEBUG COMPLET                        \n");
-    fprintf(debug_file, "================================================================\n");
-
-    // 1. Info sur les faces comparées
-    fprintf(debug_file, "\n[1] FACES COMPAREES:\n");
-    fprintf(debug_file, "    Face f1 = %d\n", f1);
-    fprintf(debug_file, "    Face f2 = %d\n", f2);
-
-    // 2. Bounding boxes et intersection
-    fprintf(debug_file, "\n[2] BOUNDING BOXES 2D:\n");
-    fprintf(debug_file, "    f1: [%d,%d] -> [%d,%d]\n", minx1, miny1, maxx1, maxy1);
-    fprintf(debug_file, "    f2: [%d,%d] -> [%d,%d]\n", minx2, miny2, maxx2, maxy2);
-    fprintf(debug_file, "    Intersection: [%d,%d] -> [%d,%d]\n", ix0, iy0, ix1, iy1);
-    fprintf(debug_file, "    Centre teste: (%d, %d)\n", cx, cy);
-
-    // 3. Direction du rayon
-    fprintf(debug_file, "\n[3] RAYON 3D:\n");
-    fprintf(debug_file, "    Origine: (0, 0, 0)\n");
-    fprintf(debug_file, "    Direction: (%.6f, %.6f, %.6f)\n", Dx, Dy, Dz);
-    float ray_length = sqrtf(Dx*Dx + Dy*Dy + Dz*Dz);
-    fprintf(debug_file, "    Longueur: %.6f %s\n", ray_length, 
-        (fabsf(ray_length - 1.0f) < 0.01f) ? "(normalise)" : "(NON normalise)");
-
-    // 4. Équations des plans
-    fprintf(debug_file, "\n[4] EQUATIONS DES PLANS:\n");
-    fprintf(debug_file, "    f1: %.2f*x + %.2f*y + %.2f*z + %.2f = 0\n", A1, B1, C1, D1);
-    fprintf(debug_file, "    f2: %.2f*x + %.2f*y + %.2f*z + %.2f = 0\n", A2, B2, C2, D2);
-
-    // Normaliser les normales pour voir leur direction
-    float len1 = sqrtf(A1*A1 + B1*B1 + C1*C1);
-    float len2 = sqrtf(A2*A2 + B2*B2 + C2*C2);
-    fprintf(debug_file, "    Normale f1: (%.3f, %.3f, %.3f) [longueur=%.2f]\n", 
-        A1/len1, B1/len1, C1/len1, len1);
-    fprintf(debug_file, "    Normale f2: (%.3f, %.3f, %.3f) [longueur=%.2f]\n", 
-        A2/len2, B2/len2, C2/len2, len2);
-
-    // 5. Produits scalaires (denominateurs)
-    fprintf(debug_file, "\n[5] PRODUITS SCALAIRES (normale . rayon):\n");
-    fprintf(debug_file, "    denom1 = %.6f %s\n", denom1, 
-        (denom1 < 0) ? "(face frontale)" : "(face arriere)");
-    fprintf(debug_file, "    denom2 = %.6f %s\n", denom2, 
-        (denom2 < 0) ? "(face frontale)" : "(face arriere)");
-
-    // 6. Distances calculées
-    fprintf(debug_file, "\n[6] DISTANCES (parametre t):\n");
-    fprintf(debug_file, "    tf1 = -D1/denom1 = -(%.2f)/(%.2f) = %.6f\n", D1, denom1, tf1);
-    fprintf(debug_file, "    tf2 = -D2/denom2 = -(%.2f)/(%.2f) = %.6f\n", D2, denom2, tf2);
-    fprintf(debug_file, "    |tf1| = %.6f\n", fabsf(tf1));
-    fprintf(debug_file, "    |tf2| = %.6f\n", fabsf(tf2));
-    fprintf(debug_file, "    Difference: |tf1 - tf2| = %.6f\n", fabsf(tf1 - tf2));
-
-    // 7. Points d'intersection 3D
-    fprintf(debug_file, "\n[7] POINTS D'INTERSECTION 3D:\n");
-    float x1 = Dx * tf1;
-    float y1 = Dy * tf1;
-    float z1 = Dz * tf1;
-    float x2 = Dx * tf2;
-    float y2 = Dy * tf2;
-    float z2 = Dz * tf2;
-    fprintf(debug_file, "    f1: (%.2f, %.2f, %.2f) -> Z = %.2f\n", x1, y1, z1, z1);
-    fprintf(debug_file, "    f2: (%.2f, %.2f, %.2f) -> Z = %.2f\n", x2, y2, z2, z2);
-
-    // Vérification: le point est-il bien sur le plan ?
-    float verif1 = A1*x1 + B1*y1 + C1*z1 + D1;
-    float verif2 = A2*x2 + B2*y2 + C2*z2 + D2;
-    fprintf(debug_file, "    Verification f1 (devrait etre 0): %.6f %s\n", verif1,
-        (fabsf(verif1) < 1.0f) ? "OK" : "ERREUR");
-    fprintf(debug_file, "    Verification f2 (devrait etre 0): %.6f %s\n", verif2,
-        (fabsf(verif2) < 1.0f) ? "OK" : "ERREUR");
-
-    // 8. Z des sommets réels des faces
-    fprintf(debug_file, "\n[8] Z DES SOMMETS (coordonnees 3D transformees):\n");
-
-    // Face f1
-    int off1 = faces->vertex_indices_ptr[f1];
-    int n1 = faces->vertex_count[f1];
-    float z_min1 = 999999.0f, z_max1 = -999999.0f, z_sum1 = 0.0f;
-    fprintf(debug_file, "    f1 sommets (%d): ", n1);
-    for (int k = 0; k < n1; ++k) {
-        int vi = faces->vertex_indices_buffer[off1 + k] - 1;
-        if (vi >= 0 && vi < vtx->vertex_count) {
-            // Use observer-space Z (vtx->zo) and convert from fixed to float for human-readable debug
-            float z = FIXED_TO_FLOAT(vtx->zo[vi]);
-            fprintf(debug_file, "%.3f ", z);
-            if (z < z_min1) z_min1 = z;
-            if (z > z_max1) z_max1 = z;
-            z_sum1 += z;
-        }
-    }
-    float z_avg1 = z_sum1 / (float)n1;
-    fprintf(debug_file, "\n    f1: Z_min=%.2f, Z_max=%.2f, Z_avg=%.2f\n", z_min1, z_max1, z_avg1);
-
-    // Face f2
-    int off2 = faces->vertex_indices_ptr[f2];
-    int n2 = faces->vertex_count[f2];
-    float z_min2 = 999999.0f, z_max2 = -999999.0f, z_sum2 = 0.0f;
-    fprintf(debug_file, "    f2 sommets (%d): ", n2);
-    for (int k = 0; k < n2; ++k) {
-        int vi = faces->vertex_indices_buffer[off2 + k] - 1;
-        if (vi >= 0 && vi < vtx->vertex_count) {
-            // Use observer-space Z (vtx->zo) and convert from fixed to float for human-readable debug
-            float z = FIXED_TO_FLOAT(vtx->zo[vi]);
-            fprintf(debug_file, "%.3f ", z);
-            if (z < z_min2) z_min2 = z;
-            if (z > z_max2) z_max2 = z;
-            z_sum2 += z;
-        }
-    }
-    float z_avg2 = z_sum2 / (float)n2;
-    fprintf(debug_file, "\n    f2: Z_min=%.2f, Z_max=%.2f, Z_avg=%.2f\n", z_min2, z_max2, z_avg2);
-
-    // 9. Comparaison des Z
-    fprintf(debug_file, "\n[9] ANALYSE DES Z:\n");
-    fprintf(debug_file, "    Comparaison des Z moyens: ");
-    if (z_avg1 < z_avg2) {
-        fprintf(debug_file, "f1 plus proche (%.2f < %.2f)\n", z_avg1, z_avg2);
-    } else {
-        fprintf(debug_file, "f2 plus proche (%.2f < %.2f)\n", z_avg2, z_avg1);
-    }
-
-    fprintf(debug_file, "    Comparaison des Z d'intersection: ");
-    if (z1 < z2) {
-        fprintf(debug_file, "f1 plus proche (%.2f < %.2f)\n", z1, z2);
-    } else {
-        fprintf(debug_file, "f2 plus proche (%.2f < %.2f)\n", z2, z1);
-    }
-
-    fprintf(debug_file, "    Comparaison des tf: ");
-    if (tf1 < tf2) {
-        fprintf(debug_file, "f1 plus proche (%.2f < %.2f)\n", tf1, tf2);
-    } else {
-        fprintf(debug_file, "f2 plus proche (%.2f < %.2f)\n", tf2, tf1);
-    }
-
-    // 10. Résultat final
-    int result;
-    if (tf1 > tf2) result = 1;
-    else if (tf1 < tf2) result = -1;
-    else result = 0;
-
-    fprintf(debug_file, "\n[10] RESULTAT:\n");
-    fprintf(debug_file, "    Code retourne: %d\n", result);
-    if (result == -1) {
-        fprintf(debug_file, "    -> f1 (face %d) est PLUS PROCHE que f2 (face %d)\n", f1, f2);
-    } else if (result == 1) {
-        fprintf(debug_file, "    -> f2 (face %d) est PLUS PROCHE que f1 (face %d)\n", f2, f1);
-    } else {
-        fprintf(debug_file, "    -> Faces a egale distance (ou coplanaires)\n");
-    }
-
-    fprintf(debug_file, "\n");
-    fprintf(debug_file, "================================================================\n");
-    fprintf(debug_file, "                      FIN DU DEBUG                              \n");
-    fprintf(debug_file, "================================================================\n");
-    fprintf(debug_file, "\n\n");
-
-    fclose(debug_file);
-
-    // ============================================
-    // FIN DU DEBUG
-    // ============================================
-*/
     if (tf1 > tf2) return 1;  // f1 is farther than f2
     else if (tf1 < tf2) return -1; // f1 is closer than f2
     else return 0;
@@ -3287,7 +3210,7 @@ void inspect_ray_cast(Model3D* model) {
     if (cmp != 0) {
         int front = (cmp == -1) ? f1 : f2;
         int back = (cmp == -1) ? f2 : f1;
-        MoveTo(3, 195);
+        MoveTo(3, 180);
         printf("Face %d is in front of face %d\n", front, back);
     } else {
         MoveTo(3, 195);
@@ -6241,6 +6164,7 @@ static void show_help_pager(void) {
         "P: Toggle frame-only polygons (default: OFF)",
         "B: Toggle back-face culling (observer-space D<=0)",
         "I: Toggle display of inconclusive face pairs",
+        "<: Check sort with ray_cast (verify ordering for overlapping bboxes)",
         "V: Show single face (arrows to navigate, any key to exit)",
         "D: Inspect faces BEFORE selected (orange) - Press 'A' for all or 'O' for overlaps",
         "S: Inspect faces AFTER selected (pink) - Press 'A' for all or 'O' for overlaps",
@@ -6497,6 +6421,13 @@ segment "code22";
             case 114: // 'r'
                 pan_dx += 10; // move right by 10 pixels
                 printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
+                goto loopReDraw;
+
+            case 60: // '<' - Run check_sort and wait for key so user can read results
+                printf("Running check_sort (ray_cast verification)...\n");
+                check_sort(model, model->faces.face_count);
+                printf("Press any key to continue...\n");
+                keypress();
                 goto loopReDraw;
 
             case 43:  // '+' - increase projection scale by 10% (applies to current scale)
