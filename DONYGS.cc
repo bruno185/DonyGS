@@ -2638,6 +2638,42 @@ static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* 
     }
     return (cnt & 1);
 }
+
+/* Return 1 if faces f1 and f2 have identical 2D vertex sequences (allowing rotation
+ * and reversed order). Comparison uses exact integer 2D coordinates. */
+static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1, int f2) {
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    if (n1 != n2 || n1 <= 0) return 0;
+    int off1 = faces->vertex_indices_ptr[f1];
+    int off2 = faces->vertex_indices_ptr[f2];
+
+    /* Forward rotation check */
+    for (int shift = 0; shift < n1; ++shift) {
+        int ok = 1;
+        for (int k = 0; k < n1; ++k) {
+            int idx1 = faces->vertex_indices_buffer[off1 + k] - 1;
+            int idx2 = faces->vertex_indices_buffer[off2 + ((shift + k) % n1)] - 1;
+            if (idx1 < 0 || idx2 < 0) { ok = 0; break; }
+            if (vtx->x2d[idx1] != vtx->x2d[idx2] || vtx->y2d[idx1] != vtx->y2d[idx2]) { ok = 0; break; }
+        }
+        if (ok) return 1;
+    }
+
+    /* Reverse rotation check */
+    for (int shift = 0; shift < n1; ++shift) {
+        int ok = 1;
+        for (int k = 0; k < n1; ++k) {
+            int idx1 = faces->vertex_indices_buffer[off1 + k] - 1;
+            int idx2 = faces->vertex_indices_buffer[off2 + ((shift - k + n1) % n1)] - 1;
+            if (idx1 < 0 || idx2 < 0) { ok = 0; break; }
+            if (vtx->x2d[idx1] != vtx->x2d[idx2] || vtx->y2d[idx1] != vtx->y2d[idx2]) { ok = 0; break; }
+        }
+        if (ok) return 1;
+    }
+    return 0;
+}
+
 static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
@@ -2710,36 +2746,36 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         }
     }
 
-    if (!candidate) return 0;
+    if (!candidate) {
+        /* Special case: identical 2D polygons (e.g., duplicated faces or reversed ordering)
+         * should be considered overlapping even though vertex-on-edge tests would treat
+         * boundary points as outside. Check for identical vertex sequences here. */
+        if (faces_vertices_equal(faces, vtx, f1, f2)) return 1;
+        return 0;
+    }
 
-    /* Candidate found: fast integer-pixel sampling inside the overlapping bbox.
-     * We avoid exact polygon clipping for performance: compute integer bbox of
-     * the overlap and sample a 3x3 grid of pixel centers. If any sampled pixel
-     * center lies strictly inside *both* polygons (point_in_poly_int), we accept
-     * the overlap (which implies roughly >=1 pixel area). Otherwise reject and log.
+    /* Candidate found: compute integer overlap bbox and sample a 3x3 grid of interior pixel centers.
+     * If any sample is inside both polygons -> accept (fast path). Otherwise perform exact clipping
+     * and accept only if clipped area >= MIN_INTERSECTION_AREA_PIXELS (exact fallback).
      */
     int oxmin = minx1 > minx2 ? minx1 : minx2;
     int oxmax = maxx1 < maxx2 ? maxx1 : maxx2;
     int oymin = miny1 > miny2 ? miny1 : miny2;
-    int oymax = maxy1 < maxy2 ? maxy1 : maxy2;
+    int oymax = maxy1 < maxy2 ? maxy1 : miny2;
     if (oxmin > oxmax || oymin > oymax) return 0; /* integer bbox empty -> <1 pixel */
 
-    /* Sample up to 3x3 interior pixel centers using fractions 1/6,1/2,5/6 of the integer bbox.
-     * This places samples strictly inside the bbox (not on edges) and fixes cases where
-     * the overlap area is significant but the previous coarse sampling missed it.
-     */
+    /* Sample 3x3 interior fractions 1/6,1/2,5/6 of bbox */
     int ixmin = oxmin, ixmax = oxmax, iymin = oymin, iymax = oymax;
     int W = ixmax - ixmin; int H = iymax - iymin;
     for (int sx = 0; sx < 3; ++sx) {
         for (int sy = 0; sy < 3; ++sy) {
-            /* position = ixmin + round((2*sx+1)/6 * W) */
             int tx = ixmin + (((2*sx + 1) * W + 3) / 6);
             int ty = iymin + (((2*sy + 1) * H + 3) / 6);
             if (point_in_poly_int(tx, ty, faces, vtx, f1, n1) && point_in_poly_int(tx, ty, faces, vtx, f2, n2)) return 1;
         }
     }
 
-    /* Sampling did not find an interior pixel: perform exact clipping fallback */
+    /* Sampling failed -> exact clipping fallback */
     int icx = 0, icy = 0;
     double iarea = 0.0;
     if (compute_intersection_centroid(model, f1, f2, &icx, &icy, &iarea)) {
@@ -2753,7 +2789,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         return 0;
     }
 
-    /* No clipped intersection either -> consider non-overlap */
+    /* No clipped intersection either -> non-overlap (sampling also failed) */
     FILE *lof2 = fopen("overlap.log","a");
     if (lof2) {
         fprintf(lof2, "Rejected small intersection (sampled): face1,%d,face2,%d,ox_bbox,%d,%d,%d,%d\n", f1, f2, oxmin, oymin, oxmax, oymax);
@@ -2866,7 +2902,9 @@ static int compute_intersection_centroid(Model3D* model, int f1, int f2, int* ou
             cy += (sy[i] + sy[j]) * a;
         }
         double area = 0.5 * area2;
-        final_area = area;
+        /* Store absolute area for out_area so caller sees positive intersection area
+         * regardless of polygon orientation. Centroid computation uses signed area
+         * as usual. */
         if (fabs(area) > 1e-6) {
             cx = cx / (6.0 * area);
             cy = cy / (6.0 * area);
@@ -2874,6 +2912,7 @@ static int compute_intersection_centroid(Model3D* model, int f1, int f2, int* ou
             *outy = (int) (cy >= 0.0 ? cy + 0.5 : cy - 0.5);
             result = 1;
         }
+        final_area = fabs(area);
     }
 
     if (out_area) *out_area = final_area;
@@ -4217,6 +4256,11 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
 
     int old_frame = framePolyOnly; framePolyOnly = 1; // wireframe
 
+    /* Temporarily disable jitter during full overlap scan to ensure deterministic
+     * behavior (calls to rand() in jitter rendering can change PRNG state and
+     * affect repeated scans within the same session). Save and restore `jitter`. */
+    int saved_jitter = jitter; jitter = 0;
+
     /* Build list of candidate pairs (bbox intersection) */
     typedef struct { int a; int b; } Pair;
     int pair_count = 0;
@@ -4236,20 +4280,30 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
         pairs[pi].a = i; pairs[pi].b = j; pi++;
     }
 
-    /* Ask user for starting pair index */
-    int start_idx = 1;
-    printf("Start at pair number (1..%d) or press Enter for 1: ", pair_count);
+    /* Ask user for starting face id (instead of pair index). If the face appears
+     * in any bbox-intersecting pair, start at the first such pair; otherwise start at first pair.
+     */
+    int start_idx = 0; /* default to first pair */
+    printf("Start at face id (0..%d) or press Enter for first pair: ", faces->face_count - 1);
     char inbuf[64];
     if (fgets(inbuf, sizeof(inbuf), stdin) != NULL) {
         if (inbuf[0] != '\n') {
-            int v = 0;
-            if (sscanf(inbuf, "%d", &v) == 1 && v >= 1 && v <= pair_count) start_idx = v;
-            else printf("Invalid input, starting at 1\n");
+            int fid = -1;
+            if (sscanf(inbuf, "%d", &fid) == 1 && fid >= 0 && fid < faces->face_count) {
+                int found = -1;
+                for (int k = 0; k < pair_count; ++k) {
+                    if (pairs[k].a == fid || pairs[k].b == fid) { found = k; break; }
+                }
+                if (found >= 0) start_idx = found;
+                else { printf("Face %d not part of any bbox-intersecting pair, starting at first pair\n", fid); start_idx = 0; }
+            } else {
+                printf("Invalid input, starting at first pair\n"); start_idx = 0;
+            }
         }
     }
 
     int show_face_ids = 1; /* space/S toggles face id display */
-    int idx = start_idx - 1;
+    int idx = start_idx;
     while (1) {
         int f1 = pairs[idx].a; int f2 = pairs[idx].b;
 
@@ -4270,7 +4324,7 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
 
         MoveTo(3, 185);
         printf("Pair %d/%d: %d vs %d overlap: %s\n", idx+1, pair_count, f1, f2, ov ? "YES" : "NO");
-        printf("Arrows: navigate, space: toggle IDs, F: save");
+        printf("Arrows: navigate, space: toggle IDs, F: save, a: scan all");
 
         /* Read hardware key */
         int key = 0;
@@ -4317,6 +4371,172 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
             } else printf("Error: cannot open overlap.csv for writing\n");
             endgraph(); DoText();
             continue;
+        } else if (key == 'a' || key == 'A') {
+            endgraph();
+            DoText();
+            printf("Starting full scan of all overlapping face pairs...\n");
+            /* Scan all bbox-intersecting pairs and write each pair with YES/NO per projected_polygons_overlap.
+             * Writes to a temporary file and atomically renames at the end to avoid partial files if interrupted. */
+            const char *tmpname = "overlaptmp.csv";
+            const char *finalname = "overlapall.csv";
+            /* Remove stale files so the user won't see an old partial file while scan is running */
+            remove(finalname);
+            remove(tmpname);
+
+            /* Accumulate CSV in memory first to avoid virtual-disk I/O errors during the scan. */
+            char *buf = NULL; size_t blen = 0, bcap = 0;
+            char tmp[512]; int tn = 0;
+            int matches = 0;
+            int processed = 0;
+            int io_error = 0;
+            for (int i = 0; i < faces->face_count && !io_error; ++i) {
+                for (int j = i + 1; j < faces->face_count; ++j) {
+                    int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
+                    int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
+                    if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) { processed++; continue; }
+                    int ov = projected_polygons_overlap(model, i, j);
+                    tn = snprintf(tmp, sizeof(tmp), "face1,%d,face2,%d,overlap,%s\n", i, j, ov ? "YES" : "NO");
+                    if (tn < 0) { io_error = 1; break; }
+                    if (blen + tn + 1 > bcap) {
+                        size_t need = blen + tn + 1;
+                        size_t newcap = bcap ? bcap * 2 : need + 1024;
+                        while (newcap < need) newcap *= 2;
+                        char *nb = (char*)realloc(buf, newcap);
+                        if (!nb) { io_error = 1; break; }
+                        buf = nb; bcap = newcap;
+                    }
+                    memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+
+                    if ((tn = snprintf(tmp, sizeof(tmp), "face_id,vertex_order,vertex_index,x2d,y2d\n")) < 0) { io_error = 1; break; }
+                    if (blen + tn + 1 > bcap) { size_t need = blen + tn + 1; size_t newcap = bcap ? bcap * 2 : need + 1024; while (newcap < need) newcap *= 2; char *nb = (char*)realloc(buf, newcap); if (!nb) { io_error = 1; break; } buf = nb; bcap = newcap; }
+                    memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+
+                    int off1 = faces->vertex_indices_ptr[i]; int n1 = faces->vertex_count[i];
+                    for (int vi = 0; vi < n1; ++vi) {
+                        int idxv = faces->vertex_indices_buffer[off1 + vi] - 1;
+                        if (idxv >= 0 && idxv < vtx->vertex_count) {
+                            tn = snprintf(tmp, sizeof(tmp), "%d,%d,%d,%d,%d\n", i, vi, idxv, vtx->x2d[idxv], vtx->y2d[idxv]);
+                            if (tn < 0) { io_error = 1; break; }
+                            if (blen + tn + 1 > bcap) { size_t need = blen + tn + 1; size_t newcap = bcap ? bcap * 2 : need + 1024; while (newcap < need) newcap *= 2; char *nb = (char*)realloc(buf, newcap); if (!nb) { io_error = 1; break; } buf = nb; bcap = newcap; }
+                            memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+                        }
+                    }
+                    if (io_error) break;
+                    int off2 = faces->vertex_indices_ptr[j]; int n2 = faces->vertex_count[j];
+                    for (int vi = 0; vi < n2; ++vi) {
+                        int idxv = faces->vertex_indices_buffer[off2 + vi] - 1;
+                        if (idxv >= 0 && idxv < vtx->vertex_count) {
+                            tn = snprintf(tmp, sizeof(tmp), "%d,%d,%d,%d,%d\n", j, vi, idxv, vtx->x2d[idxv], vtx->y2d[idxv]);
+                            if (tn < 0) { io_error = 1; break; }
+                            if (blen + tn + 1 > bcap) { size_t need = blen + tn + 1; size_t newcap = bcap ? bcap * 2 : need + 1024; while (newcap < need) newcap *= 2; char *nb = (char*)realloc(buf, newcap); if (!nb) { io_error = 1; break; } buf = nb; bcap = newcap; }
+                            memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+                        }
+                    }
+                    if (io_error) break;
+                    if ((tn = snprintf(tmp, sizeof(tmp), "\n")) < 0) { io_error = 1; break; }
+                    if (blen + tn + 1 > bcap) { size_t need = blen + tn + 1; size_t newcap = bcap ? bcap * 2 : need + 1024; while (newcap < need) newcap *= 2; char *nb = (char*)realloc(buf, newcap); if (!nb) { io_error = 1; break; } buf = nb; bcap = newcap; }
+                    memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+
+                    /* Append debug entry to debug buffer */
+                    {
+                        /* lazy init debug buffer */
+                        static char *dbuf = NULL; static size_t dblen = 0; static size_t dbcap = 0;
+                        int sampled = 0;
+                        int oxmin = minx1 > minx2 ? minx1 : minx2;
+                        int oxmax = maxx1 < maxx2 ? maxx1 : maxx2;
+                        int oymin = miny1 > miny2 ? miny1 : miny2;
+                        int oymax = maxy1 < maxy2 ? maxy1 : maxy2;
+                        if (!(oxmin > oxmax || oymin > oymax)) {
+                            int W = oxmax - oxmin; int H = oymax - oymin;
+                            for (int ssx = 0; ssx < 3 && !sampled; ++ssx) for (int ssy = 0; ssy < 3 && !sampled; ++ssy) {
+                                int tx2 = oxmin + (((2*ssx + 1) * W + 3) / 6);
+                                int ty2 = oymin + (((2*ssy + 1) * H + 3) / 6);
+                                if (point_in_poly_int(tx2, ty2, faces, vtx, i, n1) && point_in_poly_int(tx2, ty2, faces, vtx, j, n2)) sampled = 1;
+                            }
+                        }
+                        int icx = 0, icy = 0; double iarea = 0.0; compute_intersection_centroid(model, i, j, &icx, &icy, &iarea);
+                        int ident = faces_vertices_equal(faces, vtx, i, j);
+                        int dtn = snprintf(tmp, sizeof(tmp), "%d,%d,%s,%d,%.6f,%d\n", i, j, ov ? "YES" : "NO", sampled, iarea, ident);
+                        if (dtn >= 0) {
+                            if (dblen + dtn + 1 > dbcap) {
+                                size_t need = dblen + dtn + 1;
+                                size_t newcap = dbcap ? dbcap * 2 : need + 1024;
+                                while (newcap < need) newcap *= 2;
+                                char *nb = (char*)realloc(dbuf, newcap);
+                                if (nb) { dbuf = nb; dbcap = newcap; }
+                            }
+                            if (dblen + dtn + 1 <= dbcap) { memcpy(dbuf + dblen, tmp, dtn); dblen += dtn; dbuf[dblen] = '\0'; }
+                        }
+                        /* write debug buffer at the very end when building completes; store in static locals */
+                    }
+
+                    matches++;
+                    processed++;
+                    if ((processed & 255) == 0) {
+                        printf("Scanning pairs... processed %d pairs (written %d)\n", processed, matches);
+                        fflush(stdout);
+                        //keypress(); /*  get a breather for the OS  */
+                    }
+                }
+            }
+            if (io_error) {
+                if (buf) free(buf);
+                printf("I/O error while building output buffer: processed %d, written %d\n", processed, matches);
+                keypress();
+                continue;
+            }
+            /* If we built a debug buffer, write it next to a debug CSV */
+            {
+                FILE *dbf = fopen("overlapdbg.csv","w");
+                if (dbf) {
+                    fprintf(dbf, "face1,face2,reported,sampled,clipped_area,identical\n");
+                    extern char *dbuf; extern size_t dblen; /* refer to static locals above */
+                    /* We can't reference the static locals' names here; instead rebuild debug by recomputing quickly */
+                    for (int ii = 0; ii < faces->face_count; ++ii) {
+                        for (int jj = ii + 1; jj < faces->face_count; ++jj) {
+                            int minx1b = faces->minx[ii], maxx1b = faces->maxx[ii], miny1b = faces->miny[ii], maxy1b = faces->maxy[ii];
+                            int minx2b = faces->minx[jj], maxx2b = faces->maxx[jj], miny2b = faces->miny[jj], maxy2b = faces->maxy[jj];
+                            if (maxx1b <= minx2b || maxx2b <= minx1b || maxy1b <= miny2b || maxy2b <= miny1b) continue;
+                            int ov2 = projected_polygons_overlap(model, ii, jj);
+                            int sampled2 = 0; int oxminb = minx1b > minx2b ? minx1b : minx2b; int oxmaxb = maxx1b < maxx2b ? maxx1b : maxx2b; int oyminb = miny1b > miny2b ? miny1b : miny2b; int oymaxb = maxy1b < maxy2b ? maxy1b : maxy2b;
+                            if (!(oxminb > oxmaxb || oyminb > oymaxb)) {
+                                int Wb = oxmaxb - oxminb; int Hb = oymaxb - oyminb;
+                                for (int ssx = 0; ssx < 3 && !sampled2; ++ssx) for (int ssy = 0; ssy < 3 && !sampled2; ++ssy) {
+                                    int tx2 = oxminb + (((2*ssx + 1) * Wb + 3) / 6);
+                                    int ty2 = oyminb + (((2*ssy + 1) * Hb + 3) / 6);
+                                    if (point_in_poly_int(tx2, ty2, faces, vtx, ii, faces->vertex_count[ii]) && point_in_poly_int(tx2, ty2, faces, vtx, jj, faces->vertex_count[jj])) sampled2 = 1;
+                                }
+                            }
+                            int icx2 = 0, icy2 = 0; double iarea2 = 0.0; compute_intersection_centroid(model, ii, jj, &icx2, &icy2, &iarea2);
+                            int ident2 = faces_vertices_equal(faces, vtx, ii, jj);
+                            fprintf(dbf, "%d,%d,%s,%d,%.6f,%d\n", ii, jj, ov2 ? "YES" : "NO", sampled2, iarea2, ident2);
+                        }
+                    }
+                    fclose(dbf);
+                }
+            }
+
+            /* Attempt single-shot write to final file to avoid partials on virtual disk */
+            FILE *of = fopen(finalname, "w");
+            if (!of) {
+                if (buf) free(buf);
+                printf("Error: cannot open %s for writing\n", finalname);
+                keypress();
+                continue;
+            }
+            if (fwrite(buf ? buf : "", 1, blen, of) != blen) {
+                printf("Write failed while saving %s\n", finalname);
+                fclose(of);
+                if (buf) free(buf);
+                keypress();
+                continue;
+            }
+            fclose(of);
+            if (buf) free(buf);
+            printf("Saved overlapall.csv (%d pairs written, processed %d pairs)\n", matches, processed);
+            printf("Press any key to continue...\n");
+            keypress(); /*  get user key  */
+            continue;
         } else {
             break; /* any other key exits */
         }
@@ -4327,6 +4547,8 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
     DoText();
     /* Restore */
     framePolyOnly = old_frame;
+    /* Restore jitter state saved at the start of the scan */
+    jitter = saved_jitter;
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
 }
