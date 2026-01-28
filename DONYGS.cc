@@ -3140,6 +3140,7 @@ void inspect_ray_cast(Model3D* model);
 // 1 if t1 farer than t2
 // -1 if t1 closer than t2
 
+/* Ray cast at centroid of bbox intersection (default) */
 int ray_cast(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
@@ -3161,17 +3162,18 @@ int ray_cast(Model3D* model, int f1, int f2) {
     if (ix0 > ix1 || iy0 > iy1) return 0; // no intersection
     int cx = (ix0 + ix1) / 2;
     int cy = (iy0 + iy1) / 2;
+    return ray_cast_at(model, f1, f2, cx, cy);
+}
 
-    /* Compute ray direction in observer-space using projection scale
-       Projection in compute2DFromObserver is: x2d = centre_x + proj_scale * (xo/zo)
-       Therefore a screen coordinate cx corresponds to x = (cx - centre_x) / proj_scale in observer units.
-    */
+/* Ray cast at explicit screen coordinate (cx,cy) in projected 2D coords */
+static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
     float proj_scale = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
     float Dx = ((float)cx - (float)CENTRE_X) / proj_scale;
     float Dy = ((float)CENTRE_Y - (float)cy) / proj_scale;
     float Dz = 1.0f;
-
-    /* Convert fixed-plane coefficients (Fixed64) to floats correctly */
     float A1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
     float B1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
     float C1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
@@ -3180,22 +3182,11 @@ int ray_cast(Model3D* model, int f1, int f2) {
     float B2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
     float C2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
     float D2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
-
     float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;
     float denom2 = A2 * Dx + B2 * Dy + C2 * Dz;
-
-    if (fabsf(denom1) < 0.001f || fabsf(denom2) < 0.001f){
-        return 0;
-        // coplanar faces
-    }
-
+    if (fabsf(denom1) < 0.001f || fabsf(denom2) < 0.001f) return 0; // coplanar or parallel
     float tf1 = -D1 / denom1;
     float tf2 = -D2 / denom2;
-    // printf("Ray cast results: tf1=%.6f, tf2=%.6f\n", tf1, tf2);
-    // keypress();
-
-    // dDEBUG bloc here.
-
     if (tf1 > tf2) return 1;  // f1 is farther than f2
     else if (tf1 < tf2) return -1; // f1 is closer than f2
     else return 0;
@@ -4245,8 +4236,20 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
         pairs[pi].a = i; pairs[pi].b = j; pi++;
     }
 
-    int show_face_ids = 1; /* space toggles face id display */
-    int idx = 0;
+    /* Ask user for starting pair index */
+    int start_idx = 1;
+    printf("Start at pair number (1..%d) or press Enter for 1: ", pair_count);
+    char inbuf[64];
+    if (fgets(inbuf, sizeof(inbuf), stdin) != NULL) {
+        if (inbuf[0] != '\n') {
+            int v = 0;
+            if (sscanf(inbuf, "%d", &v) == 1 && v >= 1 && v <= pair_count) start_idx = v;
+            else printf("Invalid input, starting at 1\n");
+        }
+    }
+
+    int show_face_ids = 1; /* space/S toggles face id display */
+    int idx = start_idx - 1;
     while (1) {
         int f1 = pairs[idx].a; int f2 = pairs[idx].b;
 
@@ -4267,7 +4270,7 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
 
         MoveTo(3, 185);
         printf("Pair %d/%d: %d vs %d overlap: %s\n", idx+1, pair_count, f1, f2, ov ? "YES" : "NO");
-        printf("Arrows: navigate, space: toggle IDs, F: save, other key exits\n");
+        printf("Arrows: navigate, space: toggle IDs, F: save");
 
         /* Read hardware key */
         int key = 0;
