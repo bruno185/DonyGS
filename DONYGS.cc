@@ -2738,14 +2738,147 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
             if (point_in_poly_int(tx, ty, faces, vtx, f1, n1) && point_in_poly_int(tx, ty, faces, vtx, f2, n2)) return 1;
         }
     }
-    /* No sampled interior pixel found -> consider non-overlap (small area)
-     * Log for debugging. */
-    // FILE *lof = fopen("overlap.log","a");
-    // if (lof) {
-    //     fprintf(lof, "Rejected small intersection (sampled): face1,%d,face2,%d,ox_bbox,%d,%d,%d,%d\n", f1, f2, oxmin, oymin, oxmax, oymax);
-    //     fclose(lof);
-    // }
+
+    /* Sampling did not find an interior pixel: perform exact clipping fallback */
+    int icx = 0, icy = 0;
+    double iarea = 0.0;
+    if (compute_intersection_centroid(model, f1, f2, &icx, &icy, &iarea)) {
+        if (iarea >= MIN_INTERSECTION_AREA_PIXELS) return 1;
+        /* Rejected due to small clipped area; log for diagnostics */
+        FILE *lof = fopen("overlap.log","a");
+        if (lof) {
+            fprintf(lof, "Rejected small intersection (clipped): face1,%d,face2,%d,area,%.6f,ox_bbox,%d,%d,%d,%d\n", f1, f2, iarea, oxmin, oymin, oxmax, oymax);
+            fclose(lof);
+        }
+        return 0;
+    }
+
+    /* No clipped intersection either -> consider non-overlap */
+    FILE *lof2 = fopen("overlap.log","a");
+    if (lof2) {
+        fprintf(lof2, "Rejected small intersection (sampled): face1,%d,face2,%d,ox_bbox,%d,%d,%d,%d\n", f1, f2, oxmin, oymin, oxmax, oymax);
+        fclose(lof2);
+    }
     return 0;
+}
+
+/* Compute centroid of intersection polygon between faces f1 and f2 in screen space.
+ * Uses Sutherland-Hodgman polygon clipping (f1 subject, f2 clip polygon) with strict
+ * inside test (points on edges are treated as outside) so touching-only cases yield
+ * zero-area result. Returns 1 and sets *outx,*outy and *out_area when intersection has
+ * positive area; returns 0 otherwise (and *out_area will be set to 0.0).
+ */
+static int compute_intersection_centroid(Model3D* model, int f1, int f2, int* outx, int* outy, double* out_area) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    if (n1 <= 0 || n2 <= 0) { if (out_area) *out_area = 0.0; return 0; }
+
+    /* Build subject polygon (from f1) as doubles */
+    double* sx = (double*)malloc(sizeof(double) * n1);
+    double* sy = (double*)malloc(sizeof(double) * n1);
+    if (!sx || !sy) { if (sx) free(sx); if (sy) free(sy); if (out_area) *out_area = 0.0; return 0; }
+    int off1 = faces->vertex_indices_ptr[f1];
+    for (int i = 0; i < n1; ++i) {
+        int vid = faces->vertex_indices_buffer[off1 + i] - 1;
+        sx[i] = (double)vtx->x2d[vid];
+        sy[i] = (double)vtx->y2d[vid];
+    }
+    int curr_n = n1;
+
+    /* Temporary arrays for clipping --- allocate worst-case (n1 + n2) * 2 maybe */
+    double* tx = (double*)malloc(sizeof(double) * (n1 + n2 + 8));
+    double* ty = (double*)malloc(sizeof(double) * (n1 + n2 + 8));
+    if (!tx || !ty) { free(sx); free(sy); if (tx) free(tx); if (ty) free(ty); if (out_area) *out_area = 0.0; return 0; }
+
+    const double EPS = 1e-9;
+
+    int off2 = faces->vertex_indices_ptr[f2];
+    for (int j = 0; j < n2; ++j) {
+        int c1 = faces->vertex_indices_buffer[off2 + j] - 1;
+        int c2 = faces->vertex_indices_buffer[off2 + ((j + 1) % n2)] - 1;
+        double cx1 = (double)vtx->x2d[c1], cy1 = (double)vtx->y2d[c1];
+        double cx2 = (double)vtx->x2d[c2], cy2 = (double)vtx->y2d[c2];
+
+        if (curr_n == 0) break;
+        int out_n = 0;
+
+        for (int i = 0; i < curr_n; ++i) {
+            int ii = i;
+            int jj = (i + 1) % curr_n;
+            double sx1 = sx[ii], sy1 = sy[ii];
+            double sx2 = sx[jj], sy2 = sy[jj];
+
+            /* inside test: point is strictly to the left of clip edge (cx1->cx2) */
+            double cross1 = (cx2 - cx1) * (sy1 - cy1) - (cy2 - cy1) * (sx1 - cx1);
+            double cross2 = (cx2 - cx1) * (sy2 - cy1) - (cy2 - cy1) * (sx2 - cx1);
+            int in1 = (cross1 > EPS);
+            int in2 = (cross2 > EPS);
+
+            if (in1 && in2) {
+                /* both inside -> keep end */
+                tx[out_n] = sx2; ty[out_n] = sy2; out_n++;
+            } else if (in1 && !in2) {
+                /* leaving: emit intersection */
+                double denom = (sx1 - sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1 - cx2);
+                if (fabs(denom) > 1e-12) {
+                    double numx = (sx1*sy2 - sy1*sx2) * (cx1 - cx2) - (sx1 - sx2) * (cx1*cy2 - cy1*cx2);
+                    double numy = (sx1*sy2 - sy1*sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1*cy2 - cy1*cx2);
+                    double ix = numx / denom;
+                    double iy = numy / denom;
+                    tx[out_n] = ix; ty[out_n] = iy; out_n++;
+                }
+            } else if (!in1 && in2) {
+                /* entering: emit intersection then end point */
+                double denom = (sx1 - sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1 - cx2);
+                if (fabs(denom) > 1e-12) {
+                    double numx = (sx1*sy2 - sy1*sx2) * (cx1 - cx2) - (sx1 - sx2) * (cx1*cy2 - cy1*cx2);
+                    double numy = (sx1*sy2 - sy1*sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1*cy2 - cy1*cx2);
+                    double ix = numx / denom;
+                    double iy = numy / denom;
+                    tx[out_n] = ix; ty[out_n] = iy; out_n++;
+                }
+                tx[out_n] = sx2; ty[out_n] = sy2; out_n++;
+            } else {
+                /* both outside -> nothing */
+            }
+        }
+
+        /* swap tx->sx */
+        if (out_n == 0) { curr_n = 0; break; }
+        /* ensure capacity */
+        for (int k = 0; k < out_n; ++k) { sx[k] = tx[k]; sy[k] = ty[k]; }
+        curr_n = out_n;
+    }
+
+    int result = 0;
+    double final_area = 0.0;
+    if (curr_n >= 3) {
+        /* compute signed area and centroid */
+        double area2 = 0.0; /* 2*area */
+        double cx = 0.0, cy = 0.0;
+        for (int i = 0; i < curr_n; ++i) {
+            int j = (i + 1) % curr_n;
+            double a = sx[i] * sy[j] - sx[j] * sy[i];
+            area2 += a;
+            cx += (sx[i] + sx[j]) * a;
+            cy += (sy[i] + sy[j]) * a;
+        }
+        double area = 0.5 * area2;
+        final_area = area;
+        if (fabs(area) > 1e-6) {
+            cx = cx / (6.0 * area);
+            cy = cy / (6.0 * area);
+            *outx = (int) (cx >= 0.0 ? cx + 0.5 : cx - 0.5);
+            *outy = (int) (cy >= 0.0 ? cy + 0.5 : cy - 0.5);
+            result = 1;
+        }
+    }
+
+    if (out_area) *out_area = final_area;
+    free(sx); free(sy); free(tx); free(ty);
+    return result;
 }
 
 segment "code03";
@@ -4075,6 +4208,126 @@ void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char
 }
 
 /* End inspect_polygons_overlap */
+
+/* Interactive tester: iterate all face pairs whose 2D bboxes intersect.
+ * For each pair:
+ *  - display the model in wireframe
+ *  - highlight f1 in green, f2 in orange
+ *  - print overlap status (YES/NO) with face numbers
+ *  - wait for a key: any key -> next pair, ESC -> exit
+ */
+void test_all_overlap(Model3D* model, ObserverParams* params, const char* filename) {
+    if (!model) { printf("No model loaded\n"); return; }
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+
+    int old_frame = framePolyOnly; framePolyOnly = 1; // wireframe
+
+    /* Build list of candidate pairs (bbox intersection) */
+    typedef struct { int a; int b; } Pair;
+    int pair_count = 0;
+    for (int i = 0; i < faces->face_count; ++i) for (int j = i+1; j < faces->face_count; ++j) {
+        int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
+        int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
+        if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
+        pair_count++;
+    }
+    if (pair_count == 0) { printf("No bbox-intersecting pairs found.\n"); framePolyOnly = old_frame; free(backup_flags); return; }
+    Pair* pairs = (Pair*)malloc(sizeof(Pair) * pair_count);
+    int pi = 0;
+    for (int i = 0; i < faces->face_count; ++i) for (int j = i+1; j < faces->face_count; ++j) {
+        int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
+        int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
+        if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
+        pairs[pi].a = i; pairs[pi].b = j; pi++;
+    }
+
+    int show_face_ids = 1; /* space toggles face id display */
+    int idx = 0;
+    while (1) {
+        int f1 = pairs[idx].a; int f2 = pairs[idx].b;
+
+        startgraph(mode);
+        /* Show wireframe model */
+        for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
+        if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+
+        /* Highlight faces */
+        unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
+        faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
+        drawFace(model, f1, 10, show_face_ids); // green
+        drawFace(model, f2, 6, show_face_ids);  // orange
+        faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
+
+        /* Compute overlap using existing test */
+        int ov = projected_polygons_overlap(model, f1, f2);
+
+        MoveTo(3, 185);
+        printf("Pair %d/%d: %d vs %d overlap: %s\n", idx+1, pair_count, f1, f2, ov ? "YES" : "NO");
+        printf("Arrows: navigate, space: toggle IDs, F: save, other key exits\n");
+
+        /* Read hardware key */
+        int key = 0;
+        asm {
+            sep #0x20
+        readkeyloop:
+            lda >0xC000
+            bpl readkeyloop
+            and #0x007f
+            sta key
+            sta >0xC010
+            rep #0x30
+        }
+
+        if (key == 8 || key == 11) { /* Left or Up -> previous */
+            idx = (idx - 1 + pair_count) % pair_count;
+            endgraph(); DoText();
+            continue;
+        } else if (key == 21 || key == 10) { /* Right or Down -> next */
+            idx = (idx + 1) % pair_count;
+            endgraph(); DoText();
+            continue;
+        } else if (key == ' ') { /* space or S -> toggle IDs and re-render same pair */
+            show_face_ids = !show_face_ids;
+            endgraph(); DoText();
+            continue;
+        } else if (key == 'F' || key == 'f') {
+            FILE *of = fopen("overlap.csv", "w");
+            if (of) {
+                fprintf(of, "face1,%d,face2,%d,overlap,%s\n", f1, f2, ov ? "YES" : "NO");
+                fprintf(of, "face_id,vertex_order,vertex_index,x2d,y2d\n");
+                int off1 = faces->vertex_indices_ptr[f1]; int n1 = faces->vertex_count[f1];
+                for (int vi = 0; vi < n1; ++vi) {
+                    int idxv = faces->vertex_indices_buffer[off1 + vi] - 1;
+                    if (idxv >= 0 && idxv < vtx->vertex_count) fprintf(of, "%d,%d,%d,%d,%d\n", f1, vi, idxv, vtx->x2d[idxv], vtx->y2d[idxv]);
+                }
+                int off2 = faces->vertex_indices_ptr[f2]; int n2 = faces->vertex_count[f2];
+                for (int vi = 0; vi < n2; ++vi) {
+                    int idxv = faces->vertex_indices_buffer[off2 + vi] - 1;
+                    if (idxv >= 0 && idxv < vtx->vertex_count) fprintf(of, "%d,%d,%d,%d,%d\n", f2, vi, idxv, vtx->x2d[idxv], vtx->y2d[idxv]);
+                }
+                fclose(of);
+                printf("Saved overlap.csv\n");
+            } else printf("Error: cannot open overlap.csv for writing\n");
+            endgraph(); DoText();
+            continue;
+        } else {
+            break; /* any other key exits */
+        }
+    }
+
+    free(pairs);
+    endgraph(); 
+    DoText();
+    /* Restore */
+    framePolyOnly = old_frame;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+}
+
 
 segment "code24";
 /* display_model_face_ids
@@ -6787,6 +7040,11 @@ case 98:  // 'b'
             case 62: // '>' - interactive ray_cast inspector
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 inspect_ray_cast(model);
+                goto loopReDraw;
+
+            case 44: // ',' - interactive test of all bbox-intersecting face pairs
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                test_all_overlap(model, &params, filename);
                 goto loopReDraw;
 
             case 27:  // ESC - quit
