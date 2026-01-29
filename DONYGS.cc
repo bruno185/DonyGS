@@ -4254,7 +4254,7 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
     unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
     for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
 
-    int old_frame = framePolyOnly; 
+    int old_frame = framePolyOnly; /* keep global framePolyOnly unchanged; render wireframe explicitly when needed */
     framePolyOnly = 1; // wireframe
 
     /* Temporarily disable jitter during full overlap scan to ensure deterministic
@@ -4266,17 +4266,29 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
     /* Build list of candidate pairs (bbox intersection) */
     typedef struct { int a; int b; } Pair;
     int pair_count = 0;
+
+    printf("Total overlapping pairs test\n");
+    printf("Building pair list...\n");
+
     for (int i = 0; i < faces->face_count; ++i) for (int j = i+1; j < faces->face_count; ++j) {
+        /* Respect back-face culling: when enabled, consider only pairs where both faces are front-facing */
+        if (cull_back_faces) {
+            if (faces->plane_d[i] <= 0 || faces->plane_d[j] <= 0) continue;
+        }
         int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
         int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
         if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
         pair_count++;
     }
     if (pair_count == 0) { printf("No bbox-intersecting pairs found.\n"); 
-    framePolyOnly = old_frame; free(backup_flags); return; }
+        framePolyOnly = old_frame; free(backup_flags); return; }
     Pair* pairs = (Pair*)malloc(sizeof(Pair) * pair_count);
     int pi = 0;
     for (int i = 0; i < faces->face_count; ++i) for (int j = i+1; j < faces->face_count; ++j) {
+        /* Respect back-face culling: when enabled, consider only pairs where both faces are front-facing */
+        if (cull_back_faces) {
+            if (faces->plane_d[i] <= 0 || faces->plane_d[j] <= 0) continue;
+        }
         int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
         int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
         if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
@@ -4287,7 +4299,6 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
      * in any bbox-intersecting pair, start at the first such pair; otherwise start at first pair.
      */
     int start_idx = 0; /* default to first pair */
-    printf("Total overlapping pairs test\n");
     printf("Start at face id (0..%d) or press Enter for first pair: ", faces->face_count - 1);
     char inbuf[64];
     if (fgets(inbuf, sizeof(inbuf), stdin) != NULL) {
@@ -4306,27 +4317,40 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
         }
     }
 
-    printf("Arrows: navigate, space: toggle IDs, F: save, a: scan all\n");
+    printf("Arrows: navigate, space: cycle display mode (0: numbers+wireframe, 1: wireframe only, 2: neither, 3: numbers only), F: save, a: scan all\n");
     printf("Press any key to start...\n");
     keypress();
 
-    int show_face_ids = 1; /* space/S toggles face id display */
+    /* display_state: 0 = numbers + wireframe (default)
+     *                1 = wireframe only
+     *                2 = neither numbers nor wireframe
+     *                3 = numbers only
+     */
+    int display_state = 0;
     int idx = start_idx;
     while (1) {
         int f1 = pairs[idx].a; int f2 = pairs[idx].b;
 
         startgraph(mode);
-        /* Show wireframe model */
+
+        /* Set all faces visible for consistent highlights */
         for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
 
-        /* Render the full model: when frame-only is requested, draw explicit wireframe
-         * using drawFace(...) with fillPenPat = -1 to ensure outlines are visible. Otherwise
-         * call the usual drawPolygons/drawPolygons_jitter path. */
-        for (int fi = 0; fi < faces->face_count; ++fi) {
-            if (!faces->display_flag[fi]) continue;
-            drawFace(model, fi, -1, 0);
+        /* Render model according to display_state:
+         * - states 0 and 1: show wireframe outlines (drawFace with fillPenPat = -1)
+         * - states 2 and 3: do NOT render the model at all (neither wireframe nor filled)
+         */
+        if (display_state == 0 || display_state == 1) {
+            for (int fi = 0; fi < faces->face_count; ++fi) {
+                if (!faces->display_flag[fi]) continue;
+                drawFace(model, fi, -1, 0); /* wireframe outline */
+            }
+        } else {
+            /* Intentionally skip drawing the model for states 2 and 3 */
         }
 
+        /* Determine whether to show face ids for highlights */
+        int show_face_ids = (display_state == 0 || display_state == 3) ? 1 : 0;
 
         /* Highlight faces */
         unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
@@ -4363,8 +4387,8 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
             idx = (idx + 1) % pair_count;
             endgraph(); DoText();
             continue;
-        } else if (key == ' ') { /* space or S -> toggle IDs and re-render same pair */
-            show_face_ids = !show_face_ids;
+        } else if (key == ' ') { /* space -> cycle display_state 0..3 */
+            display_state = (display_state + 1) & 3; /* faster than %4 */
             endgraph(); DoText();
             continue;
         } else if (key == 'F' || key == 'f') {
@@ -4548,7 +4572,7 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
             }
             fclose(of);
             if (buf) free(buf);
-            printf("Saved overlapall.csv (%d pairs written, processed %d pairs)\n", matches, processed);
+            printf("\nSaved overlapall.csv (%d pairs written, processed %d pairs)\n", matches, processed);
             printf("Press any key to continue...\n");
             keypress(); /*  get user key  */
             continue;

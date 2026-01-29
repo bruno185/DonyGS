@@ -133,3 +133,6 @@ Pour chaque face, que j'appelle target :
 3/ Coupe cette liste en 2  : les faces placées avant dans la sorted_list et celles placées après.
 4/ pour les faces placées avant dans la sorted list : appliquer la fonciton before. Si une ou plusieurs face ont -1 en retour de before, place target dans la liste AVANT la face trouvée ayant le plus petit indice.
 5/ pour les faces placées après dans la sorted list : appliquer la fonciton after. Si une ou plusieurs face ont -1 en retour de before, place target dans la liste AVANT la face trouvée ayant le plus petit indice.
+
+TODO:
+Idée pour painter_correctV2 : prendre la bf d'indice le plus élevé, comparerer avec ff de plus bas indice avec des plane tests (ou ray cast), si devant la placer juste au dessus et continuer jusqu'à touver une ff devant. passer à la baf suivante. 

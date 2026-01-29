@@ -868,3 +868,108 @@ static int compute_intersection_centroid(Model3D* model, int f1, int f2, int* ou
     free(sx); free(sy); free(tx); free(ty);
     return result;
 }
+
+void scan_all_overlap_noninteractive(Model3D* model, ObserverParams* params, const char* filename) {
+    printf("scan_all_overlap_noninteractive removed; use interactive ',' then 'a' to scan\n"); return;
+
+    ObserverParams local_params;
+    if (!params) {
+        local_params.angle_h = 30; local_params.angle_v = 20; local_params.angle_w = 0;
+        local_params.distance = FLOAT_TO_FIXED(30.0);
+        params = &local_params;
+    }
+    /* Ensure projections and preprocessing are up to date */
+    processModelFast(model, params, filename);
+
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+    /* Build CSV buffer in memory (same logic as interactive scan) */
+    const char *finalname = "overlapall.csv";
+    remove(finalname);
+    char *buf = NULL; size_t blen = 0, bcap = 0;
+    char tmp[512]; int tn = 0;
+    int matches = 0; int processed = 0;
+
+    for (int i = 0; i < faces->face_count; ++i) {
+        for (int j = i + 1; j < faces->face_count; ++j) {
+            int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
+            int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
+            if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) { processed++; continue; }
+            int ov = projected_polygons_overlap(model, i, j);
+            tn = snprintf(tmp, sizeof(tmp), "face1,%d,face2,%d,overlap,%s\n", i, j, ov ? "YES" : "NO");
+            if (tn < 0) { if (buf) free(buf); printf("Error forming CSV\n"); return; }
+            if (blen + tn + 1 > bcap) {
+                size_t need = blen + tn + 1; size_t newcap = bcap ? bcap * 2 : need + 1024; while (newcap < need) newcap *= 2; char *nb = (char*)realloc(buf, newcap); if (!nb) { if (buf) free(buf); printf("Memory alloc error\n"); return; } buf = nb; bcap = newcap;
+            }
+            memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+
+            if ((tn = snprintf(tmp, sizeof(tmp), "face_id,vertex_order,vertex_index,x2d,y2d\n")) < 0) { if (buf) free(buf); printf("Error forming CSV\n"); return; }
+            if (blen + tn + 1 > bcap) { size_t need = blen + tn + 1; size_t newcap = bcap ? bcap * 2 : need + 1024; while (newcap < need) newcap *= 2; char *nb = (char*)realloc(buf, newcap); if (!nb) { if (buf) free(buf); printf("Memory alloc error\n"); return; } buf = nb; bcap = newcap; }
+            memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+
+            int off1 = faces->vertex_indices_ptr[i]; int n1 = faces->vertex_count[i];
+            for (int vi = 0; vi < n1; ++vi) {
+                int idxv = faces->vertex_indices_buffer[off1 + vi] - 1;
+                if (idxv >= 0 && idxv < vtx->vertex_count) {
+                    tn = snprintf(tmp, sizeof(tmp), "%d,%d,%d,%d,%d\n", i, vi, idxv, vtx->x2d[idxv], vtx->y2d[idxv]);
+                    if (tn < 0) { if (buf) free(buf); printf("Error forming CSV\n"); return; }
+                    if (blen + tn + 1 > bcap) { size_t need = blen + tn + 1; size_t newcap = bcap ? bcap * 2 : need + 1024; while (newcap < need) newcap *= 2; char *nb = (char*)realloc(buf, newcap); if (!nb) { if (buf) free(buf); printf("Memory alloc error\n"); return; } buf = nb; bcap = newcap; }
+                    memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+                }
+            }
+
+            int off2 = faces->vertex_indices_ptr[j]; int n2 = faces->vertex_count[j];
+            for (int vi = 0; vi < n2; ++vi) {
+                int idxv = faces->vertex_indices_buffer[off2 + vi] - 1;
+                if (idxv >= 0 && idxv < vtx->vertex_count) {
+                    tn = snprintf(tmp, sizeof(tmp), "%d,%d,%d,%d,%d\n", j, vi, idxv, vtx->x2d[idxv], vtx->y2d[idxv]);
+                    if (tn < 0) { if (buf) free(buf); printf("Error forming CSV\n"); return; }
+                    if (blen + tn + 1 > bcap) { size_t need = blen + tn + 1; size_t newcap = bcap ? bcap * 2 : need + 1024; while (newcap < need) newcap *= 2; char *nb = (char*)realloc(buf, newcap); if (!nb) { if (buf) free(buf); printf("Memory alloc error\n"); return; } buf = nb; bcap = newcap; }
+                    memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+                }
+            }
+
+            if ((tn = snprintf(tmp, sizeof(tmp), "\n")) < 0) { if (buf) free(buf); printf("Error forming CSV\n"); return; }
+            if (blen + tn + 1 > bcap) { size_t need = blen + tn + 1; size_t newcap = bcap ? bcap * 2 : need + 1024; while (newcap < need) newcap *= 2; char *nb = (char*)realloc(buf, newcap); if (!nb) { if (buf) free(buf); printf("Memory alloc error\n"); return; } buf = nb; bcap = newcap; }
+            memcpy(buf + blen, tmp, tn); blen += tn; buf[blen] = '\0';
+
+            matches++; processed++;
+        }
+    }
+
+    /* write debug CSV */
+    FILE *dbf = fopen("overlapdbg.csv","w");
+    if (dbf) {
+        fprintf(dbf, "face1,face2,reported,sampled,clipped_area,identical\n");
+        for (int ii = 0; ii < faces->face_count; ++ii) {
+            for (int jj = ii + 1; jj < faces->face_count; ++jj) {
+                int minx1b = faces->minx[ii], maxx1b = faces->maxx[ii], miny1b = faces->miny[ii], maxy1b = faces->maxy[ii];
+                int minx2b = faces->minx[jj], maxx2b = faces->maxx[jj], miny2b = faces->miny[jj], maxy2b = faces->maxy[jj];
+                if (maxx1b <= minx2b || maxx2b <= minx1b || maxy1b <= miny2b || maxy2b <= miny1b) continue;
+                int ov2 = projected_polygons_overlap(model, ii, jj);
+                int sampled2 = 0; int oxminb = minx1b > minx2b ? minx1b : minx2b; int oxmaxb = maxx1b < maxx2b ? maxx1b : maxx2b; int oyminb = miny1b > miny2b ? miny1b : miny2b; int oymaxb = maxy1b < maxy2b ? maxy1b : miny2b;
+                if (!(oxminb > oxmaxb || oyminb > oymaxb)) {
+                    int Wb = oxmaxb - oxminb; int Hb = oymaxb - oyminb;
+                    for (int ssx = 0; ssx < 3 && !sampled2; ++ssx) for (int ssy = 0; ssy < 3 && !sampled2; ++ssy) {
+                        int tx2 = oxminb + (((2*ssx + 1) * Wb + 3) / 6);
+                        int ty2 = oyminb + (((2*ssy + 1) * Hb + 3) / 6);
+                        if (point_in_poly_int(tx2, ty2, faces, vtx, ii, faces->vertex_count[ii]) && point_in_poly_int(tx2, ty2, faces, vtx, jj, faces->vertex_count[jj])) sampled2 = 1;
+                    }
+                }
+                int icx2 = 0, icy2 = 0; double iarea2 = 0.0; compute_intersection_centroid(model, ii, jj, &icx2, &icy2, &iarea2);
+                int ident2 = faces_vertices_equal(faces, vtx, ii, jj);
+                fprintf(dbf, "%d,%d,%s,%d,%.6f,%d\n", ii, jj, ov2 ? "YES" : "NO", sampled2, iarea2, ident2);
+            }
+        }
+        fclose(dbf);
+    }
+
+    /* Attempt single-shot write to final file to avoid partials on virtual disk */
+    FILE *of = fopen(finalname, "w");
+    if (!of) { if (buf) free(buf); printf("Error: cannot open %s for writing\n", finalname); return; }
+    if (fwrite(buf ? buf : "", 1, blen, of) != blen) { printf("Write failed while saving %s\n", finalname); fclose(of); if (buf) free(buf); return; }
+    fclose(of);
+    if (buf) free(buf);
+    printf("Saved overlapall.csv (%d pairs written, processed %d pairs)\n", matches, processed);
+}

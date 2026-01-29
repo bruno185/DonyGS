@@ -43,8 +43,8 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 - Best for high frame rates on simple geometry
 - Limitations: May produce artifacts on complex overlapping polygons
 
-#### NORMAL Mode (Key: `2`)
-- Full Newell-Sancha pairwise comparison algorithm
+#### NORMAL Mode (Key: `2`) — NEWELL_SANCHAV1
+- Full Newell-Sancha (V1) pairwise comparison algorithm (implemented as `painter_newell_sancha`)
 - Comprehensive geometric tests per face pair:
   1. **Test 1**: Z-extents overlap check (cheap rejection)
   2. **Test 2**: X-extents overlap check
@@ -58,11 +58,15 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 - Fixed32 (16.16) and Fixed64 (32.32) arithmetic throughout
 - Most robust for complex geometry
 
-#### FLOAT Mode (Key: `3`)
-- Floating-point implementation of painter's algorithm
+#### NEWELL_SANCHAV2 Mode (Key: `3`)
+- Variant of the Newell-Sancha painter (V2)
+- Fixed-point-based algorithm with improved local ordering behavior (`painter_newell_sanchaV2`)
+- Recommended for certain pathological meshes where the V2 heuristic helps reduce inconclusive pairs
+
+#### FLOAT Mode (Key: `U`)
+- Floating-point implementation of the painter's algorithm
 - Higher precision calculations
 - Faster on platforms with FPU support
-
 
 #### CORRECT Mode (Key: `4`)
 - Extends NORMAL mode with local face reordering
@@ -192,6 +196,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `D` | Inspect Before | Analyze faces before selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `S` | Inspect After | Analyze faces after selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `O` | Overlap Check | Test projected polygon overlap between two faces |
+| `A` | Scan All Overlaps | Scan all bbox-intersecting face pairs and save `overlapall.csv` and `overlap.csv` (temporarily disables `J` jitter for deterministic results) |
 | `I` | Toggle Inconclusive | Show/hide inconclusive face pairs with frames |
 | `L` | Face ID Labels | Display face numbers centered on each polygon |
 | `F` | Export Debug Data | Dump face equations to `equ.csv` |
