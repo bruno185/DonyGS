@@ -2781,20 +2781,20 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     if (compute_intersection_centroid(model, f1, f2, &icx, &icy, &iarea)) {
         if (iarea >= MIN_INTERSECTION_AREA_PIXELS) return 1;
         /* Rejected due to small clipped area; log for diagnostics */
-        FILE *lof = fopen("overlap.log","a");
-        if (lof) {
-            fprintf(lof, "Rejected small intersection (clipped): face1,%d,face2,%d,area,%.6f,ox_bbox,%d,%d,%d,%d\n", f1, f2, iarea, oxmin, oymin, oxmax, oymax);
-            fclose(lof);
-        }
+        // FILE *lof = fopen("overlap.log","a");
+        // if (lof) {
+        //     fprintf(lof, "Rejected small intersection (clipped): face1,%d,face2,%d,area,%.6f,ox_bbox,%d,%d,%d,%d\n", f1, f2, iarea, oxmin, oymin, oxmax, oymax);
+        //     fclose(lof);
+        // }
         return 0;
     }
 
     /* No clipped intersection either -> non-overlap (sampling also failed) */
-    FILE *lof2 = fopen("overlap.log","a");
-    if (lof2) {
-        fprintf(lof2, "Rejected small intersection (sampled): face1,%d,face2,%d,ox_bbox,%d,%d,%d,%d\n", f1, f2, oxmin, oymin, oxmax, oymax);
-        fclose(lof2);
-    }
+    // FILE *lof2 = fopen("overlap.log","a");
+    // if (lof2) {
+    //     fprintf(lof2, "Rejected small intersection (sampled): face1,%d,face2,%d,ox_bbox,%d,%d,%d,%d\n", f1, f2, oxmin, oymin, oxmax, oymax);
+    //     fclose(lof2);
+    // }
     return 0;
 }
 
@@ -4254,12 +4254,14 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
     unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
     for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
 
-    int old_frame = framePolyOnly; framePolyOnly = 1; // wireframe
+    int old_frame = framePolyOnly; 
+    framePolyOnly = 1; // wireframe
 
     /* Temporarily disable jitter during full overlap scan to ensure deterministic
      * behavior (calls to rand() in jitter rendering can change PRNG state and
      * affect repeated scans within the same session). Save and restore `jitter`. */
-    int saved_jitter = jitter; jitter = 0;
+    int saved_jitter = jitter; 
+    jitter = 0;
 
     /* Build list of candidate pairs (bbox intersection) */
     typedef struct { int a; int b; } Pair;
@@ -4270,7 +4272,8 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
         if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
         pair_count++;
     }
-    if (pair_count == 0) { printf("No bbox-intersecting pairs found.\n"); framePolyOnly = old_frame; free(backup_flags); return; }
+    if (pair_count == 0) { printf("No bbox-intersecting pairs found.\n"); 
+    framePolyOnly = old_frame; free(backup_flags); return; }
     Pair* pairs = (Pair*)malloc(sizeof(Pair) * pair_count);
     int pi = 0;
     for (int i = 0; i < faces->face_count; ++i) for (int j = i+1; j < faces->face_count; ++j) {
@@ -4284,6 +4287,7 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
      * in any bbox-intersecting pair, start at the first such pair; otherwise start at first pair.
      */
     int start_idx = 0; /* default to first pair */
+    printf("Total overlapping pairs test\n");
     printf("Start at face id (0..%d) or press Enter for first pair: ", faces->face_count - 1);
     char inbuf[64];
     if (fgets(inbuf, sizeof(inbuf), stdin) != NULL) {
@@ -4302,6 +4306,10 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
         }
     }
 
+    printf("Arrows: navigate, space: toggle IDs, F: save, a: scan all\n");
+    printf("Press any key to start...\n");
+    keypress();
+
     int show_face_ids = 1; /* space/S toggles face id display */
     int idx = start_idx;
     while (1) {
@@ -4310,7 +4318,15 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
         startgraph(mode);
         /* Show wireframe model */
         for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
-        if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+
+        /* Render the full model: when frame-only is requested, draw explicit wireframe
+         * using drawFace(...) with fillPenPat = -1 to ensure outlines are visible. Otherwise
+         * call the usual drawPolygons/drawPolygons_jitter path. */
+        for (int fi = 0; fi < faces->face_count; ++fi) {
+            if (!faces->display_flag[fi]) continue;
+            drawFace(model, fi, -1, 0);
+        }
+
 
         /* Highlight faces */
         unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
@@ -4322,9 +4338,9 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
         /* Compute overlap using existing test */
         int ov = projected_polygons_overlap(model, f1, f2);
 
-        MoveTo(3, 185);
+        MoveTo(3, 195);
         printf("Pair %d/%d: %d vs %d overlap: %s\n", idx+1, pair_count, f1, f2, ov ? "YES" : "NO");
-        printf("Arrows: navigate, space: toggle IDs, F: save, a: scan all");
+        
 
         /* Read hardware key */
         int key = 0;
@@ -4472,10 +4488,9 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
 
                     matches++;
                     processed++;
-                    if ((processed & 255) == 0) {
-                        printf("Scanning pairs... processed %d pairs (written %d)\n", processed, matches);
+                    if ((processed & 10) == 0) {
+                        printf(" .");
                         fflush(stdout);
-                        //keypress(); /*  get a breather for the OS  */
                     }
                 }
             }
@@ -4487,7 +4502,7 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
             }
             /* If we built a debug buffer, write it next to a debug CSV */
             {
-                FILE *dbf = fopen("overlapdbg.csv","w");
+                FILE *dbf = fopen("overlap.csv","w");
                 if (dbf) {
                     fprintf(dbf, "face1,face2,reported,sampled,clipped_area,identical\n");
                     extern char *dbuf; extern size_t dblen; /* refer to static locals above */
@@ -6003,8 +6018,18 @@ void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
             FramePoly(polyHandle);
             SetSolidPenPat(14);
         } else if (framePolyOnly) {
+            /* Draw explicit solid wireframe using MoveTo/LineTo to avoid dotted
+             * outlines produced by FramePoly in certain pen/pattern states. */
+            SetPenMode(0); // PenMode = Copy ==> avoid dotted lines
             SetSolidPenPat(7);
             FramePoly(polyHandle);
+            // int first_h = poly->polyPoints[0].h;
+            // int first_v = poly->polyPoints[0].v;
+            // MoveTo(first_h, first_v);
+            // for (int kk = 1; kk < vcount_face; ++kk) {
+            //     LineTo(poly->polyPoints[kk].h, poly->polyPoints[kk].v);
+            // }
+            // LineTo(first_h, first_v);
             SetSolidPenPat(14);
         } else {
             Pattern pat;
@@ -6637,8 +6662,9 @@ static void show_help_pager(void) {
         "C: Toggle color palette display",
         "J: Toggle jittered rendering (stylized per-vertex 0..7 px offset)",
         "1: Set painter to FAST (simple face sorting only)",
-        "2: Set painter to NORMAL (Fixed32/64)",
-        "3: Set painter to FLOAT (float-based)",
+        "2: Set painter to NORMAL (NEWELL_SANCHAV1, Fixed32/64)",
+        "3: Set painter to NEWELL_SANCHAV2 (painter_newell_sanchaV2)",
+        "U: Set painter to FLOAT (float-based)",
         "4: Set painter to CORRECT (painter_correct) - tries to fix ordering by local moves",
         "6: Set both colors to RANDOM mode",
         "7: Choose fill color (0-15, 16=random, -1=default)",
@@ -6647,6 +6673,7 @@ static void show_help_pager(void) {
         "P: Toggle frame-only polygons (default: OFF)",
         "B: Toggle back-face culling (observer-space D<=0)",
         "I: Toggle display of inconclusive face pairs",
+        "A: Scan all overlapping pairs (writes overlapall.csv and overlap.csv; temporarily disables 'J' jitter for deterministic output)",
         "<: Check sort with ray_cast (verify ordering for overlapping bboxes)",
         "V: Show single face (arrows to navigate, any key to exit)",
         "D: Inspect faces BEFORE selected (orange) - Press 'A' for all or 'O' for overlaps",
