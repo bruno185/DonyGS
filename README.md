@@ -250,14 +250,42 @@ This interactive tool helps diagnose and correct painter algorithm ordering issu
 ### Single Face Viewer (`V` key)
 
 - **Left/Right Arrows**: Navigate by face ID (decrement/increment)
-- **Up/Down Arrows**: Navigate through sorted face array- **Space**: Show detailed textual info about the current face:
+- **Up/Down Arrows**: Navigate through sorted face array
+- **Space**: Show detailed textual info about the current face:
   - ID and position in the sorted list
   - Vertex count and per-vertex data: index, model-space coordinates (x,y,z), observer-space coordinates (xo,yo,zo), and projected 2D coordinates (x2d,y2d)
   - Plane equation coefficients `(a, b, c, d)`
   - Press any key to return to the graphical overlay
-- **F**: When viewing textual info, press `F` (or `f`) to save the details to a file named `Face<ID>.txt` (example: `Face42.txt`). A confirmation message is shown and pressing any key returns to the overlay.- **Any Other Key**: Exit viewer and return to full model
+- **F**: When viewing textual info, press `F` (or `f`) to save the details to a file named `Face<ID>.txt` (example: `Face42.txt`). A confirmation message is shown and pressing any key returns to the overlay.
+- **Any Other Key**: Exit viewer and return to full model
 
 Useful for examining individual face geometry and understanding the sorting order.
+
+---
+
+### Récapitulatif : touches → fonctions C appelées 🔧
+
+Ci‑dessous un tableau récapitulatif des touches les plus utiles et des **fonctions C** qu'elles invoquent (directement ou via flags / modes). Cela aide à relier le comportement interactif aux points d'entrée du code lorsque vous faites du debug :
+
+| Touche | Action (concis) | Fonctions C impliquées (point d'entrée) |
+|--------|-----------------|-----------------------------------------|
+| `1`..`5` | Changer le mode de painter | modifie `painter_mode` → appelle ensuite `painter_newell_sancha_fast`, `painter_newell_sancha`, `painter_newell_sancha_float`, `painter_newell_sanchaV2`, `painter_correctV2` selon le mode |
+| `O` / `o` | Vérifier le recouvrement projeté entre deux faces | `inspect_polygons_overlap` → `projected_polygons_overlap` (strict) |
+| `A` | Scanner toutes les paires qui se recoupent en bbox (écrit CSV) | `/* A key handler */` → `projected_polygons_overlap` + `compute_intersection_centroid` (debug CSV) |
+| `>` | Inspecteur `ray_cast` interactif | `inspect_ray_cast` → `compute_intersection_centroid` (centroid) → `ray_cast_at` (utilise `faces->plane_*`) |
+| `V` | Afficher une face (overlay, détails) | `showFace` → `drawFace` (rend la face), sauvegarde via `Face<ID>.txt` |
+| `D` / `S` | Inspecter faces avant / après (diagnostic & moves) | `inspect_faces_before` / `inspect_faces_after` → utilise `projected_polygons_overlap`, `move_element_remove_and_insert_pos`, et tests plane (`pair_plane_after` / `pair_plane_before`) |
+| `I` | Basculer affichage des paires inconclusives | `frameInconclusivePairs` (affichage) |
+| `F` | Export CSV debug | `dumpFaceEquationsCSV` (export des plans/z_min/z_mean/bboxes) |
+| `J` | Toggle jitter (render) | affecte `drawPolygons_jitter` vs `drawPolygons` (impacte la reproductibilité des scans) |
+| Arrow keys | Navigation / caméra | modifie `ObserverParams` via `getObserverParams` (K key) et rafraîchit le rendu |
+| `N` | Charger nouveau modèle | `destroyModel3D` + `loadModel3D` (réinitialise `painter_mode`, `jitter`, etc.) |
+
+> Note : certaines commandes appellent plusieurs utilitaires (par ex. `A` construit `overlapall.csv` puis exécute des échantillonnages et des découpages via `compute_intersection_centroid` pour le debug). Pour investiguer un comportement précis, commencez par utiliser la touche correspondante dans l'interface, puis consultez les fichiers CSV de sortie (`overlap.csv`, `overlapall.csv`, `equ.csv`, `Face<ID>.txt`) pour reproduire/automatiser les tests.
+
+---
+
+Si tu veux, j'ajoute des liens (anchors) dans le README qui pointent vers les définitions de ces fonctions dans le code (façon 
 
 ## File Format
 
@@ -287,24 +315,13 @@ f 5 6 7 8
 - Materials (`mtllib`, `usemtl`)
 - Groups (`g`)
 
-## Performance Metrics
 
-Typical frame processing times on Apple IIGS (measured in ticks @ 60Hz):
-
-| Model | Faces | FAST Mode | NORMAL Mode | CORRECT Mode |
-|-------|-------|-----------|-------------|--------------|
-| Cube | 6 | ~5 ticks | ~8 ticks | ~10 ticks |
-| Teapot | 256 | ~45 ticks | ~120 ticks | ~150 ticks |
-| Complex | 500+ | ~90 ticks | ~300 ticks | ~400 ticks |
-
-**Note**: Times include transformation, projection, sorting, and rendering. NORMAL mode overhead comes from comprehensive pairwise geometric tests.
 
 ## Building from Source
 
 **Requirements:**
 - Apple IIGS with ORCA/C 2.2.1 or later
 - Golden Gate development environment
-- iix command-line tools
 
 **Compilation:**
 ```bash
