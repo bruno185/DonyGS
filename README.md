@@ -13,11 +13,13 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 
 ### Key Features
 
-- **Multiple Painter Algorithms**: Four distinct rendering modes optimized for different use cases
+- **Multiple Painter Algorithms**: Five distinct rendering modes optimized for different use cases (FLOAT is archived)
   - **FAST**: Simple Z-mean sorting with bounding box tests (highest performance)
   - **NORMAL**: Full Newell-Sancha algorithm with Fixed32/64 arithmetic (robust)
-  - **FLOAT**: Float-based painter for higher precision
+  - **NEWELL_SANCHAV2**: Bubble-style/local-pass variant (conservative local reordering)
   - **CORRECT**: Advanced ordering correction with local face reordering
+  - **CORRECT V2**: Experimental local correction (painter_correctV2)
+  - **FLOAT**: Float-based painter (ARCHIVED — implementation moved to `chutier.txt`) 
   
 - **3D Manipulation**: Interactive camera controls with adjustable distance, rotation angles, and 2D panning
 - **Advanced Culling**: Observer-space back-face culling to eliminate hidden polygons
@@ -63,10 +65,10 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 - Fixed-point-based algorithm with improved local ordering behavior (`painter_newell_sanchaV2`)
 - Recommended for certain pathological meshes where the V2 heuristic helps reduce inconclusive pairs
 
-#### FLOAT Mode (Key: `U`)
-- Floating-point implementation of the painter's algorithm
-- Higher precision calculations
-- Faster on platforms with FPU support
+#### FLOAT Mode (Key: `U`) — Archived
+- Archived: implementation moved to `chutier.txt`.
+- To re-enable, restore the implementation from `chutier.txt` and uncomment calls in `DONYGS.cc`.
+- Removed from active build by default.
 
 #### CORRECT Mode (Key: `4`)
 - Extends NORMAL mode with local face reordering
@@ -168,9 +170,11 @@ Observer-space culling eliminates faces oriented away from the viewer:
 |-----|-------------|----------------------|
 | `1` | FAST        | Simple Z-mean sorting (fastest) |
 | `2` | NORMAL      | Full Newell-Sancha with Fixed32/64 |
-| `3` | FLOAT       | Floating-point painter |
+| `3` | NEWELL_SANCHAV2 | Bubble-style variant for conservative local reordering |
 | `4` | CORRECT     | Advanced ordering correction |
 | `5` | CORRECT V2  | Experimental local correction (painter_correctV2) |
+
+> Note: `FLOAT` mode (Key: `U`) is archived — implementation moved to `chutier.txt` and is not part of the active numeric 1..5 painter mapping.
 
 #### Color Management
 | Key | Action | Description |
@@ -269,7 +273,7 @@ Ci‑dessous un tableau récapitulatif des touches les plus utiles et des **fonc
 
 | Touche | Action (concis) | Fonctions C impliquées (point d'entrée) |
 |--------|-----------------|-----------------------------------------|
-| `1`..`5` | Changer le mode de painter | modifie `painter_mode` → appelle ensuite `painter_newell_sancha_fast`, `painter_newell_sancha`, `painter_newell_sancha_float`, `painter_newell_sanchaV2`, `painter_correctV2` selon le mode |
+| `1`..`5` | Changer le mode de painter | modifie `painter_mode` → appelle ensuite `painter_newell_sancha_fast`, `painter_newell_sancha`, `painter_newell_sanchaV2`, `painter_correct`, `painter_correctV2` selon le mode (note: `painter_newell_sancha_float` is archived in `chutier.txt`) |
 | `O` / `o` | Vérifier le recouvrement projeté entre deux faces | `inspect_polygons_overlap` → `projected_polygons_overlap` (strict) |
 | `A` | Scanner toutes les paires qui se recoupent en bbox (écrit CSV) | `/* A key handler */` → `projected_polygons_overlap` + `compute_intersection_centroid` (debug CSV) |
 | `>` | Inspecteur `ray_cast` interactif | `inspect_ray_cast` → `compute_intersection_centroid` (centroid) → `ray_cast_at` (utilise `faces->plane_*`) |

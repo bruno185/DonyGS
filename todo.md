@@ -134,5 +134,24 @@ Pour chaque face, que j'appelle target :
 4/ pour les faces placées avant dans la sorted list : appliquer la fonciton before. Si une ou plusieurs face ont -1 en retour de before, place target dans la liste AVANT la face trouvée ayant le plus petit indice.
 5/ pour les faces placées après dans la sorted list : appliquer la fonciton after. Si une ou plusieurs face ont -1 en retour de before, place target dans la liste AVANT la face trouvée ayant le plus petit indice.
 
-TODO:
+
 Idée pour painter_correctV2 : prendre la bf d'indice le plus élevé, comparerer avec ff de plus bas indice avec des plane tests (ou ray cast), si devant la placer juste au dessus et continuer jusqu'à touver une ff devant. passer à la baf suivante. 
+
+inspect_ray_cast : centroid à la place du centre du rectangle d'intersection. 
+Voir effet sur < et plus tard sur tri des faces.
+
+==> 
+Clarification rapide ✅
+ray_cast(f1,f2) — utilise le centre du rectangle d’intersection (cx = (ix0+ix1)/2, cy = (iy0+iy1)/2). C’est la fonction de base qui retourne directement le résultat du rayon lancé en (cx,cy). ⚪
+inspect_ray_cast (outil interactif) — a été modifiée pour préférer le centroïde découpé calculé par compute_intersection_centroid (Sutherland–Hodgman). Si un centroïde d’aire > 0 existe, on lance le rayon en ce point ; sinon on marque « undetermined ». ✳️
+Donc il n’y a pas de contradiction : j’ai changé uniquement l’outil interactif (inspect_ray_cast) pour plus de stabilité, pas la fonction ray_cast générique.
+
+💡 Veux-tu que j’applique la même logique (utiliser le centroïde quand disponible, sinon retomber sur le centre bbox ou « undetermined ») dans ray_cast aussi ? (je peux le faire rapidement avec un petit test).
+
+==> fait
+
+
+
+Problement des 2 versions de overlap. Laquelles est la meilleure ?
+240 inspect overlap : face front/back même géométrie, mais overlap différent ????
+
