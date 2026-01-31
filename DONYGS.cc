@@ -2626,27 +2626,21 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
      */
     int icx1 = 0, icy1 = 0, icx2 = 0, icy2 = 0;
     double iarea1 = 0.0, iarea2 = 0.0;
-    /* Clipping fallback (rare): measure and compute areas in both orders */
+    /* Clipping fallback (Python semantics): clip f1 by f2 only and accept only if that area >= threshold */
     overlapClipCalls++;
     int ok1 = compute_intersection_centroid_ordered(model, f1, f2, &icx1, &icy1, &iarea1);
-    int ok2 = compute_intersection_centroid_ordered(model, f2, f1, &icx2, &icy2, &iarea2);
     if (dbg_pair) {
-        printf("OVERLAP_DEBUG: pair %d,%d -> ok1=%d iarea1=%.6f icx1=%d icy1=%d ok2=%d iarea2=%.6f icx2=%d icy2=%d\n",
-               f1, f2, ok1, iarea1, icx1, icy1, ok2, iarea2, icx2, icy2);
+        printf("OVERLAP_DEBUG: pair %d,%d -> ok1=%d iarea1=%.6f icx1=%d icy1=%d\n",
+               f1, f2, ok1, iarea1, icx1, icy1);
     }
-    double best_area = iarea1;
-    if (iarea2 > best_area) best_area = iarea2;
-    if (dbg_pair) printf("OVERLAP_DEBUG: pair %d,%d -> best_area=%.6f (threshold=%.6f)\n", f1, f2, best_area, MIN_INTERSECTION_AREA_PIXELS);
-    if (best_area >= MIN_INTERSECTION_AREA_PIXELS) {
+    if (dbg_pair) printf("OVERLAP_DEBUG: pair %d,%d -> area_f1_clip_f2=%.6f (threshold=%.6f)\n", f1, f2, iarea1, MIN_INTERSECTION_AREA_PIXELS);
+    if (iarea1 >= MIN_INTERSECTION_AREA_PIXELS) {
         overlapClipAccept++;
-        if (dbg_pair) printf("OVERLAP_DEBUG: pair %d,%d -> ACCEPT (area >= threshold)\n", f1, f2);
+        if (dbg_pair) printf("OVERLAP_DEBUG: pair %d,%d -> ACCEPT (f1 clipped by f2 area >= threshold)\n", f1, f2);
         return 1;
     }
-    if (dbg_pair) printf("OVERLAP_DEBUG: pair %d,%d -> REJECT (area < threshold)\n", f1, f2);
+    if (dbg_pair) printf("OVERLAP_DEBUG: pair %d,%d -> REJECT (f1 clipped by f2 area < threshold)\n", f1, f2);
     /* Rejected due to small clipped area or no positive-area intersection */
-    return 0;
-
-    /* No clipped intersection either -> non-overlap (sampling also failed) */
     return 0;
 }
 
@@ -4342,12 +4336,11 @@ void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char
                         compute2DFromObserver(model, params->angle_w);
                         int ov_s = projected_polygons_overlap(model, f1, f2);
                         int ocx1 = 0, ocy1 = 0, ocx2 = 0, ocy2 = 0; double oia1 = 0.0, oia2 = 0.0;
+                        /* For scale-sweep diagnostics, compute both orders but keep acceptance aligned with Python (f1 clipped by f2 only). */
                         overlapClipCalls++;
                         compute_intersection_centroid_ordered(model, f1, f2, &ocx1, &ocy1, &oia1);
                         compute_intersection_centroid_ordered(model, f2, f1, &ocx2, &ocy2, &oia2);
-                        double obest = oia1;
-                        if (oia2 > obest) obest = oia2;
-                        if (obest >= MIN_INTERSECTION_AREA_PIXELS) overlapClipAccept++;
+                        if (oia1 >= MIN_INTERSECTION_AREA_PIXELS) overlapClipAccept++;
                         fprintf(cfs, "mult,%d,scale,%.4f,ov,%d,ia1,%.6f,ia2,%.6f,ic1,%d,%d,ic2,%d,%d\n",
                                 m, FIXED_TO_FLOAT(new_scale), ov_s, oia1, oia2, ocx1, ocy1, ocx2, ocy2);
                     }
