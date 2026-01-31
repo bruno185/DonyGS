@@ -2569,40 +2569,39 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     int oxmin = minx1 > minx2 ? minx1 : minx2;
     int oxmax = maxx1 < maxx2 ? maxx1 : maxx2;
     int oymin = miny1 > miny2 ? miny1 : miny2;
-    int oymax = maxy1 < maxy2 ? maxy1 : miny2;
+    int oymax = maxy1 < maxy2 ? maxy1 : maxy2; /* FIX: use maxy2 not miny2 */
     if (oxmin > oxmax || oymin > oymax) return 0; /* integer bbox empty -> <1 pixel */
 
     /* Sample 3x3 interior fractions 1/6,1/2,5/6 of bbox */
     int ixmin = oxmin, ixmax = oxmax, iymin = oymin, iymax = oymax;
     int W = ixmax - ixmin; int H = iymax - iymin;
+    int sample_accept = 0;
     for (int sx = 0; sx < 3; ++sx) {
         for (int sy = 0; sy < 3; ++sy) {
             int tx = ixmin + (((2*sx + 1) * W + 3) / 6);
             int ty = iymin + (((2*sy + 1) * H + 3) / 6);
-            if (point_in_poly_int(tx, ty, faces, vtx, f1, n1) && point_in_poly_int(tx, ty, faces, vtx, f2, n2)) return 1;
+            if (point_in_poly_int(tx, ty, faces, vtx, f1, n1) && point_in_poly_int(tx, ty, faces, vtx, f2, n2)) { sample_accept = 1; break; }
         }
+        if (sample_accept) break;
     }
 
-    /* Sampling failed -> exact clipping fallback */
-    int icx = 0, icy = 0;
-    double iarea = 0.0;
-    if (compute_intersection_centroid(model, f1, f2, &icx, &icy, &iarea)) {
-        if (iarea >= MIN_INTERSECTION_AREA_PIXELS) return 1;
-        /* Rejected due to small clipped area; log for diagnostics */
-        // FILE *lof = fopen("overlap.log","a");
-        // if (lof) {
-        //     fprintf(lof, "Rejected small intersection (clipped): face1,%d,face2,%d,area,%.6f,ox_bbox,%d,%d,%d,%d\n", f1, f2, iarea, oxmin, oymin, oxmax, oymax);
-        //     fclose(lof);
-        // }
-        return 0;
-    }
+    if (sample_accept) return 1;
+    /* Sampling failed -> exact clipping fallback (symmetric) */
+    /* Try computing clipped intersection centroid for both orders (f1 clipped by f2, and f2 clipped by f1)
+     * to avoid order-dependent rejections caused by polygon winding / strict inside tests.
+     */
+    int icx1 = 0, icy1 = 0, icx2 = 0, icy2 = 0;
+    double iarea1 = 0.0, iarea2 = 0.0;
+    int ok1 = compute_intersection_centroid(model, f1, f2, &icx1, &icy1, &iarea1);
+    int ok2 = compute_intersection_centroid(model, f2, f1, &icx2, &icy2, &iarea2);
+    double best_area = iarea1;
+    if (iarea2 > best_area) best_area = iarea2;
+
+    if (best_area >= MIN_INTERSECTION_AREA_PIXELS) return 1;
+    /* Rejected due to small clipped area or no positive-area intersection */
+    return 0;
 
     /* No clipped intersection either -> non-overlap (sampling also failed) */
-    // FILE *lof2 = fopen("overlap.log","a");
-    // if (lof2) {
-    //     fprintf(lof2, "Rejected small intersection (sampled): face1,%d,face2,%d,ox_bbox,%d,%d,%d,%d\n", f1, f2, oxmin, oymin, oxmax, oymax);
-    //     fclose(lof2);
-    // }
     return 0;
 }
 
@@ -2664,23 +2663,21 @@ static int compute_intersection_centroid(Model3D* model, int f1, int f2, int* ou
                 /* both inside -> keep end */
                 tx[out_n] = sx2; ty[out_n] = sy2; out_n++;
             } else if (in1 && !in2) {
-                /* leaving: emit intersection */
-                double denom = (sx1 - sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1 - cx2);
+                /* leaving: emit intersection (Python-compatible formula) */
+                double denom = ((sx2 - sx1) * (cy1 - cy2) + (sy2 - sy1) * (cx2 - cx1));
                 if (fabs(denom) > 1e-12) {
-                    double numx = (sx1*sy2 - sy1*sx2) * (cx1 - cx2) - (sx1 - sx2) * (cx1*cy2 - cy1*cx2);
-                    double numy = (sx1*sy2 - sy1*sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1*cy2 - cy1*cx2);
-                    double ix = numx / denom;
-                    double iy = numy / denom;
+                    double t = ((sx1 - cx1) * (cy1 - cy2) + (sy1 - cy1) * (cx2 - cx1)) / denom;
+                    double ix = sx1 + t * (sx2 - sx1);
+                    double iy = sy1 + t * (sy2 - sy1);
                     tx[out_n] = ix; ty[out_n] = iy; out_n++;
                 }
             } else if (!in1 && in2) {
-                /* entering: emit intersection then end point */
-                double denom = (sx1 - sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1 - cx2);
+                /* entering: emit intersection then end point (Python-compatible formula) */
+                double denom = ((sx2 - sx1) * (cy1 - cy2) + (sy2 - sy1) * (cx2 - cx1));
                 if (fabs(denom) > 1e-12) {
-                    double numx = (sx1*sy2 - sy1*sx2) * (cx1 - cx2) - (sx1 - sx2) * (cx1*cy2 - cy1*cx2);
-                    double numy = (sx1*sy2 - sy1*sx2) * (cy1 - cy2) - (sy1 - sy2) * (cx1*cy2 - cy1*cx2);
-                    double ix = numx / denom;
-                    double iy = numy / denom;
+                    double t = ((sx1 - cx1) * (cy1 - cy2) + (sy1 - cy1) * (cx2 - cx1)) / denom;
+                    double ix = sx1 + t * (sx2 - sx1);
+                    double iy = sy1 + t * (sy2 - sy1);
                     tx[out_n] = ix; ty[out_n] = iy; out_n++;
                 }
                 tx[out_n] = sx2; ty[out_n] = sy2; out_n++;
@@ -2726,6 +2723,43 @@ static int compute_intersection_centroid(Model3D* model, int f1, int f2, int* ou
     if (out_area) *out_area = final_area;
     free(sx); free(sy); free(tx); free(ty);
     return result;
+}
+
+/* Automated regression tests for overlap behaviour
+ * - Reads hardcoded pairs (can be extended) and verifies the overlap result is
+ *   symmetric and positive (both orders report overlap). Returns 0 on success
+ *   and non-zero on failure.
+ */
+static int run_overlap_regression_tests(Model3D* model) {
+    if (!model) return 1;
+    FaceArrays3D* faces = &model->faces;
+    int fc = faces->face_count;
+    /* Hardcoded regression pairs - extend as needed */
+    int pairs[][2] = {
+        {44, 3}
+    };
+    int npairs = sizeof(pairs) / (2 * sizeof(int));
+    int failures = 0;
+    FILE *rf = fopen("regression_fail.csv","w");
+    if (rf) fprintf(rf, "face1,face2,ov12,ov21\n");
+    for (int i = 0; i < npairs; ++i) {
+        int f1 = pairs[i][0]; int f2 = pairs[i][1];
+        if (f1 < 0 || f1 >= fc || f2 < 0 || f2 >= fc) {
+            printf("Regression test pair (%d,%d) out of range (face_count=%d) - skipped\n", f1, f2, fc);
+            continue;
+        }
+        int ov12 = projected_polygons_overlap(model, f1, f2);
+        int ov21 = projected_polygons_overlap(model, f2, f1);
+        if (ov12 != ov21 || ov12 == 0) {
+            printf("REG_FAIL: pair (%d,%d) -> ov12=%d ov21=%d\n", f1, f2, ov12, ov21);
+            if (rf) fprintf(rf, "%d,%d,%d,%d\n", f1, f2, ov12, ov21);
+            failures++;
+        } else {
+            printf("REG_PASS: pair (%d,%d) -> ov=%d\n", f1, f2, ov12);
+        }
+    }
+    if (rf) fclose(rf);
+    if (failures) return 2; return 0;
 }
 
 segment "code03";
@@ -6756,6 +6790,25 @@ segment "code22";
             printf("Auto-fit applied at load (distance=%.4f proj_scale=%.2f)\n", FIXED_TO_FLOAT(model->auto_suggested_distance), FIXED_TO_FLOAT(model->auto_suggested_proj_scale));
         } else {
             params.distance = FLOAT_TO_FIXED(30.0);
+
+            /* Optional: run automated overlap regression tests when env var RUN_OVERLAP_REGRESSION is set */
+            {
+                const char* rr = getenv("RUN_OVERLAP_REGRESSION");
+                if (rr && atoi(rr) != 0) {
+                    int run_overlap_regression_tests(Model3D* model);
+                    extern int run_overlap_regression_tests(Model3D* model);
+                    int rrres = run_overlap_regression_tests(model);
+                    if (rrres != 0) {
+                        printf("Overlap regression tests FAILED (exit %d).\n", rrres);
+                        destroyModel3D(model);
+                        return rrres;
+                    } else {
+                        printf("Overlap regression tests PASSED. Exiting.\n");
+                        destroyModel3D(model);
+                        return 0;
+                    }
+                }
+            }
         }
         // Get observer parameters (user can override defaults by typing values)
         getObserverParams(&params, model);
