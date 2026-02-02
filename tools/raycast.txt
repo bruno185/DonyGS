@@ -1,0 +1,65 @@
+ray_cast doit avoir les constantes suivantes, qui peuvent être calculées à l'avance (dans le code) : 
+const aspect = 320 / 200
+const facteur_x = 2.0 * aspect / 320
+const facteur_y = 2.0 / 200
+
+Ensuite il faut faire :
+
+float Dx = (float)cx * facteur_x - aspect;
+float Dy = 1.0f - (float)cy * facteur_y;
+float Dz = -1.0f;
+
+if (fabsf(denom1) > 0.0001f) { 
+float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;}
+else {
+            printf(" (parallèle)");
+			return 0
+        }
+
+if (fabsf(denom2) > 0.0001f) { 
+float denom1 = A2 * Dx + B2* Dy + C2 * Dz;}
+else {
+            printf(" (parallèle)");
+			return 0
+        }
+
+
+float t1 = -D1 / denom1;
+float t2 = -D2 / denom2;
+
+NB : A1 B1 C1 D1 sont les coef des plans de f1, A2 B2 C2 D2 sont les coef des plans de f2
+
+Si t1 > t2 return 1 else retun -1
+
+derive : 13 (front)/ 14 (back)
+aileron g : 17 (back) / 18 (front)
+aileron d : 15 (front)/ 16 (back)
+
+12/ 11 => 50
+
+on va complètement réécrire painter_newell_sanchaV2. 
+On commence par faire un tri par Z (painter_newell_sancha_fast).
+Esuite un tri à bulle : 
+soit 2 faces f1 et f2. On vérifie d'abord que la paire n'a pas été déjà testée. Si déjà testée, on continue.
+Si pas d'overlap entre f1 et f2, continue
+Si overlap, on fait un ray_cast(f1,f2): si 0 : continue ; si 1 : on marque la paire comme état testée et on continue ; si -1 : on place f1 juste au dessus de f2 dans la sorted list pour que indice(f1) = indice (f2)+1, et on met un flag pour indiquer qu'il y a eu un movement.
+Répatétion jusqu'à plus de mouvement.
+
+bb.obj : 160/0 ==> 
+
+
+A la fin de inspect_ray_cast il faut :
+passer en mode graphique 
+afficher le model en file de fer.
+Affichier f1 en vert et f2 en rose, framed en rouge.
+afficher en blanc le frame du rectangle d'intersection de 2 bbox.
+Afficher une petite croix en blanc sur le centre de ce rectangle. 
+
+tu peux t'inspirer de A la fin de inspect_ray_cast il faut :
+passer en mode graphique 
+afficher le model en file de fer.
+Affichier f1 en vert et f2 en rose, framed en rouge.
+afficher en blanc le frame du rectangle d'intersection de 2 bbox.
+Afficher une petite croix en blanc sur le centre de ce rectangle. 
+
+ 

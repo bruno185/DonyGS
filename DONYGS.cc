@@ -72,8 +72,8 @@
 segment "data";
 
 // ============================================================================
-// --- Variable globale pour la vérification des indices de sommet dans readFaces ---
-// (Ajouté pour garantir la cohérence OBJ)
+// --- Global variable for vertex index verification in readFaces ---
+// (Added to ensure OBJ consistency)
 int readVertices_last_count = 0;
 
 // --- Global persistent polygon handle for drawing ---
@@ -163,11 +163,11 @@ static int *order_buf = NULL; static int order_cap = 0;
  * FIXED POINT ARITHMETIC - 64-bit safe version
  * =============================================
  * 
- * Cette version utilise l'arithmétique en virgule fixe 16.16 avec
- * des calculs intermédiaires 64-bit pour éviter les débordements.
+ * This implementation uses 16.16 fixed-point arithmetic with
+ * 64-bit intermediate calculations to avoid overflow.
  * 
- * Format: 16.16 (16 bits entiers, 16 bits fractionnaires)
- * Plage: -32768.0 à +32767.99998 avec précision de 1/65536
+ * Format: 16.16 (16 integer bits, 16 fractional bits)
+ * Range: -32768.0 to +32767.99998 with 1/65536 precision
  */
 
 // Basic fixed-point definitions
@@ -801,11 +801,11 @@ void painter_newell_sancha(Model3D* model, int face_count) {
     int i, j;
     
     Fixed32* face_zmean = faces->z_mean;
-    if (!face_zmean) return; // sécurité
+    if (!face_zmean) return; // safety
 
 
     // * * * * * 
-    // Etape 1 : Tri Z décroissant STABLE sur la moyenne, avec tie-breaker sur l'indice d'origine
+    // Step 1: Stable descending Z sort on the mean, with tie-breaker on original index
     // * * * * *
 
     long t_start = GetTick();
@@ -928,7 +928,7 @@ void painter_newell_sancha(Model3D* model, int face_count) {
         int t7 = 0;
 
 
-        // Parcours des paires consécutives (seulement sur faces visibles si culling activé)
+        // Iterate consecutive pairs (only over visible faces if culling is enabled)
         for (i = 0; i < visible_count-1; i++) {
             int f1 = faces->sorted_face_indices[i];
             int f2 = faces->sorted_face_indices[i+1];
@@ -1004,11 +1004,11 @@ void painter_newell_sancha(Model3D* model, int face_count) {
             Fixed64 d2 = faces->plane_d[f2];
             Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
 
-            int obs_side1 = 0; // côté de l'observateur par rapport au plan de f1 : +1, -1 ou 0 (inconclusive)
-            int obs_side2 = 0; // côté de l'observateur par rapport au plan de f2 : +1, -1 ou 0 (inconclusive)
-            int side;           // coté du vertex.
-            int all_same_side; // flag pour indiquer si tous les vertex sont du même coté
-            int all_opposite_side; // flag pour indiquer si tous les vertex sont du coté opposé
+            int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
+            int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
+            int side;           // vertex side.
+            int all_same_side; // flag indicating whether all vertices are on the same side
+            int all_opposite_side; // flag indicating whether all vertices are on the opposite side
             /* test_value replaced by Fixed64 accumulators inside loops to avoid Fixed32 overflow */
             Fixed64 test_value64 = 0;
 
@@ -1053,8 +1053,8 @@ void painter_newell_sancha(Model3D* model, int face_count) {
                     else if (acc < -(Fixed64)epsilon) side = -1;
                     else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
                     if (obs_side1 != side) { 
-                        // si un vertex est de l'autre coté, on sort de la boucle
-                        // et on met le flag à 0 pour indiquer que le test a échoué (et passer au test suivant)
+                        // if a vertex is on the other side, break the loop
+                        // and set the flag to 0 to indicate the test failed (move to next test)
                         all_same_side = 0; 
                         #if ENABLE_DEBUG_SAVE
                             printf("Test 4 failed for faces %d and %d\n", f1, f2);
@@ -1114,8 +1114,8 @@ void painter_newell_sancha(Model3D* model, int face_count) {
                 else if (acc < -(Fixed64)epsilon) side = -1;
                 else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
                 if (obs_side2 == side) {
-                    // si un vertex est du même coté, on sort de la boucle
-                    // et on met le flag à 0 pour indiquer que le test a échoué (et passer au test suivant)
+                    // if a vertex is on the same side, break the loop
+                    // and set the flag to 0 to indicate the test failed (move to next test)
                     all_opposite_side = 0; 
                     #if ENABLE_DEBUG_SAVE
                             printf("Test 5 failed for faces %d and %d\n", f1, f2);
@@ -1186,7 +1186,7 @@ void painter_newell_sancha(Model3D* model, int face_count) {
                 }
 
                 if (all_opposite_side == 1) { // test 6 passed
-                // f2 est du coté opposé de l'observateur, donc f2 est  derrière f1 ==> échange nécessaire
+                // f2 is on the opposite side of the observer, therefore f2 is behind f1 ==> swap required
                     #if ENABLE_DEBUG_SAVE
                     printf("Test 6 passed for faces %d and %d\n", f1, f2);
                     keypress();
@@ -1248,7 +1248,7 @@ void painter_newell_sancha(Model3D* model, int face_count) {
                     break; 
                     }
             }
-                // f1 n'est pas du même côté de l'observateur, donc f1 n'est pas devant f2
+                // f1 is not on the same side as the observer, so f1 is not in front of f2
                 // on ne doit pas échanger l'ordre des faces
                 // aucun test n'a permis de conclure : on signale non concluant
                 if (all_same_side == 0)  goto skipT7;
@@ -1299,7 +1299,7 @@ void painter_newell_sancha(Model3D* model, int face_count) {
         
         skipT7: 
         // Si on arrive ici, c'est que auncun test n'a pas permis de conclure
-        // 0n devrait découper f1 par f2 (ou inversement), mais on ne le fait pas pour l'instant
+        // We should perform clipping of f1 by f2 (or vice versa), but it is not done now
         #if ENABLE_DEBUG_SAVE
                 printf("NON CONCLUTANT POUR LES FACES %d ET %d\n", f1, f2);
                 keypress();
@@ -1309,8 +1309,8 @@ void painter_newell_sancha(Model3D* model, int face_count) {
                 inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
                 inconclusive_pairs_count++;
             }
-        // on les met dans la liste des paires ordonnées pour ne plus les tester
-        // puisque les tests n'ont pas permis de conclure,l'ordre actuel est conservé
+        // add them to the ordered-pairs list so they are not retested
+        // if tests were inconclusive, preserve the current ordering
         if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
                 ordered_pairs[ordered_pairs_count].face1 = f2;
                 ordered_pairs[ordered_pairs_count].face2 = f1;
@@ -1335,7 +1335,7 @@ void painter_newell_sancha(Model3D* model, int face_count) {
         keypress();
     #endif
 
-    // Libérer la mémoire de la liste des paires ordonnées
+    // Free the memory of the ordered pairs list
     if (ordered_pairs) {
         free(ordered_pairs);
     }  
@@ -2096,21 +2096,26 @@ void painter_newell_sanchaV2(Model3D* model, int face_count) {
             }
         }
     }
-    printf("Number of cases where all tests failed: %d\n", failed_tests_count);
-    if (failed_pairs_count > 0) {
-        printf("Pairs where all tests failed:\n");
-        for (int k = 0; k < failed_pairs_count; ++k) {
-            if (k % 3 == 0) printf("  ");
-            printf("(face %d, face %d)", failed_pairs[2 * k], failed_pairs[2 * k + 1]);
-            if ((k % 3 == 2) || (k == failed_pairs_count - 1)) {
-                printf("\n");
-            } else {
-                printf(" ; ");
-            }
-        }
-        fflush(stdout);
-    }
-    keypress();
+    // debug output of failed tests
+    // {
+    // printf("Number of cases where all tests failed: %d\n", failed_tests_count);
+    // if (failed_pairs_count > 0) {
+    //     printf("Pairs where all tests failed:\n");
+    //     for (int k = 0; k < failed_pairs_count; ++k) {
+    //         if (k % 3 == 0) printf("  ");
+    //         printf("(face %d, face %d)", failed_pairs[2 * k], failed_pairs[2 * k + 1]);
+    //         if ((k % 3 == 2) || (k == failed_pairs_count - 1)) {
+    //             printf("\n");
+    //         } else {
+    //             printf(" ; ");
+    //         }
+    //     }
+    //     fflush(stdout);
+    // }
+    // keypress();
+    // }
+
+
     free(pos_of_face); free(min_allowed_pos);
     if (pair_done) free(pair_done);
     if (failed_pairs) free(failed_pairs);
@@ -2295,6 +2300,86 @@ int check_sort(Model3D* model, int face_count) {
     free(pos_of_face);
     printf("check_sort: checked=%d mismatches=%d undetermined=%d skipped_by_cull=%d\n", checked, mismatches, undetermined, skipped_by_cull);
     return mismatches;
+}
+
+/* check_sort_repair
+ * -----------------
+ * Minimal deterministic repair of face ordering. For each pair that
+ * `check_sort` would report as a mismatch, move the offending face by
+ * a single minimal step so the ordering matches `ray_cast`:
+ *  - If ray_cast == -1 (f1 closer than f2), ensure f1 is immediately AFTER f2.
+ *  - If ray_cast ==  1 (f1 farther  than f2), ensure f1 is immediately BEFORE f2.
+ * Returns the number of repairs performed.
+ */
+int check_sort_repair(Model3D* model, int face_count) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (face_count <= 0) return 0;
+
+    int n = face_count;
+    int *pos_of_face = (int*)malloc(sizeof(int) * n);
+    if (!pos_of_face) return 0;
+    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+
+    int repairs = 0;
+
+    for (int f1 = 0; f1 < n; ++f1) {
+        if (faces->display_flag[f1] == 0) continue;
+        if (cull_back_faces && faces->plane_d[f1] <= 0) continue;
+        for (int f2 = f1 + 1; f2 < n; ++f2) {
+            if (faces->display_flag[f2] == 0) continue;
+            if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
+
+            int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+            int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+            // Quick reject: no bbox overlap
+            if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
+
+            // If projected polygons do not overlap (touching considered non-overlap), skip
+            if (!projected_polygons_overlap(model, f1, f2)) continue;
+
+            int pos1 = pos_of_face[f1];
+            int pos2 = pos_of_face[f2];
+            int rc = ray_cast(model, f1, f2);
+            if (rc == 0) continue; // undetermined
+
+            if (rc == -1) {
+                // f1 is closer than f2 -> should be AFTER f2 (pos1 > pos2)
+                if (!(pos1 > pos2)) {
+                    // move f1 to immediately after f2 (minimal change)
+                    int tmp = faces->sorted_face_indices[pos1];
+                    if (pos1 < pos2) {
+                        // shift left the block [pos1+1 .. pos2] into [pos1 .. pos2-1]
+                        memmove(&faces->sorted_face_indices[pos1], &faces->sorted_face_indices[pos1+1], sizeof(int) * (pos2 - pos1));
+                        faces->sorted_face_indices[pos2] = tmp;
+                        // update positions
+                        for (int k = pos1; k <= pos2; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
+                    } else {
+                        // pos1 == pos2 should not happen for distinct faces; ignore gracefully
+                    }
+                    ++repairs;
+                    printf("check_sort_repair: moved face %d AFTER %d (pos %d -> %d)\n", f1, f2, pos1, pos2);
+                }
+            } else if (rc == 1) {
+                // f1 is farther than f2 -> should be BEFORE f2 (pos1 < pos2)
+                if (!(pos1 < pos2)) {
+                    int tmp = faces->sorted_face_indices[pos1];
+                    if (pos1 > pos2) {
+                        // shift right the block [pos2 .. pos1-1] into [pos2+1 .. pos1]
+                        memmove(&faces->sorted_face_indices[pos2+1], &faces->sorted_face_indices[pos2], sizeof(int) * (pos1 - pos2));
+                        faces->sorted_face_indices[pos2] = tmp;
+                        for (int k = pos2; k <= pos1; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
+                    }
+                    ++repairs;
+                    printf("check_sort_repair: moved face %d BEFORE %d (pos %d -> %d)\n", f1, f2, pos1, pos2);
+                }
+            }
+        }
+    }
+
+    free(pos_of_face);
+    printf("check_sort_repair: repairs=%d\n", repairs);
+    return repairs;
 }
 
 segment "code02";
@@ -2486,7 +2571,7 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
     }
 
     // SUPPRESSION : Containment tests are disabled. 
-    //Risque : cas d'une face entièrement contenue dans l'autre non détecté (mais test Z aura trié)
+    //Risk: case where a face is completely contained in another may be missed (Z test will sort it)
     /* Containment tests: only check if candidate point lies inside the other's bbox first
      * (cheap) before doing the full ray-cast in point_in_poly_int. This skips expensive
      * loops for points obviously outside the other polygon's bbox. */
@@ -2512,6 +2597,25 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
     return 0;
 }
 
+/*
+ * projected_polygons_overlap(model, f1, f2)
+ * -----------------------------------------
+ * Determine whether the 2D projections of faces f1 and f2 overlap (touching only = non-overlap).
+ * The decision is made by a sequence of increasingly expensive tests to be conservative and fast:
+ *
+ * Steps (in order):
+ *  1) BBox quick-reject: if integer bboxes are disjoint or only touch -> NON-overlap.
+ *  2) Edge-vs-edge proper intersection: per-edge AABB quick-reject then integer segment intersection.
+ *  3) Containment: check if any vertex of one polygon lies strictly inside the other (points on edge treated as outside).
+ *  4) Identical-polygons special-case: identical vertex sequences are considered overlapping.
+ *  5) Candidate handling: compute integer intersection bbox and fast-sample interior pixels.
+ *  6) Fast-sampling: test center pixel then a 3x3 grid of interior pixel centers; accept on any positive sample.
+ *  7) Exact clipping fallback: ordered Sutherland–Hodgman clipping in both directions (f1 clipped by f2, and vice versa).
+ *  8) Validity test: accept clipped result only if area >= MIN_INTERSECTION_AREA_PIXELS and <= bbox_area (+eps).
+ *
+ * When both clipped orders are valid, preference is given to (f1 clipped by f2) to match Python semantics.
+ * Debugging hooks print detailed clipping and centroid data when enabled.
+ */
 static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
@@ -2538,13 +2642,15 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     int off2 = faces->vertex_indices_ptr[f2];
 
     /* Debug: enable verbose output for a specific pair by setting OVERLAP_DEBUG_PAIR="f1,f2" in the environment */
-    int dbg_pair = 1;
+    int dbg_pair = 0;
 
 
-    /* Edge-vs-edge proper intersection with per-edge bbox quick-reject."
-     * This avoids expensive orientation tests for clearly separated edges.
-     * We use <= in bbox checks so that touching-only edges are treated as
-     * non-overlapping (consistent with the semantics). */
+    /* Step 2: Edge-vs-edge proper intersection check.
+     * For each edge in f1 and each edge in f2:
+     *  - Quick AABB reject to skip clearly separated edges (<= treats touching as non-overlap).
+     *  - If AABBs overlap, perform integer segment intersection test.
+     * If a proper segment intersection is found we mark the pair as a candidate
+     * (note: we do not immediately accept; further tests follow). */
     int candidate = 0;
     for (int i = 0; i < n1; ++i) {
         int i2 = (i+1) % n1;
@@ -2575,9 +2681,10 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         if (candidate) break;
     }
 
-    /* Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
-     * Points on edge are considered outside (no overlap). If containment is detected
-     * mark candidate and verify by computing intersection area (centroid). */
+    /* Step 3: Containment tests.
+     * Check every vertex of poly1 against poly2 and vice versa, skipping vertices outside the other's bbox.
+     * Points lying exactly on the other's boundary are considered outside (no overlap).
+     * If a vertex is strictly inside the other polygon, mark the pair as a candidate. */
     if (!candidate) {
         for (int ii = 0; ii < n1; ++ii) {
             int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
@@ -2598,24 +2705,25 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     }
 
     if (!candidate) {
-        /* Special case: identical 2D polygons (e.g., duplicated faces or reversed ordering)
-         * should be considered overlapping even though vertex-on-edge tests would treat
-         * boundary points as outside. Check for identical vertex sequences here. */
+        /* Step 4: Identical polygons special-case.
+         * If the 2D vertex sequences are identical (maybe reversed), treat the faces as overlapping.
+         */
         if (faces_vertices_equal(faces, vtx, f1, f2)) return 1;
         return 0;
     }
 
-    /* Candidate found: compute integer overlap bbox and sample a 3x3 grid of interior pixel centers.
-     * If any sample is inside both polygons -> accept (fast path). Otherwise perform exact clipping
-     * and accept only if clipped area >= MIN_INTERSECTION_AREA_PIXELS (exact fallback).
-     */
+    /* Step 5: Candidate handling & sampling fallback.
+     * Compute the integer intersection bbox of the projected polygons.
+     * Fast path: test the center pixel and a 3x3 grid of interior pixel centers.
+     * If any sampled pixel is strictly inside both polygons, accept immediately.
+     * Otherwise, proceed to exact clipping fallback and area thresholding. */
     int oxmin = minx1 > minx2 ? minx1 : minx2;
     int oxmax = maxx1 < maxx2 ? maxx1 : maxx2;
     int oymin = miny1 > miny2 ? miny1 : miny2;
     int oymax = maxy1 < maxy2 ? maxy1 : maxy2; /* FIX: use maxy2 not miny2 */
     if (oxmin > oxmax || oymin > oymax) return 0; /* integer bbox empty -> <1 pixel */
 
-    /* Quick center test: check center of integer bbox first (cheap, handles many cases) */
+    /* Step 6: Quick center test (cheap) - check center of integer bbox */
     int cx = (oxmin + oxmax) / 2; int cy = (oymin + oymax) / 2;
     if (point_in_poly_int(cx, cy, faces, vtx, f1, n1) && point_in_poly_int(cx, cy, faces, vtx, f2, n2)) {
         overlapSampleAccept++;
@@ -2623,8 +2731,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         return 1;
     }
 
-    /* Adaptive sampling: use 3x3 grid (simple and fast)
-     * Note: center already tested above, so sampling covers surrounding points. */
+    /* Step 7: Adaptive 3x3 sampling around bbox interior (center already tested above). */
     int ixmin = oxmin, ixmax = oxmax, iymin = oymin, iymax = oymax;
     int W = ixmax - ixmin; int H = iymax - iymin;
     int sample_accept = 0; int N = 3;
@@ -2643,9 +2750,15 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         return 1;
     }
 
-    /* Sampling failed -> exact clipping fallback. Compute clipped intersections in both orders
-     * and accept only when a valid clipped area (<= bbox intersection area) meets the MIN threshold.
-     * Preference is given to (f1 clipped by f2) to match Python semantics when both are valid. */
+    /* Step 8: Exact clipping fallback using Sutherland–Hodgman.
+     * Perform ordered clipping in both directions (f1 clipped by f2, and f2 clipped by f1).
+     * For each clipping result compute centroid and absolute area in pixel^2.
+     * A clipping result is valid only if:
+     *  - clipping succeeded, and
+     *  - area >= MIN_INTERSECTION_AREA_PIXELS, and
+     *  - area <= bbox_area + eps (sanity: can't exceed integer bbox area)
+     * If both orders produce valid results, prefer (f1 clipped by f2) to match Python semantics.
+     */
     int icx1 = 0, icy1 = 0; double iarea1 = 0.0;
     int icx2 = 0, icy2 = 0; double iarea2 = 0.0;
     overlapClipCalls++;
@@ -3248,6 +3361,7 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
 // ===================== RAY CAST & INSPECTOR PROTOTYPES =====================
 int ray_cast(Model3D* model, int f1, int f2);
 int check_sort(Model3D* model, int face_count);
+int check_sort_repair(Model3D* model, int face_count);
 void inspect_ray_cast(Model3D* model);
 // Prototypes only at the top
 // ===================== RAY CAST & INSPECTOR IMPLEMENTATION =====================
@@ -5505,7 +5619,7 @@ int loadModel3D(Model3D* model, const char* filename) {
     }
     
     // Step 1: Read vertices from OBJ file
-    // --- MAJ du compteur global pour la vérification des indices de faces ---
+    // --- Update global counter for face index verification ---
     readVertices_last_count = model->vertices.vertex_count;
     
     int vcount = readVertices(filename, &model->vertices, MAX_VERTICES, model);
@@ -7306,7 +7420,7 @@ segment "code22";
                 if (colorpalette == 1) { 
                     DoColor(); 
                 }
-                // S'il y a des paire inconclusive et si l'affichage est activé, on les souligne à l'affichage
+                // If there are inconclusive pairs and display is enabled, underline them on screen
                 if (show_inconclusive && inconclusive_pairs_count > 0) {
                     frameInconclusivePairs(model);  
                 }
@@ -7373,6 +7487,13 @@ segment "code22";
             case 114: // 'r'
                 pan_dx += 10; // move right by 10 pixels
                 printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
+                goto loopReDraw;
+
+            case 59: // ';' - Run check_sort_repair (repair ordering) and wait for key so user can read results
+                printf("Running check_sort_repair (ray_cast verification & minimal repair)...\n");
+                check_sort_repair(model, model->faces.face_count);
+                printf("Press any key to continue...\n");
+                keypress();
                 goto loopReDraw;
 
             case 60: // '<' - Run check_sort and wait for key so user can read results
