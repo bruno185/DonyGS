@@ -2747,21 +2747,28 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
 /*
  * projected_polygons_overlap(model, f1, f2)
  * -----------------------------------------
- * Determine whether the 2D projections of faces f1 and f2 overlap (touching only = non-overlap).
- * The decision is made by a sequence of increasingly expensive tests to be conservative and fast:
+ * Détermine si les projections 2D des faces `f1` et `f2` se recouvrent (le simple contact = NON-recouvrement).
+ * La décision est prise par une suite de tests de coût croissant afin d'être conservatif et rapide.
  *
- * Steps (in order):
- *  1) BBox quick-reject: if integer bboxes are disjoint or only touch -> NON-overlap.
- *  2) Edge-vs-edge proper intersection: per-edge AABB quick-reject then integer segment intersection.
- *  3) Containment: check if any vertex of one polygon lies strictly inside the other (points on edge treated as outside).
- *  4) Identical-polygons special-case: identical vertex sequences are considered overlapping.
- *  5) Candidate handling: compute integer intersection bbox and fast-sample interior pixels.
- *  6) Fast-sampling: test center pixel then a 3x3 grid of interior pixel centers; accept on any positive sample.
- *  7) Exact clipping fallback: ordered Sutherland–Hodgman clipping in both directions (f1 clipped by f2, and vice versa).
- *  8) Validity test: accept clipped result only if area >= MIN_INTERSECTION_AREA_PIXELS and <= bbox_area (+eps).
+ * Étapes (dans l'ordre) :
+ *  1) Rejet rapide par AABB : si les boîtes entières sont disjointes ou seulement en contact -> NON-overlap.
+ *  2) Règle d'acceptation précoce (heuristique) : si une arête d'un polygone présente **≥ 2** intersections propres
+ *     avec l'autre polygone (entrée + sortie), on accepte immédiatement (recouvrement certain pour cette arête).
+ *     Cette règle vise à éviter le clipping coûteux dans les cas évidents. Attention : le résultat dépend du
+ *     comportement de `segs_intersect_int` (et de sa tolérance interne), donc la tolérance peut affecter ce test.
+ *  3) Vérification arête‑contre‑arête (intersection propre) : pour chaque paire d'arêtes, AABB quick-reject puis
+ *     test d'intersection entier ; une intersection propre marque la paire comme *candidate* (on n'accepte pas
+ *     immédiatement mais on continue avec les tests d'échantillonnage et de clipping).
+ *  4) Tests de contenance : vérifier si un sommet de l'un est strictement à l'intérieur de l'autre (points sur bord
+ *     comptés comme extérieurs).
+ *  5) Cas spécial : polygones identiques (mêmes séquences de sommets) sont considérés comme recouvrant.
+ *  6) Gestion des candidats et échantillonnage : calculer la boîte d'intersection entière et tenter des échantillons
+ *     rapides (centre puis grille 3×3) pour acceptation rapide.
+ *  7) Si l'échantillonnage échoue, recours au clipping exact (Sutherland–Hodgman) dans les deux sens (f1→f2 et f2→f1).
+ *  8) Test de validité sur l'aire de clipping : n'accepter que si aire >= MIN_INTERSECTION_AREA_PIXELS et <= aire bbox (+eps).
  *
- * When both clipped orders are valid, preference is given to (f1 clipped by f2) to match Python semantics.
- * Debugging hooks print detailed clipping and centroid data when enabled.
+ * Lorsqu'un résultat de clipping est valide dans les deux sens, on préfère (f1 clipped by f2) pour conserver la sémantique
+ * Python. Les hooks de débogage impriment des détails sur le clipping et les centroïdes quand activés.
  */
 static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     if (!model) return 0;
@@ -2782,19 +2789,26 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
 
     int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
     int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-    // Quick reject: if bboxes are disjoint OR only touching at edge/point -> NON-overlap
+
+    /* Step 1: Quick reject by AABB (axis-aligned bounding boxes)
+     * - If integer bounding boxes are disjoint or only touch at an edge/point
+     *   we treat the polygons as NON-overlapping (touching-only = non-overlap).
+     * - This is a very cheap early filter to avoid running heavier tests.
+     */
     if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) return 0;
 
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
 
-
-    // XXXXX
-/* ============================================================
-   NEW RULE: A segment that has 2 strict intersections with the
-   other polygon => polygons overlap.
-   ============================================================ */
-
+    /* Step 2: Early-accept heuristic — per-edge double-intersection rule
+     * - Heuristic: if any single edge of f1 (or f2) has >= 2 proper intersections
+     *   with the other polygon, then that edge must enter and exit the polygon
+     *   (clear crossing). We accept immediately (return 1) to avoid expensive
+     *   sampling/clipping in these straightforward cases.
+     * - Note: this depends on `segs_intersect_int`'s definition of "proper"
+     *   intersection and on the configured tolerance; changing tolerance may
+     *   affect which intersections are counted here.
+     */
 {
     int count;
 
@@ -2852,7 +2866,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     int dbg_pair = 0;
 
 
-    /* Step 2: Edge-vs-edge proper intersection check.
+    /* Step 3: Edge-vs-edge proper intersection check.
      * For each edge in f1 and each edge in f2:
      *  - Quick AABB reject to skip clearly separated edges (<= treats touching as non-overlap).
      *  - If AABBs overlap, perform integer segment intersection test.
@@ -2919,7 +2933,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         return 0;
     }
 
-    /* Step 5: Candidate handling & sampling fallback.
+    /* Step 6: Candidate handling & sampling fallback.
      * Compute the integer intersection bbox of the projected polygons.
      * Fast path: test the center pixel and a 3x3 grid of interior pixel centers.
      * If any sampled pixel is strictly inside both polygons, accept immediately.
@@ -2930,7 +2944,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     int oymax = maxy1 < maxy2 ? maxy1 : maxy2; /* FIX: use maxy2 not miny2 */
     if (oxmin > oxmax || oymin > oymax) return 0; /* integer bbox empty -> <1 pixel */
 
-    /* Step 6: Quick center test (cheap) - check center of integer bbox */
+    /* Step 7: Quick center test (cheap) - check center of integer bbox */
     int cx = (oxmin + oxmax) / 2; int cy = (oymin + oymax) / 2;
     if (point_in_poly_int(cx, cy, faces, vtx, f1, n1) && point_in_poly_int(cx, cy, faces, vtx, f2, n2)) {
         overlapSampleAccept++;
@@ -2938,7 +2952,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         return 1;
     }
 
-    /* Step 7: Adaptive 3x3 sampling around bbox interior (center already tested above). */
+    /* Step 8: Adaptive 3x3 sampling around bbox interior (center already tested above). */
     int ixmin = oxmin, ixmax = oxmax, iymin = oymin, iymax = oymax;
     int W = ixmax - ixmin; int H = iymax - iymin;
     int sample_accept = 0; int N = 3;
@@ -2957,7 +2971,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         return 1;
     }
 
-    /* Step 8: Exact clipping fallback using Sutherland–Hodgman.
+    /* Step 9: Exact clipping fallback using Sutherland–Hodgman.
      * Perform ordered clipping in both directions (f1 clipped by f2, and f2 clipped by f1).
      * For each clipping result compute centroid and absolute area in pixel^2.
      * A clipping result is valid only if:
