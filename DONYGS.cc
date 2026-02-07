@@ -2410,17 +2410,140 @@ static int on_seg_ll(long long ax,long long ay,long long bx,long long by,long lo
     if (( (ax<=cx && cx<=bx) || (bx<=cx && cx<=ax) ) && ((ay<=cy && cy<=by) || (by<=cy && cy<=ay))) return 1;
     return 0;
 }
+/* tolerance (in pixels) below which an intersection is considered too close
+ * to a vertex/edge and thus ignored. Default set by user request to 1.0 px. */
+static double segs_intersect_tol_px = 1.0;
+
+/*
+ * point_seg_dist2
+ * ----------------
+ * Calcule la distance au carré entre un point P(px,py) et un segment AB (ax,ay)-(bx,by).
+ *
+ * Raison d'utiliser la distance au carré : évite l'appel coûteux à sqrt() pour des
+ * comparaisons (nous comparons toujours à tol^2). Cela améliore la performance et
+ * évite des erreurs d'arrondi supplémentaires.
+ *
+ * Méthode : projection orthogonale du point sur la droite AB.
+ * - On calcule le paramètre de projection c = (AB · AP).
+ * - Si c <= 0, le plus proche est A (distance P-A).
+ * - Si c >= |AB|^2, le plus proche est B (distance P-B).
+ * - Sinon, on projette P sur AB et on renvoie la distance P - projection.
+ *
+ * Propriétés et invariants :
+ * - Retourne une valeur >= 0 (double) correspondant à (distance)^2.
+ * - Comportement bien défini pour segments dégénérés (A==B) : la branche c>=d couvre ce cas.
+ */
+static double point_seg_dist2(double px, double py, double ax, double ay, double bx, double by) {
+    double vx = bx - ax, vy = by - ay;
+    double wx = px - ax, wy = py - ay;
+    double c = vx*wx + vy*wy;
+    if (c <= 0.0) return wx*wx + wy*wy; /* closest to A */
+    double d = vx*vx + vy*vy;
+    if (c >= d) return (px - bx)*(px - bx) + (py - by)*(py - by); /* closest to B or AB degenerate */
+    double b = c / d;
+    double projx = ax + b * vx, projy = ay + b * vy;
+    double dx = px - projx, dy = py - projy;
+    return dx*dx + dy*dy; /* squared distance to projection */
+}
+
+/*
+ * set_segs_intersect_tol_px
+ * -------------------------
+ * Setter runtime pour ajuster la tolérance (en pixels) utilisée par
+ * `segs_intersect_int_dbl` pour ignorer les intersections jugées trop
+ * proches des sommets/aretes.
+ *
+ * Comportement :
+ * - Les valeurs négatives sont clampées à 0.0 (tolérance minimale nulle).
+ * - La tolérance est interprétée en pixels d'écran.
+ * - Modifier cette valeur influence directement les décisions d'intersection
+ *   : augmenter tol réduit les faux positifs sur croisements sub‑pixel, mais
+ *   peut masquer de petits recouvrements réels.
+ *
+ * Usage recommandé : fixer la tolérance entre 0.25 et 1.5 px selon vos
+ * exigences visuelles ; 1.0 px est le réglage par défaut après discussion.
+ */
+static void set_segs_intersect_tol_px(double px) {
+    if (px < 0.0) px = 0.0;
+    segs_intersect_tol_px = px;
+}
+
+/*
+ * segs_intersect_int_dbl
+ * ----------------------
+ * Double-precision core used by the integer wrapper and unit tests.
+ *
+ * Steps and rationale (detailed) :
+ * 1) Orientation test (proper intersection):
+ *    - We round coordinates to the nearest integer when computing orientations
+ *      (via floor(x+0.5)) in order to preserve the original integer semantics
+ *      used elsewhere in the codebase (avoids surprising behaviour due to tiny
+ *      floating-point perturbations when deciding "proper" orientation).
+ *    - A proper intersection requires strict sign differences for the pair of
+ *      orientations on each segment (standard robust test).
+ *
+ * 2) Intersection point computation:
+ *    - If orientation indicates a proper intersection, we compute the exact
+ *      intersection point in double precision (t parameter and point coords).
+ *    - Guard against near-parallel segments using a small epsilon on the
+ *      determinant (fabs(denom) < 1e-12) to avoid numerical instability.
+ *
+ * 3) Proximity filtering (tolérance en pixels) :
+ *    - We consider a global tolerance `segs_intersect_tol_px` (in pixels).
+ *    - If the computed intersection point lies within `tol` of any of the 4
+ *      segment endpoints, we treat the intersection as spurious and return 0.
+ *      This removes sub-pixel / endpoint-touch cases that would otherwise be
+ *      reported as proper intersections due to integer orientation tests.
+ *
+ * 4) Endpoint-segment proximity test :
+ *    - Additionally, if any of the 4 segment endpoints is within `tol` of
+ *      the other segment (distance point→segment < tol), we also ignore the
+ *      intersection (returned 0). This handles cases where an endpoint lies
+ *      very near the interior of the other segment but rounding/orientation
+ *      might have flagged a proper intersection.
+ *
+ * 5) Final decision : return 1 only if the intersection is proper and passes
+ *    both proximity filters. This yields a conservative behavior tuned to
+ *    avoid visual artifacts from sub-pixel intersections while preserving
+ *    real, well-separated crossings.
+ */
+static int segs_intersect_int_dbl(double x1,double y1,double x2,double y2,double x3,double y3,double x4,double y4) {
+    long long o1 = orient_ll((long long)floor(x1+0.5),(long long)floor(y1+0.5),(long long)floor(x2+0.5),(long long)floor(y2+0.5),(long long)floor(x3+0.5),(long long)floor(y3+0.5));
+    long long o2 = orient_ll((long long)floor(x1+0.5),(long long)floor(y1+0.5),(long long)floor(x2+0.5),(long long)floor(y2+0.5),(long long)floor(x4+0.5),(long long)floor(y4+0.5));
+    long long o3 = orient_ll((long long)floor(x3+0.5),(long long)floor(y3+0.5),(long long)floor(x4+0.5),(long long)floor(y4+0.5),(long long)floor(x1+0.5),(long long)floor(y1+0.5));
+    long long o4 = orient_ll((long long)floor(x3+0.5),(long long)floor(y3+0.5),(long long)floor(x4+0.5),(long long)floor(y4+0.5),(long long)floor(x2+0.5),(long long)floor(y2+0.5));
+    /* Proper intersection only: require strict orientation differences */
+    if (!(((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0)))) return 0;
+
+    /* Compute intersection point (double) */
+    double dx1 = x2 - x1, dy1 = y2 - y1;
+    double dx2 = x4 - x3, dy2 = y4 - y3;
+    double denom = dx1 * (-dy2) - dy1 * (-dx2);
+    if (fabs(denom) < 1e-12) return 0;
+    double t = ((x3 - x1) * (-dy2) - (y3 - y1) * (-dx2)) / denom;
+    double ix = x1 + t * dx1;
+    double iy = y1 + t * dy1;
+
+    double tol2 = segs_intersect_tol_px * segs_intersect_tol_px;
+
+    /* If intersection point is too close to any endpoint, ignore it */
+    double dx, dy;
+    dx = ix - x1; dy = iy - y1; if (dx*dx + dy*dy < tol2) return 0;
+    dx = ix - x2; dy = iy - y2; if (dx*dx + dy*dy < tol2) return 0;
+    dx = ix - x3; dy = iy - y3; if (dx*dx + dy*dy < tol2) return 0;
+    dx = ix - x4; dy = iy - y4; if (dx*dx + dy*dy < tol2) return 0;
+
+    /* If any endpoint is very close to the other segment, ignore */
+    if (point_seg_dist2(x1,y1,x3,y3,x4,y4) < tol2) return 0;
+    if (point_seg_dist2(x2,y2,x3,y3,x4,y4) < tol2) return 0;
+    if (point_seg_dist2(x3,y3,x1,y1,x2,y2) < tol2) return 0;
+    if (point_seg_dist2(x4,y4,x1,y1,x2,y2) < tol2) return 0;
+
+    return 1;
+}
+
 static int segs_intersect_int(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
-    long long o1 = orient_ll(x1,y1,x2,y2,x3,y3);
-    long long o2 = orient_ll(x1,y1,x2,y2,x4,y4);
-    long long o3 = orient_ll(x3,y3,x4,y4,x1,y1);
-    long long o4 = orient_ll(x3,y3,x4,y4,x2,y2);
-    /* Proper intersection only: require strict orientation differences
-     * This excludes colinear overlaps and endpoint-touching, which we treat
-     * as NON-overlapping for the purposes of projected_polygons_overlap. */
-    if (((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0))) return 1;
-    /* Ignore colinear or on-segment cases (return 0) */
-    return 0;
+    return segs_intersect_int_dbl((double)x1,(double)y1,(double)x2,(double)y2,(double)x3,(double)y3,(double)x4,(double)y4);
 }
 static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* vtx, int f, int n) {
     int cnt = 0; int off = faces->vertex_indices_ptr[f];
@@ -2471,6 +2594,30 @@ static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1
         if (ok) return 1;
     }
     return 0;
+}
+
+/* Unit tests for segs_intersect: run with command-line flag --run-segs-test */
+static int segs_intersect_unit_tests(void) {
+    struct {
+        double x1,y1,x2,y2,x3,y3,x4,y4; int expect; const char *name;
+    } tests[] = {
+        {233.0,114.0, 98.0,88.0, 191.0,106.0, 212.0,101.0, 0, "case_7_vs_45"},
+        {0.0,0.0, 10.0,0.0, 5.0,-5.0, 5.0,5.0, 1, "orthogonal_mid"},
+        {0.0,0.0, 10.0,0.0, 9.1,-1.0, 9.1,1.0, 0, "near_endpoint"},
+        {0.0,0.0, 10.0,0.0, 10.0,-1.0, 10.0,1.0, 0, "touch_endpoint"},
+        {0.0,0.0, 10.0,0.0, 1.0,-1.0, 1.0,1.0, 1, "near_mid"}
+    };
+    int n = sizeof(tests)/sizeof(tests[0]);
+    printf("Running segs_intersect unit tests (tol=%.3f px)\n", segs_intersect_tol_px);
+    int failed = 0;
+    for (int i = 0; i < n; ++i) {
+        int res = segs_intersect_int_dbl(tests[i].x1,tests[i].y1,tests[i].x2,tests[i].y2,tests[i].x3,tests[i].y3,tests[i].x4,tests[i].y4);
+        printf(" test %s: expected=%d got=%d\n", tests[i].name, tests[i].expect, res);
+        if (res != tests[i].expect) { printf("  -> FAIL\n"); failed++; }
+        else printf("  -> PASS\n");
+    }
+    if (failed == 0) printf("All segs_intersect tests passed\n"); else printf("%d segs_intersect tests FAILED\n", failed);
+    return failed;
 }
 
 /*
@@ -2640,6 +2787,66 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
 
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
+
+
+    // XXXXX
+/* ============================================================
+   NEW RULE: A segment that has 2 strict intersections with the
+   other polygon => polygons overlap.
+   ============================================================ */
+
+{
+    int count;
+
+    /* ---- Test segments of f1 against f2 ---- */
+    for (int i = 0; i < n1; ++i) {
+        int i2 = (i+1) % n1;
+        int va = faces->vertex_indices_buffer[off1 + i]  - 1;
+        int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
+        int ax = vtx->x2d[va], ay = vtx->y2d[va];
+        int bx = vtx->x2d[vb], by = vtx->y2d[vb];
+
+        count = 0;
+
+        for (int j = 0; j < n2; ++j) {
+            int j2 = (j+1) % n2;
+            int vc = faces->vertex_indices_buffer[off2 + j]  - 1;
+            int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
+            int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
+            int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
+
+            if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) {
+                count++;
+                if (count >= 2) return 1; /* YES */
+            }
+        }
+    }
+
+    /* ---- Test segments of f2 against f1 ---- */
+    for (int j = 0; j < n2; ++j) {
+        int j2 = (j+1) % n2;
+        int vc = faces->vertex_indices_buffer[off2 + j]  - 1;
+        int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
+        int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
+        int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
+
+        count = 0;
+
+        for (int i = 0; i < n1; ++i) {
+            int i2 = (i+1) % n1;
+            int va = faces->vertex_indices_buffer[off1 + i]  - 1;
+            int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
+            int ax = vtx->x2d[va], ay = vtx->y2d[va];
+            int bx = vtx->x2d[vb], by = vtx->y2d[vb];
+
+            if (segs_intersect_int(cx,cy,dx,dy,ax,ay,bx,by)) {
+                count++;
+                if (count >= 2) return 1; /* YES */
+            }
+        }
+    }
+}
+
 
     /* Debug: enable verbose output for a specific pair by setting OVERLAP_DEBUG_PAIR="f1,f2" in the environment */
     int dbg_pair = 0;
@@ -7084,6 +7291,11 @@ segment "code22";
         int last_process_time_end = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
+        /* Command-line test hook: --run-segs-test */
+        if (argc > 1 && strcmp(argv[1], "--run-segs-test") == 0) {
+            int failed = segs_intersect_unit_tests();
+            return (failed == 0) ? 0 : 1;
+        }
 
     newmodel:
         printf("===================================\n");
