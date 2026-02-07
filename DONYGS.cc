@@ -847,37 +847,7 @@ void painter_newell_sancha(Model3D* model, int face_count) {
     qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
     qsort_faces_ptr_for_cmp = NULL;
     long t_end = GetTick();
-    // if (!PERFORMANCE_MODE)
-    // {
-    //     long elapsed = t_end - t_start;
-    //     double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
-    //     printf("[TIMING] initial sort (qsort): %ld ticks (%.2f ms)\n", elapsed, ms);
-    // }
-   
-    // * * * * *
-    // Etape 2 : Boucle de correction d'ordre (adjacent-swap / bubble-like passes)
-    // * * * * *
-    // Algorithm rationale:
-    //  - After the coarse z_mean sort, adjacent faces may still be in the wrong order
-    //    due to overlap or interpenetration. We perform bubble-like passes over the
-    //    visible subset to correct local inversions using progressively stronger tests.
-    //  - Each adjacent pair (f1,f2) is subjected to a sequence of tests:
-    //      Test1: quick depth overlap (z_min/z_max)
-    //      Test2: X-axis bounding-box separation
-    //      Test3: Y-axis bounding-box separation
-    //      Test4..Test7: plane-based observer-side and vertex-plane consistency tests
-    //  - If any test conclusively determines f1 should be after f2, we perform an
-    //    adjacent swap and record the ordered pair to avoid re-testing the same relation.
-    //  - Ambiguous pairs that cannot be concluded by these tests are recorded in
-    //    `inconclusive_pairs` for diagnostic framing (no geometric splitting is performed).
-    //
-    // Implementation notes:
-    //  - We use a preallocated `ordered_pairs` buffer (capacity = face_count * 4 heuristic)
-    //    to remember definitive relations found during the passes. This prevents repeated
-    //    re-evaluation and improves performance on complex meshes.
-    //  - The bubble-like approach ensures stability of the result (only adjacent swaps)
-    //    while being simple to implement; in practice a small number of passes suffices.
-    //  - Complexity: O(P * visible_count) where P is number of passes (until no swaps).
+    
 
     int swap_count = 0;
     int swapped = 0; // flag used for the correction loop
@@ -2507,6 +2477,91 @@ static void set_segs_intersect_tol_px(double px) {
  *    avoid visual artifacts from sub-pixel intersections while preserving
  *    real, well-separated crossings.
  */
+/*
+ * Compute squared distance (in fixed units) from point P(px,py) to segment AB (ax,ay)-(bx,by).
+ * Returns an unsigned long long representing (distance_in_fixed_units)^2.
+ * Implementation notes:
+ *  - The function works entirely in integer arithmetic to avoid floating point.
+ *  - We compute numsq = (wx*d - c*vx)^2 + (wy*d - c*vy)^2 and then divide by d^2,
+ *    performing division before multiplying by FIXED_SCALE^2 to avoid overflow.
+ */
+static unsigned long long point_seg_dist2_fixed_int(int px,int py,int ax,int ay,int bx,int by) {
+    long long vx = (long long)bx - (long long)ax, vy = (long long)by - (long long)ay;
+    long long wx = (long long)px - (long long)ax, wy = (long long)py - (long long)ay;
+    long long c = vx*wx + vy*wy;
+    long long d = vx*vx + vy*vy;
+    if (d == 0) {
+        long long dx0 = px - ax, dy0 = py - ay;
+        unsigned long long r = (unsigned long long)dx0*(unsigned long long)dx0 + (unsigned long long)dy0*(unsigned long long)dy0;
+        return r * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+    }
+    if (c <= 0) {
+        long long dx0 = px - ax, dy0 = py - ay;
+        unsigned long long r = (unsigned long long)dx0*(unsigned long long)dx0 + (unsigned long long)dy0*(unsigned long long)dy0;
+        return r * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+    } else if (c >= d) {
+        long long dx0 = px - bx, dy0 = py - by;
+        unsigned long long r = (unsigned long long)dx0*(unsigned long long)dx0 + (unsigned long long)dy0*(unsigned long long)dy0;
+        return r * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+    } else {
+        long long numx = wx * d - c * vx;
+        long long numy = wy * d - c * vy;
+        unsigned long long numsq = (unsigned long long)numx * (unsigned long long)numx + (unsigned long long)numy * (unsigned long long)numy;
+        unsigned long long den = (unsigned long long)d * (unsigned long long)d;
+        unsigned long long q = numsq / den;
+        unsigned long long rem = numsq % den;
+        unsigned long long scale2 = (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+        unsigned long long out = q * scale2 + (rem * scale2) / den;
+        return out;
+    }
+}
+
+static int segs_intersect_int_fixed64(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
+    long long o1 = orient_ll(x1,y1,x2,y2,x3,y3);
+    long long o2 = orient_ll(x1,y1,x2,y2,x4,y4);
+    long long o3 = orient_ll(x3,y3,x4,y4,x1,y1);
+    long long o4 = orient_ll(x3,y3,x4,y4,x2,y2);
+    /* Proper intersection only: require strict orientation differences */
+    if (!(((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0)))) return 0;
+
+    long long dx1 = x2 - x1, dy1 = y2 - y1;
+    long long dx2 = x4 - x3, dy2 = y4 - y3;
+    long long denom = dx1 * (-dy2) - dy1 * (-dx2);
+    if (denom == 0) return 0; /* numerically parallel */
+
+    long long tnum = (long long)(x3 - x1) * (-dy2) - (long long)(y3 - y1) * (-dx2);
+
+    /* intersection point in Fixed64 */
+    Fixed64 t_fixed = ((Fixed64)tnum << FIXED_SHIFT) / (Fixed64)denom;
+    Fixed64 ix_fixed = (((Fixed64)x1) << FIXED_SHIFT) + ((t_fixed * (((Fixed64)dx1) << FIXED_SHIFT)) >> FIXED_SHIFT);
+    Fixed64 iy_fixed = (((Fixed64)y1) << FIXED_SHIFT) + ((t_fixed * (((Fixed64)dy1) << FIXED_SHIFT)) >> FIXED_SHIFT);
+
+    /* tolerance in fixed units */
+    Fixed64 tol_fixed = (Fixed64)(segs_intersect_tol_px * (double)FIXED_SCALE + 0.5);
+    unsigned long long tol2_fixed = (unsigned long long)tol_fixed * (unsigned long long)tol_fixed; /* fixed^2 */
+
+    /* distance to endpoints (in fixed units squared) */
+    long long ddx, ddy; unsigned long long dist2u;
+    ddx = (long long)ix_fixed - ((long long)x1 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y1 << FIXED_SHIFT);
+    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
+    ddx = (long long)ix_fixed - ((long long)x2 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y2 << FIXED_SHIFT);
+    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
+    ddx = (long long)ix_fixed - ((long long)x3 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y3 << FIXED_SHIFT);
+    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
+    ddx = (long long)ix_fixed - ((long long)x4 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y4 << FIXED_SHIFT);
+    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
+
+
+
+    if (point_seg_dist2_fixed_int(x1,y1,x3,y3,x4,y4) < tol2_fixed) return 0;
+    if (point_seg_dist2_fixed_int(x2,y2,x3,y3,x4,y4) < tol2_fixed) return 0;
+    if (point_seg_dist2_fixed_int(x3,y3,x1,y1,x2,y2) < tol2_fixed) return 0;
+    if (point_seg_dist2_fixed_int(x4,y4,x1,y1,x2,y2) < tol2_fixed) return 0;
+
+    return 1;
+}
+
+/* Preserve original double-based implementation for regression/comparison */
 static int segs_intersect_int_dbl(double x1,double y1,double x2,double y2,double x3,double y3,double x4,double y4) {
     long long o1 = orient_ll((long long)floor(x1+0.5),(long long)floor(y1+0.5),(long long)floor(x2+0.5),(long long)floor(y2+0.5),(long long)floor(x3+0.5),(long long)floor(y3+0.5));
     long long o2 = orient_ll((long long)floor(x1+0.5),(long long)floor(y1+0.5),(long long)floor(x2+0.5),(long long)floor(y2+0.5),(long long)floor(x4+0.5),(long long)floor(y4+0.5));
@@ -2543,7 +2598,7 @@ static int segs_intersect_int_dbl(double x1,double y1,double x2,double y2,double
 }
 
 static int segs_intersect_int(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
-    return segs_intersect_int_dbl((double)x1,(double)y1,(double)x2,(double)y2,(double)x3,(double)y3,(double)x4,(double)y4);
+    return segs_intersect_int_fixed64(x1,y1,x2,y2,x3,y3,x4,y4);
 }
 static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* vtx, int f, int n) {
     int cnt = 0; int off = faces->vertex_indices_ptr[f];
@@ -2597,6 +2652,9 @@ static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1
 }
 
 /* Unit tests for segs_intersect: run with command-line flag --run-segs-test */
+static int use_fixed_clipping = 0;
+static void set_use_fixed_clipping(int v) { use_fixed_clipping = v ? 1 : 0; }
+
 static int segs_intersect_unit_tests(void) {
     struct {
         double x1,y1,x2,y2,x3,y3,x4,y4; int expect; const char *name;
@@ -2611,10 +2669,12 @@ static int segs_intersect_unit_tests(void) {
     printf("Running segs_intersect unit tests (tol=%.3f px)\n", segs_intersect_tol_px);
     int failed = 0;
     for (int i = 0; i < n; ++i) {
-        int res = segs_intersect_int_dbl(tests[i].x1,tests[i].y1,tests[i].x2,tests[i].y2,tests[i].x3,tests[i].y3,tests[i].x4,tests[i].y4);
-        printf(" test %s: expected=%d got=%d\n", tests[i].name, tests[i].expect, res);
-        if (res != tests[i].expect) { printf("  -> FAIL\n"); failed++; }
-        else printf("  -> PASS\n");
+        int res_fixed = segs_intersect_int((int)tests[i].x1,(int)tests[i].y1,(int)tests[i].x2,(int)tests[i].y2,(int)tests[i].x3,(int)tests[i].y3,(int)tests[i].x4,(int)tests[i].y4);
+        int res_dbl = segs_intersect_int_dbl(tests[i].x1,tests[i].y1,tests[i].x2,tests[i].y2,tests[i].x3,tests[i].y3,tests[i].x4,tests[i].y4);
+        printf(" test %s: expected=%d fixed=%d dbl=%d\n", tests[i].name, tests[i].expect, res_fixed, res_dbl);
+        if (res_fixed != tests[i].expect) { printf("  -> FIXED FAIL\n"); failed++; }
+        else printf("  -> FIXED PASS\n");
+        if (res_dbl != tests[i].expect) printf("  -> DOUBLE mismatch (expected %d, got %d)\n", tests[i].expect, res_dbl);
     }
     if (failed == 0) printf("All segs_intersect tests passed\n"); else printf("%d segs_intersect tests FAILED\n", failed);
     return failed;
@@ -2983,14 +3043,25 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     int icx1 = 0, icy1 = 0; double iarea1 = 0.0;
     int icx2 = 0, icy2 = 0; double iarea2 = 0.0;
     overlapClipCalls++;
-    /* Request detailed clipping debug for this pair so the callee can print final verts */
-    debug_overlap_subj = f1; debug_overlap_clip = f2;
-    int ok1 = compute_intersection_centroid_ordered(model, f1, f2, &icx1, &icy1, &iarea1);
-    debug_overlap_subj = -1; debug_overlap_clip = -1;
 
-    debug_overlap_subj = f2; debug_overlap_clip = f1;
-    int ok2 = compute_intersection_centroid_ordered(model, f2, f1, &icx2, &icy2, &iarea2);
-    debug_overlap_subj = -1; debug_overlap_clip = -1;
+    /* Non-invasive Fixed64 clipping option: if enabled, use integer-area comparison
+     * to decide validity early; otherwise fall back to existing double-based logic.
+     */
+    unsigned long long area2_1 = 0, area2_2 = 0;
+    int ok1 = 0, ok2 = 0;
+    if (use_fixed_clipping) {
+        /* compute fixed-area intersection (uses same internal buffers; sets debug_clip_raw_area2) */
+        int tx=0, ty=0; long long a2 = 0; debug_overlap_subj = f1; debug_overlap_clip = f2; ok1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &tx, &ty, &a2); debug_overlap_subj = -1; debug_overlap_clip = -1; area2_1 = (unsigned long long)(a2 >= 0 ? a2 : -a2);
+        debug_clip_fixed_area = (double)area2_1 * 0.5 / ((double)FIXED_SCALE * (double)FIXED_SCALE);
+        int tx2=0, ty2=0; long long a22 = 0; debug_overlap_subj = f2; debug_overlap_clip = f1; ok2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &tx2, &ty2, &a22); debug_overlap_subj = -1; debug_overlap_clip = -1; area2_2 = (unsigned long long)(a22 >= 0 ? a22 : -a22);
+        /* Also compute double areas for diagnostic parity */
+        int dtx=0,dty=0; compute_intersection_centroid_ordered(model, f1, f2, &dtx, &dty, &iarea1);
+        compute_intersection_centroid_ordered(model, f2, f1, &dtx, &dty, &iarea2);
+    } else {
+        /* default behavior: double-based clipping (existing path) */
+        debug_overlap_subj = f1; debug_overlap_clip = f2; ok1 = compute_intersection_centroid_ordered(model, f1, f2, &icx1, &icy1, &iarea1); debug_overlap_subj = -1; debug_overlap_clip = -1;
+        debug_overlap_subj = f2; debug_overlap_clip = f1; ok2 = compute_intersection_centroid_ordered(model, f2, f1, &icx2, &icy2, &iarea2); debug_overlap_subj = -1; debug_overlap_clip = -1;
+    }
 
     double bbox_area = 0.0; if (!(oxmin > oxmax || oymin > oymax)) bbox_area = (double)(oxmax - oxmin) * (double)(oymax - oymin);
 
@@ -3006,8 +3077,25 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     }
 
     const double eps = 1e-9;
-    int valid1 = (ok1 && iarea1 >= MIN_INTERSECTION_AREA_PIXELS && iarea1 <= bbox_area + eps);
-    int valid2 = (ok2 && iarea2 >= MIN_INTERSECTION_AREA_PIXELS && iarea2 <= bbox_area + eps);
+    int valid1 = 0, valid2 = 0;
+    if (use_fixed_clipping) {
+        /* Compare using fixed-area thresholds (area2 units):
+         * area2_fixed must be >= 2 * MIN_INTERSECTION_AREA_PIXELS * FIXED_SCALE^2
+         * and <= 2 * bbox_area * FIXED_SCALE^2 (sanity bound).
+         */
+        unsigned long long min_area2_fixed = (unsigned long long)(2.0 * MIN_INTERSECTION_AREA_PIXELS * (double)FIXED_SCALE * (double)FIXED_SCALE + 0.5);
+        unsigned long long bbox_limit = 0;
+        if (!(oxmin > oxmax || oymin > oymax)) {
+            unsigned long long bbox_pixels = (unsigned long long)(oxmax - oxmin) * (unsigned long long)(oymax - oymin);
+            unsigned long long scale2 = (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+            bbox_limit = 2ULL * bbox_pixels * scale2;
+        }
+        valid1 = (ok1 && debug_clip_fixed_vcount >= 3 && area2_1 >= min_area2_fixed && area2_1 <= bbox_limit);
+        valid2 = (ok2 && debug_clip_fixed_vcount >= 3 && area2_2 >= min_area2_fixed && area2_2 <= bbox_limit);
+    } else {
+        valid1 = (ok1 && iarea1 >= MIN_INTERSECTION_AREA_PIXELS && iarea1 <= bbox_area + eps);
+        valid2 = (ok2 && iarea2 >= MIN_INTERSECTION_AREA_PIXELS && iarea2 <= bbox_area + eps);
+    }
 
     if (valid1 || valid2) {
         /* Prefer f1->f2 when both valid (Python semantics) */
@@ -3330,6 +3418,17 @@ static int compute_intersection_centroid_ordered(Model3D* model, int subj, int c
     }
     if (out_area) *out_area = final_area;
     return result;
+}
+
+/* Non-invasive wrapper: return signed area2 (fixed units) computed by
+ * the existing integer clipping routine. This avoids duplicating the S-H
+ * implementation and is safe because `compute_intersection_centroid_ordered`
+ * already computes `debug_clip_raw_area2` (signed area2 in fixed units).
+ */
+static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
+    int ok = compute_intersection_centroid_ordered(model, subj, clip, outx, outy, NULL);
+    if (out_area2) *out_area2 = debug_clip_raw_area2; /* signed area2 in fixed units */
+    return ok;
 }
 
 segment "code03";
@@ -4619,7 +4718,10 @@ void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char
     if (f2 < 0 || f2 >= face_count) { printf("Invalid face id 2\n"); return; }
 
     // Report IDs and result
+    int start_time = GetTick();
     int ov = projected_polygons_overlap(model, f1, f2);
+    int end_time = GetTick();
+    printf("Computed projected overlap in %d ticks\n", end_time - start_time);
     printf("Faces: %d and %d -> Projected overlap: %s\n", f1, f2, ov ? "YES" : "NO");
 
     /* Diagnostics and heavy tests removed for simplified inspector as requested. */
