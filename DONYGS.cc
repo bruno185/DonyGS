@@ -2902,7 +2902,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         if (candidate) break;
     }
 
-    /* Step 3: Containment tests.
+    /* Step 4: Containment tests.
      * Check every vertex of poly1 against poly2 and vice versa, skipping vertices outside the other's bbox.
      * Points lying exactly on the other's boundary are considered outside (no overlap).
      * If a vertex is strictly inside the other polygon, mark the pair as a candidate. */
@@ -2926,7 +2926,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     }
 
     if (!candidate) {
-        /* Step 4: Identical polygons special-case.
+        /* Step 5: Identical polygons special-case.
          * If the 2D vertex sequences are identical (maybe reversed), treat the faces as overlapping.
          */
         if (faces_vertices_equal(faces, vtx, f1, f2)) return 1;
