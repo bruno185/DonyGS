@@ -2403,18 +2403,7 @@ static double segs_intersect_tol_px = 1.0;
  * - Retourne une valeur >= 0 (double) correspondant à (distance)^2.
  * - Comportement bien défini pour segments dégénérés (A==B) : la branche c>=d couvre ce cas.
  */
-static double point_seg_dist2(double px, double py, double ax, double ay, double bx, double by) {
-    double vx = bx - ax, vy = by - ay;
-    double wx = px - ax, wy = py - ay;
-    double c = vx*wx + vy*wy;
-    if (c <= 0.0) return wx*wx + wy*wy; /* closest to A */
-    double d = vx*vx + vy*vy;
-    if (c >= d) return (px - bx)*(px - bx) + (py - by)*(py - by); /* closest to B or AB degenerate */
-    double b = c / d;
-    double projx = ax + b * vx, projy = ay + b * vy;
-    double dx = px - projx, dy = py - projy;
-    return dx*dx + dy*dy; /* squared distance to projection */
-}
+/* `point_seg_dist2` (double) removed: use `point_seg_dist2_fixed_int` (integer) for distance checks. */
 
 /*
  * set_segs_intersect_tol_px
@@ -2561,41 +2550,10 @@ static int segs_intersect_int_fixed64(int x1,int y1,int x2,int y2,int x3,int y3,
     return 1;
 }
 
-/* Preserve original double-based implementation for regression/comparison */
-static int segs_intersect_int_dbl(double x1,double y1,double x2,double y2,double x3,double y3,double x4,double y4) {
-    long long o1 = orient_ll((long long)floor(x1+0.5),(long long)floor(y1+0.5),(long long)floor(x2+0.5),(long long)floor(y2+0.5),(long long)floor(x3+0.5),(long long)floor(y3+0.5));
-    long long o2 = orient_ll((long long)floor(x1+0.5),(long long)floor(y1+0.5),(long long)floor(x2+0.5),(long long)floor(y2+0.5),(long long)floor(x4+0.5),(long long)floor(y4+0.5));
-    long long o3 = orient_ll((long long)floor(x3+0.5),(long long)floor(y3+0.5),(long long)floor(x4+0.5),(long long)floor(y4+0.5),(long long)floor(x1+0.5),(long long)floor(y1+0.5));
-    long long o4 = orient_ll((long long)floor(x3+0.5),(long long)floor(y3+0.5),(long long)floor(x4+0.5),(long long)floor(y4+0.5),(long long)floor(x2+0.5),(long long)floor(y2+0.5));
-    /* Proper intersection only: require strict orientation differences */
-    if (!(((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0)))) return 0;
-
-    /* Compute intersection point (double) */
-    double dx1 = x2 - x1, dy1 = y2 - y1;
-    double dx2 = x4 - x3, dy2 = y4 - y3;
-    double denom = dx1 * (-dy2) - dy1 * (-dx2);
-    if (fabs(denom) < 1e-12) return 0;
-    double t = ((x3 - x1) * (-dy2) - (y3 - y1) * (-dx2)) / denom;
-    double ix = x1 + t * dx1;
-    double iy = y1 + t * dy1;
-
-    double tol2 = segs_intersect_tol_px * segs_intersect_tol_px;
-
-    /* If intersection point is too close to any endpoint, ignore it */
-    double dx, dy;
-    dx = ix - x1; dy = iy - y1; if (dx*dx + dy*dy < tol2) return 0;
-    dx = ix - x2; dy = iy - y2; if (dx*dx + dy*dy < tol2) return 0;
-    dx = ix - x3; dy = iy - y3; if (dx*dx + dy*dy < tol2) return 0;
-    dx = ix - x4; dy = iy - y4; if (dx*dx + dy*dy < tol2) return 0;
-
-    /* If any endpoint is very close to the other segment, ignore */
-    if (point_seg_dist2(x1,y1,x3,y3,x4,y4) < tol2) return 0;
-    if (point_seg_dist2(x2,y2,x3,y3,x4,y4) < tol2) return 0;
-    if (point_seg_dist2(x3,y3,x1,y1,x2,y2) < tol2) return 0;
-    if (point_seg_dist2(x4,y4,x1,y1,x2,y2) < tol2) return 0;
-
-    return 1;
-}
+/* Double-based regression helpers removed: Fixed (integer) implementations are now authoritative.
+ * The old `segs_intersect_int_dbl` and associated double point/segment helpers were deleted
+ * to remove redundant floating-point paths and reduce maintenance surface.
+ */
 
 static int segs_intersect_int(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
     return segs_intersect_int_fixed64(x1,y1,x2,y2,x3,y3,x4,y4);
@@ -2652,8 +2610,10 @@ static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1
 }
 
 /* Unit tests for segs_intersect: run with command-line flag --run-segs-test */
-static int use_fixed_clipping = 0;
+static int use_fixed_clipping = 1; /* enable Fixed64 clipping by default (non-invasive) */
 static void set_use_fixed_clipping(int v) { use_fixed_clipping = v ? 1 : 0; }
+
+
 
 static int segs_intersect_unit_tests(void) {
     struct {
@@ -2670,11 +2630,8 @@ static int segs_intersect_unit_tests(void) {
     int failed = 0;
     for (int i = 0; i < n; ++i) {
         int res_fixed = segs_intersect_int((int)tests[i].x1,(int)tests[i].y1,(int)tests[i].x2,(int)tests[i].y2,(int)tests[i].x3,(int)tests[i].y3,(int)tests[i].x4,(int)tests[i].y4);
-        int res_dbl = segs_intersect_int_dbl(tests[i].x1,tests[i].y1,tests[i].x2,tests[i].y2,tests[i].x3,tests[i].y3,tests[i].x4,tests[i].y4);
-        printf(" test %s: expected=%d fixed=%d dbl=%d\n", tests[i].name, tests[i].expect, res_fixed, res_dbl);
-        if (res_fixed != tests[i].expect) { printf("  -> FIXED FAIL\n"); failed++; }
-        else printf("  -> FIXED PASS\n");
-        if (res_dbl != tests[i].expect) printf("  -> DOUBLE mismatch (expected %d, got %d)\n", tests[i].expect, res_dbl);
+        printf(" test %s: expected=%d fixed=%d\n", tests[i].name, tests[i].expect, res_fixed);
+        if (res_fixed != tests[i].expect) { printf("  -> FIXED FAIL\n"); failed++; } else printf("  -> FIXED PASS\n");
     }
     if (failed == 0) printf("All segs_intersect tests passed\n"); else printf("%d segs_intersect tests FAILED\n", failed);
     return failed;
@@ -3120,105 +3077,11 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
 /* Ordered clipping: compute the intersection of polygon `subj` clipped by `clip` in that explicit order.
  * This function does NOT swap subject/clip based on vertex count — it respects the requested order.
  */
-/* Helper: double-precision Sutherland-Hodgman clip for diagnostics/fallback.
- * Uses integer projected coords from vtx->x2d/y2d as input and returns
- * absolute area in pixel^2. Also writes rounded vertex list if buffers are given. */
-static double compute_intersection_double_from_intcoords(FaceArrays3D* faces, VertexArrays3D* vtx, int subj, int clip, int* out_vcount, int* out_vx, int* out_vy) {
-    int nsub = faces->vertex_count[subj];
-    int nclip = faces->vertex_count[clip];
-    if (nsub <= 0 || nclip <= 0) { if (out_vcount) *out_vcount = 0; return 0.0; }
-    double *sx = (double*)malloc(sizeof(double) * (nsub + nclip + 8));
-    double *sy = (double*)malloc(sizeof(double) * (nsub + nclip + 8));
-    double *tmpx = (double*)malloc(sizeof(double) * (nsub + nclip + 8));
-    double *tmpy = (double*)malloc(sizeof(double) * (nsub + nclip + 8));
-    if (!sx || !sy || !tmpx || !tmpy) { if (sx) free(sx); if (sy) free(sy); if (tmpx) free(tmpx); if (tmpy) free(tmpy); if (out_vcount) *out_vcount = 0; return 0.0; }
-
-    int sub_off = faces->vertex_indices_ptr[subj];
-    for (int i = 0; i < nsub; ++i) {
-        int vid = faces->vertex_indices_buffer[sub_off + i] - 1;
-        sx[i] = (double)vtx->x2d[vid]; sy[i] = (double)vtx->y2d[vid];
-    }
-    int curr_n = nsub;
-
-    int clip_off = faces->vertex_indices_ptr[clip];
-    /* compute clip polygon orientation */
-    double clip_area2 = 0.0;
-    for (int j = 0; j < nclip; ++j) {
-        int vj = faces->vertex_indices_buffer[clip_off + j] - 1;
-        int vj1 = faces->vertex_indices_buffer[clip_off + ((j + 1) % nclip)] - 1;
-        double x0 = (double)vtx->x2d[vj]; double y0 = (double)vtx->y2d[vj];
-        double x1 = (double)vtx->x2d[vj1]; double y1 = (double)vtx->y2d[vj1];
-        clip_area2 += x0 * y1 - x1 * y0;
-    }
-    int clip_orient_sign = (clip_area2 >= 0.0) ? 1 : -1;
-
-    for (int j = 0; j < nclip; ++j) {
-        if (curr_n == 0) break;
-        double cx1 = (double)vtx->x2d[faces->vertex_indices_ptr[clip + j] - 1];
-        double cy1 = (double)vtx->y2d[faces->vertex_indices_ptr[clip + j] - 1];
-        double cx2 = (double)vtx->x2d[faces->vertex_indices_ptr[clip + ((j + 1) % nclip)] - 1];
-        double cy2 = (double)vtx->y2d[faces->vertex_indices_ptr[clip + ((j + 1) % nclip)] - 1];
-        int out_n = 0;
-        for (int i = 0; i < curr_n; ++i) {
-            int ii = i; int jj = (i + 1) % curr_n;
-            double sx1d = sx[ii], sy1d = sy[ii];
-            double sx2d = sx[jj], sy2d = sy[jj];
-            double cross1 = (cx2 - cx1) * (sy1d - cy1) - (cy2 - cy1) * (sx1d - cx1);
-            double cross2 = (cx2 - cx1) * (sy2d - cy1) - (cy2 - cy1) * (sx2d - cx1);
-            int in1 = (clip_orient_sign * cross1 > 0.0);
-            int in2 = (clip_orient_sign * cross2 > 0.0);
-            if (in1 && in2) {
-                tmpx[out_n] = sx2d; tmpy[out_n] = sy2d; out_n++;
-            } else if (in1 && !in2) {
-                double denom = ((sx2d - sx1d) * (cy1 - cy2) + (sy2d - sy1d) * (cx2 - cx1));
-                if (fabs(denom) > 1e-12) {
-                    double num = ((sx1d - cx1) * (cy1 - cy2) + (sy1d - cy1) * (cx2 - cx1));
-                    double t = num / denom;
-                    double ix = sx1d + t * (sx2d - sx1d);
-                    double iy = sy1d + t * (sy2d - sy1d);
-                    tmpx[out_n] = ix; tmpy[out_n] = iy; out_n++;
-                }
-            } else if (!in1 && in2) {
-                double denom = ((sx2d - sx1d) * (cy1 - cy2) + (sy2d - sy1d) * (cx2 - cx1));
-                if (fabs(denom) > 1e-12) {
-                    double num = ((sx1d - cx1) * (cy1 - cy2) + (sy1d - cy1) * (cx2 - cx1));
-                    double t = num / denom;
-                    double ix = sx1d + t * (sx2d - sx1d);
-                    double iy = sy1d + t * (sy2d - sy1d);
-                    tmpx[out_n] = ix; tmpy[out_n] = iy; out_n++;
-                }
-                tmpx[out_n] = sx2d; tmpy[out_n] = sy2d; out_n++;
-            }
-        }
-        if (out_n == 0) { curr_n = 0; break; }
-        for (int k = 0; k < out_n; ++k) { sx[k] = tmpx[k]; sy[k] = tmpy[k]; }
-        curr_n = out_n;
-    }
-
-    double final_area = 0.0;
-    if (curr_n >= 3) {
-        double area2 = 0.0; double cx_acc = 0.0, cy_acc = 0.0;
-        for (int i = 0; i < curr_n; ++i) {
-            int j = (i + 1) % curr_n;
-            double x0 = sx[i], y0 = sy[i];
-            double x1 = sx[j], y1 = sy[j];
-            double cross = x0 * y1 - x1 * y0;
-            area2 += cross;
-            cx_acc += (x0 + x1) * cross;
-            cy_acc += (y0 + y1) * cross;
-        }
-        final_area = fabs(0.5 * area2);
-        if (out_vcount && out_vx && out_vy) {
-            int dc = curr_n; if (dc > DEBUG_CLIP_MAX) dc = DEBUG_CLIP_MAX;
-            *out_vcount = dc;
-            for (int i = 0; i < dc; ++i) { out_vx[i] = (int)(sx[i] + (sx[i] >= 0 ? 0.5 : -0.5)); out_vy[i] = (int)(sy[i] + (sy[i] >= 0 ? 0.5 : -0.5)); }
-        }
-    } else {
-        if (out_vcount) *out_vcount = 0;
-    }
-    free(sx); free(sy); free(tmpx); free(tmpy);
-    return final_area;
-}
+/* Double-precision Sutherland-Hodgman fallback removed: integer (Fixed) clipping is now the canonical implementation.
+ * If diagnostic double-clipping is needed in future, reintroduce it in a separate file
+ * or as an optional debug-only path. For now the integer path sets debug values used
+ * by the test harness and diagnostic printing.
+ */
 
 static int compute_intersection_centroid_ordered(Model3D* model, int subj, int clip, int* outx, int* outy, double* out_area) {
     FaceArrays3D* faces = &model->faces;
@@ -3323,12 +3186,28 @@ static int compute_intersection_centroid_ordered(Model3D* model, int subj, int c
         double area = ((double)area2) * 0.5 / ((double)FIXED_SCALE * (double)FIXED_SCALE);
         double Cx = 0.0, Cy = 0.0;
         if (fabs(area) > 1e-9) {
-            double signed_area = ((double)area2) * 0.5 / ((double)FIXED_SCALE * (double)FIXED_SCALE);
-            Cx = ((double)cx_acc) / (6.0 * signed_area * (double)FIXED_SCALE * (double)FIXED_SCALE);
-            Cy = ((double)cy_acc) / (6.0 * signed_area * (double)FIXED_SCALE * (double)FIXED_SCALE);
-            if (outx) *outx = (int)(Cx + (Cx >= 0 ? 0.5 : -0.5));
-            if (outy) *outy = (int)(Cy + (Cy >= 0 ? 0.5 : -0.5));
-            result = 1;
+            /* Integer-based centroid: centroid_pixel = round( cx_acc / (3 * area2) )
+             * Use absolute arithmetic for rounding correctness and keep debug centroid
+             * values consistent with previous behavior.
+             */
+            long long a2 = area2;
+            long long a2_abs = (a2 >= 0) ? a2 : -a2;
+            long long denom_abs = 3LL * a2_abs;
+            if (denom_abs != 0) {
+                long long cx_abs = (cx_acc >= 0) ? cx_acc : -cx_acc;
+                long long cy_abs = (cy_acc >= 0) ? cy_acc : -cy_acc;
+                long long qx = (cx_abs + denom_abs/2) / denom_abs;
+                long long qy = (cy_abs + denom_abs/2) / denom_abs;
+                int pixx = (cx_acc >= 0) ? (int)qx : (int)-qx;
+                int pixy = (cy_acc >= 0) ? (int)qy : (int)-qy;
+                if (outx) *outx = pixx; else debug_clip_centroid_x = pixx;
+                if (outy) *outy = pixy; else debug_clip_centroid_y = pixy;
+                /* keep Cx/Cy consistent for downstream debug code */
+                Cx = (double)pixx; Cy = (double)pixy;
+                result = 1;
+            } else {
+                result = 0;
+            }
         }
         final_area = fabs(area);
 
@@ -3358,30 +3237,9 @@ static int compute_intersection_centroid_ordered(Model3D* model, int subj, int c
             debug_clip_fixed_vy[ii] = (int)(clip_sy[ii] >> FIXED_SHIFT);
         }
 
-        /* double fallback diagnostics: compute S-H in double on integer-projected coords
-         * if results strongly disagree we prefer the double result (safer, matches Python behavior in inspector).
-         */
-        debug_clip_float_overridden = 0;
-        debug_clip_float_area = compute_intersection_double_from_intcoords(faces, vtx, subj, clip, &debug_clip_float_vcount, debug_clip_float_vx, debug_clip_float_vy);
-        /* If the double result strongly differs and is much smaller, prefer the float result */
-        double diff = fabs(final_area - debug_clip_float_area);
-        double thresh = (fabs(final_area) > fabs(debug_clip_float_area) ? fabs(final_area) : fabs(debug_clip_float_area)) * 0.05 + 1.0;
-        if (diff > thresh) {
-            if (debug_clip_float_area < MIN_INTERSECTION_AREA_PIXELS && final_area >= MIN_INTERSECTION_AREA_PIXELS) {
-                debug_clip_float_overridden = 1;
-                final_area = debug_clip_float_area;
-                result = (final_area > 1e-12) ? 1 : 0;
-            }
-            /* replace debug verts with float verts for clearer diagnostics */
-            if (debug_clip_float_vcount > 0) {
-                debug_clip_vcount = debug_clip_float_vcount;
-                if (debug_clip_vcount > DEBUG_CLIP_MAX) debug_clip_vcount = DEBUG_CLIP_MAX;
-                for (int ii = 0; ii < debug_clip_vcount; ++ii) {
-                    debug_clip_vx[ii] = debug_clip_float_vx[ii];
-                    debug_clip_vy[ii] = debug_clip_float_vy[ii];
-                }
-            }
-        }
+        /* No double-fallback: prefer the Fixed (integer) S-H result unconditionally.
+         * The fixed result is considered authoritative for overlap decisions. */
+        debug_clip_float_overridden = 0; /* placeholder retained for diagnostics compatibility */
 
         if (outx) debug_clip_centroid_x = *outx; else debug_clip_centroid_x = (int)(Cx + (Cx >= 0 ? 0.5 : -0.5));
         if (outy) debug_clip_centroid_y = *outy; else debug_clip_centroid_y = (int)(Cy + (Cy >= 0 ? 0.5 : -0.5));
