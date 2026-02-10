@@ -1311,3 +1311,567 @@ void painter_newell_sancha_float(Model3D* model, int face_count) {
     // Note: buffers are reused across invocations to avoid malloc/free overhead
 
 }
+
+
+********************* MSC *********************
+/* Strict segment intersection with epsilon tolerance (in pixels)
+ * --------------------------------------------------------------
+ * - Uses orient_ll for orientation tests
+ * - Uses integer arithmetic only
+ * - Epsilon = 0.5 px implemented as a rational threshold on t and u
+ */
+static int segs_intersect_int(int x1,int y1,int x2,int y2,
+                              int x3,int y3,int x4,int y4)
+{
+    Fixed64 o1 = orient_ll(x1,y1,x2,y2,x3,y3);
+    Fixed64 o2 = orient_ll(x1,y1,x2,y2,x4,y4);
+    Fixed64 o3 = orient_ll(x3,y3,x4,y4,x1,y1);
+    Fixed64 o4 = orient_ll(x3,y3,x4,y4,x2,y2);
+
+    /* Proper intersection only: strict opposite orientations */
+    if (!(((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) &&
+          ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0))))
+        return 0;
+
+    /* At this point, segments intersect strictly in the mathematical sense.
+     * Now compute t and u (parametric positions) to check proximity to endpoints.
+     *
+     * Intersection formula:
+     *   t = orient((x3,y3)-(x1,y1), (x4,y4)-(x3,y3)) / orient((x2,y2)-(x1,y1), (x4,y4)-(x3,y3))
+     *   u = orient((x3,y3)-(x1,y1), (x2,y2)-(x1,y1)) / orient((x2,y2)-(x1,y1), (x4,y4)-(x3,y3))
+     *
+     * We only need to compare t and u to epsilon = 0.5 px.
+     * Instead of computing t as a float, we compare:
+     *   t < eps  <=>  |t_num| < eps * |den|
+     *   t > 1-eps <=> |den - t_num| < eps * |den|
+     */
+
+    Fixed64 rx = x2 - x1;
+    Fixed64 ry = y2 - y1;
+    Fixed64 sx = x4 - x3;
+    Fixed64 sy = y4 - y3;
+
+    long long den = rx * sy - ry * sx;   /* same as rxs */
+    if (den == 0) return 0;              /* parallel (should not happen here) */
+
+    long long t_num = (Fixed64)(x3 - x1) * sy - (Fixed64)(y3 - y1) * sx;
+    long long u_num = (Fixed64)(x3 - x1) * ry - (Fixed64)(y3 - y1) * rx;
+
+    /* We want to reject intersections that occur within `eps_px` pixels of any segment endpoint.
+     * Accurate test (integer arithmetic):
+     *   distance^2 = (t^2) * len2A  where t = t_num/den and len2A = rx^2 + ry^2
+     *   require distance >= eps_px (here 0.5) -> t^2 * len2A >= eps_px^2
+     * Multiply both sides by den^2 and scale by 4 to avoid fractions:
+     *   4 * t_num^2 * len2A >= den^2  (since eps_px^2 = 0.25)
+     * Similar checks for (1 - t) and for u on segment B.
+     */
+    long long len2A = rx*rx + ry*ry;
+    long long len2B = sx*sx + sy*sy;
+
+    /* Protect against degenerate zero-length segments (shouldn't happen) */
+    if (len2A == 0 || len2B == 0) return 0;
+
+    /* epsilon = 0.5 px → threshold = 0.5 * |den| */
+    Fixed64 eps_num = abs_den / 2;  /* integer division = 0.5 * den */
+    /* If t is too close to 0 or 1 → touching → ignore */
+    if (abs_t < eps_num) return 0;
+    if (abs_den - abs_t < eps_num) return 0;
+
+    /* Same for u */
+    if (abs_u < eps_num) return 0;
+    if (abs_den - abs_u < eps_num) return 0;
+
+    /* Otherwise: true strict intersection */
+    return 1;
+}
+
+
+
+/* Strict segment intersection with rational epsilon.
+ * 32-bit safe, no long long, no division for t/u.
+ * Detects real intersections even if projected near a vertex.
+ * Filters only intersections where t or u is extremely close to 0 or 1.
+ */
+
+static int segs_intersect_int(int x1,int y1,int x2,int y2,
+                              int x3,int y3,int x4,int y4)
+{
+    
+    /* 1. Strict orientation test */
+    int o1 = orient_ll(x1,y1,x2,y2,x3,y3);
+    int o2 = orient_ll(x1,y1,x2,y2,x4,y4);
+    int o3 = orient_ll(x3,y3,x4,y4,x1,y1);
+    int o4 = orient_ll(x3,y3,x4,y4,x2,y2);
+
+    if (!(((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) &&
+          ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0))))
+        return 0;
+
+    /* 2. Compute denominator (rx × sy − ry × sx) */
+    int rx = x2 - x1;
+    int ry = y2 - y1;
+    int sx = x4 - x3;
+    int sy = y4 - y3;
+
+    int den = rx * sy - ry * sx;
+    if (den == 0) return 0;
+
+    int abs_den = den < 0 ? -den : den;
+
+    /* 3. Compute t_num and u_num (no division) */
+    int dx = x3 - x1;
+    int dy = y3 - y1;
+
+    int t_num = dx * sy - dy * sx;
+    int u_num = dx * ry - dy * rx;
+
+    int abs_t = t_num < 0 ? -t_num : t_num;
+    int abs_u = u_num < 0 ? -u_num : u_num;
+
+    /* 4. Rational epsilon: intersection too close to endpoints?
+     *
+     * epsilon = 0.02 (2%) → enough to filter artefacts
+     * but keeps real intersections even near vertices.
+     *
+     * Implemented as:
+     *   abs(t) < eps * abs(den)
+     *   abs(den - t) < eps * abs(den)
+     *
+     * Using integer math:
+     *   eps_num = abs_den / 50   (≈ 0.02)
+     */
+
+    int eps = abs_den / 50;   /* rational epsilon ≈ 0.02 */
+
+    /* If t is extremely close to 0 or 1 → touching → ignore */
+    if (abs_t < eps) return 0;
+    if (abs_den - abs_t < eps) return 0;
+
+    /* Same for u */
+    if (abs_u < eps) return 0;
+    if (abs_den - abs_u < eps) return 0;
+
+    /* Otherwise: real intersection */
+    return 1;
+}
+********************* fin MSC *********************
+
+********************* inspect_polygons_overlap avec debug *********************
+void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char* filename) {
+    if (!model || !params) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int face_count = faces->face_count;
+    if (face_count <= 0) { printf("No faces in model\n"); return; }
+
+    // Inform the user what this inspector does before asking for input
+    printf("Inspector: check whether two faces' 2D projections overlap (touching = NON-overlap).\n");
+
+    // Prompt for face 1
+    printf("Enter face id 1 (0..%d): ", face_count - 1);
+    int f1 = -1;
+    if (scanf("%d", &f1) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
+    { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
+    if (f1 < 0 || f1 >= face_count) { printf("Invalid face id 1\n"); return; }
+
+    // Prompt for face 2
+    printf("Enter face id 2 (0..%d): ", face_count - 1);
+    int f2 = -1;
+    if (scanf("%d", &f2) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
+    { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
+    if (f2 < 0 || f2 >= face_count) { printf("Invalid face id 2\n"); return; }
+
+    // Report IDs and result
+    int ov = projected_polygons_overlap(model, f1, f2);
+    printf("Faces: %d and %d -> Projected overlap: %s\n", f1, f2, ov ? "YES" : "NO");
+
+    /* Verbose diagnostics forced on for inspection */
+    int dbg_pair_i = 1; /* forced */
+    if (dbg_pair_i || !ov) {
+        printf("OVERLAP_DEBUG_INSPECT: pair %d,%d -> ov=%d\n", f1, f2, ov);
+        // proper segment intersection
+        int segi = 0;
+        for (int i = 0; i < faces->vertex_count[f1] && !segi; ++i) {
+            int i2 = (i+1)%faces->vertex_count[f1];
+            int a = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + i] - 1;
+            int b = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + i2] - 1;
+            for (int j = 0; j < faces->vertex_count[f2]; ++j) {
+                int j2 = (j+1)%faces->vertex_count[f2];
+                int c = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f2] + j] - 1;
+                int d = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f2] + j2] - 1;
+                if (segs_intersect_int(vtx->x2d[a], vtx->y2d[a], vtx->x2d[b], vtx->y2d[b], vtx->x2d[c], vtx->y2d[c], vtx->x2d[d], vtx->y2d[d])) { segi = 1; break; }
+            }
+        }
+        // containment
+        int cont12 = 0, cont21 = 0;
+        for (int ii = 0; ii < faces->vertex_count[f1] && !cont12; ++ii) {
+            int vid = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + ii] - 1; if (vid < 0) continue;
+            if (point_in_poly_int(vtx->x2d[vid], vtx->y2d[vid], faces, vtx, f2, faces->vertex_count[f2])) cont12 = 1;
+        }
+        for (int ii = 0; ii < faces->vertex_count[f2] && !cont21; ++ii) {
+            int vid = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f2] + ii] - 1; if (vid < 0) continue;
+            if (point_in_poly_int(vtx->x2d[vid], vtx->y2d[vid], faces, vtx, f1, faces->vertex_count[f1])) cont21 = 1;
+        }
+        // sampling (store samples for file output)
+        int xs1[32], ys1[32], xs2[32], ys2[32]; int n1 = faces->vertex_count[f1], n2 = faces->vertex_count[f2];
+        for (int k = 0; k < n1; ++k) { int vid = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + k] - 1; xs1[k] = vtx->x2d[vid]; ys1[k] = vtx->y2d[vid]; }
+        for (int k = 0; k < n2; ++k) { int vid = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f2] + k] - 1; xs2[k] = vtx->x2d[vid]; ys2[k] = vtx->y2d[vid]; }
+        int oxmin = xs1[0], oxmax = xs1[0], oymin = ys1[0], oymax = ys1[0];
+        for (int k = 1; k < n1; ++k) { if (xs1[k] < oxmin) oxmin = xs1[k]; if (xs1[k] > oxmax) oxmax = xs1[k]; if (ys1[k] < oymin) oymin = ys1[k]; if (ys1[k] > oymax) oymax = ys1[k]; }
+        for (int k = 0; k < n2; ++k) { if (xs2[k] < oxmin) oxmin = xs2[k]; if (xs2[k] > oxmax) oxmax = xs2[k]; if (ys2[k] < oymin) oymin = ys2[k]; if (ys2[k] > oymax) oymax = ys2[k]; }
+        int sample_ok = 0; int samp_pts[9][4]; int samp_count = 0; if (!(oxmin > oxmax || oymin > oymax)) {
+            int W = oxmax - oxmin; int H = oymax - oymin;
+            for (int sx = 0; sx < 3; ++sx) for (int sy = 0; sy < 3; ++sy) {
+                int tx = oxmin + (((2*sx + 1) * W + 3) / 6);
+                int ty = oymin + (((2*sy + 1) * H + 3) / 6);
+                int in1 = point_in_poly_int(tx, ty, faces, vtx, f1, n1);
+                int in2 = point_in_poly_int(tx, ty, faces, vtx, f2, n2);
+                samp_pts[samp_count][0] = tx; samp_pts[samp_count][1] = ty; samp_pts[samp_count][2] = in1; samp_pts[samp_count][3] = in2; samp_count++;
+                if (in1 && in2) sample_ok = 1;
+                printf("  sample (%d,%d) in1=%d in2=%d\n", tx, ty, in1, in2);
+            }
+        }
+        int icx1 = 0, icy1 = 0, icx2 = 0, icy2 = 0; double ia1=0.0, ia2=0.0;
+        /* Request debug capture of clipped verts for each order so we can write them to file */
+        debug_overlap_subj = f1; debug_overlap_clip = f2;
+        compute_intersection_centroid_ordered(model, f1, f2, &icx1, &icy1, &ia1);
+        /* capture debug buffers for order 1 */
+        int clip1_vcount = debug_clip_vcount;
+        int *clip1_vx = NULL; int *clip1_vy = NULL;
+        long long clip1_raw_area2 = debug_clip_raw_area2; double clip1_area = debug_clip_area; int clip1_centx = debug_clip_centroid_x; int clip1_centy = debug_clip_centroid_y;
+        if (clip1_vcount > 0) {
+            clip1_vx = (int*)malloc(clip1_vcount * sizeof(int));
+            clip1_vy = (int*)malloc(clip1_vcount * sizeof(int));
+            if (clip1_vx && clip1_vy) {
+                for (int ii = 0; ii < clip1_vcount; ++ii) { clip1_vx[ii] = debug_clip_vx[ii]; clip1_vy[ii] = debug_clip_vy[ii]; }
+            } else {
+                /* allocation failed: drop verts */
+                if (clip1_vx) { free(clip1_vx); clip1_vx = NULL; }
+                if (clip1_vy) { free(clip1_vy); clip1_vy = NULL; }
+                clip1_vcount = 0;
+            }
+        }
+        debug_overlap_subj = -1; debug_overlap_clip = -1;
+
+        /* capture float fallback diagnostics for order 1 */
+        double clip1_float_area = debug_clip_float_area;
+        int clip1_float_overridden = debug_clip_float_overridden;
+        int clip1_float_vcount = debug_clip_float_vcount;
+        int *clip1_float_vx = NULL; int *clip1_float_vy = NULL;
+        if (clip1_float_vcount > 0) {
+            clip1_float_vx = (int*)malloc(clip1_float_vcount * sizeof(int));
+            clip1_float_vy = (int*)malloc(clip1_float_vcount * sizeof(int));
+            if (clip1_float_vx && clip1_float_vy) {
+                for (int ii = 0; ii < clip1_float_vcount; ++ii) { clip1_float_vx[ii] = debug_clip_float_vx[ii]; clip1_float_vy[ii] = debug_clip_float_vy[ii]; }
+            } else {
+                if (clip1_float_vx) { free(clip1_float_vx); clip1_float_vx = NULL; }
+                if (clip1_float_vy) { free(clip1_float_vy); clip1_float_vy = NULL; }
+                clip1_float_vcount = 0;
+            }
+        }
+
+        debug_overlap_subj = f2; debug_overlap_clip = f1;
+        compute_intersection_centroid_ordered(model, f2, f1, &icx2, &icy2, &ia2);
+        /* capture debug buffers for order 2 */
+        int clip2_vcount = debug_clip_vcount;
+        int *clip2_vx = NULL; int *clip2_vy = NULL;
+        long long clip2_raw_area2 = debug_clip_raw_area2; double clip2_area = debug_clip_area; int clip2_centx = debug_clip_centroid_x; int clip2_centy = debug_clip_centroid_y;
+        if (clip2_vcount > 0) {
+            clip2_vx = (int*)malloc(clip2_vcount * sizeof(int));
+            clip2_vy = (int*)malloc(clip2_vcount * sizeof(int));
+            if (clip2_vx && clip2_vy) {
+                for (int ii = 0; ii < clip2_vcount; ++ii) { clip2_vx[ii] = debug_clip_vx[ii]; clip2_vy[ii] = debug_clip_vy[ii]; }
+            } else {
+                /* allocation failed: drop verts */
+                if (clip2_vx) { free(clip2_vx); clip2_vx = NULL; }
+                if (clip2_vy) { free(clip2_vy); clip2_vy = NULL; }
+                clip2_vcount = 0;
+            }
+        }
+        debug_overlap_subj = -1; debug_overlap_clip = -1;
+
+        /* capture float fallback diagnostics for order 2 */
+        double clip2_float_area = debug_clip_float_area;
+        int clip2_float_overridden = debug_clip_float_overridden;
+        int clip2_float_vcount = debug_clip_float_vcount;
+        int *clip2_float_vx = NULL; int *clip2_float_vy = NULL;
+        if (clip2_float_vcount > 0) {
+            clip2_float_vx = (int*)malloc(clip2_float_vcount * sizeof(int));
+            clip2_float_vy = (int*)malloc(clip2_float_vcount * sizeof(int));
+            if (clip2_float_vx && clip2_float_vy) {
+                for (int ii = 0; ii < clip2_float_vcount; ++ii) { clip2_float_vx[ii] = debug_clip_float_vx[ii]; clip2_float_vy[ii] = debug_clip_float_vy[ii]; }
+            } else {
+                if (clip2_float_vx) { free(clip2_float_vx); clip2_float_vx = NULL; }
+                if (clip2_float_vy) { free(clip2_float_vy); clip2_float_vy = NULL; }
+                clip2_float_vcount = 0;
+            }
+        }
+
+        printf("  segi=%d cont12=%d cont21=%d sample_ok=%d ia1=%.6f ia2=%.6f\n", segi, cont12, cont21, sample_ok, ia1, ia2);
+
+        /* Write diagnostics to centroid files for copy-out from GS */
+        FILE *cf = fopen("centroid.txt","w");
+        if (cf) {
+            fprintf(cf, "pair,%d,%d,ov,%d\n", f1, f2, ov);
+            fprintf(cf, "segi,%d,cont12,%d,cont21,%d,sample_ok,%d\n", segi, cont12, cont21, sample_ok);
+            fprintf(cf, "face1,%d,verts:\n", f1);
+            for (int k = 0; k < n1; ++k) fprintf(cf, "%d,%d\n", xs1[k], ys1[k]);
+            fprintf(cf, "face2,%d,verts:\n", f2);
+            for (int k = 0; k < n2; ++k) fprintf(cf, "%d,%d\n", xs2[k], ys2[k]);
+            fprintf(cf, "samples (tx,ty,in1,in2):\n");
+            for (int s = 0; s < samp_count; ++s) fprintf(cf, "%d,%d,%d,%d\n", samp_pts[s][0], samp_pts[s][1], samp_pts[s][2], samp_pts[s][3]);
+            fprintf(cf, "clip1_centroid,%d,%d,area,%.6f\n", icx1, icy1, ia1);
+            /* write clipped verts captured during compute (if any) */
+            if (clip1_vcount > 0) {
+                fprintf(cf, "clip1_verts_count,%d\n", clip1_vcount);
+                fprintf(cf, "clip1_verts:");
+                for (int k = 0; k < clip1_vcount; ++k) fprintf(cf, ",%d:%d", clip1_vx[k], clip1_vy[k]);
+                fprintf(cf, "\n");
+                fprintf(cf, "clip1_debug_area,%.6f,clip1_raw_area2,%lld,clip1_debug_centroid,%d,%d,clip1_float_area,%.6f,clip1_float_overridden,%d\n", clip1_area, clip1_raw_area2, clip1_centx, clip1_centy, clip1_float_area, clip1_float_overridden);
+                if (clip1_float_vcount > 0) {
+                    fprintf(cf, "clip1_float_verts_count,%d\n", clip1_float_vcount);
+                    fprintf(cf, "clip1_float_verts:");
+                    for (int k = 0; k < clip1_float_vcount; ++k) fprintf(cf, ",%d:%d", clip1_float_vx[k], clip1_float_vy[k]);
+                    fprintf(cf, "\n");
+                }
+            } else {
+                fprintf(cf, "clip1_verts_count,0\n");
+            }
+            fprintf(cf, "clip2_centroid,%d,%d,area,%.6f\n", icx2, icy2, ia2);
+            if (clip2_vcount > 0) {
+                fprintf(cf, "clip2_verts_count,%d\n", clip2_vcount);
+                fprintf(cf, "clip2_verts:");
+                for (int k = 0; k < clip2_vcount; ++k) fprintf(cf, ",%d:%d", clip2_vx[k], clip2_vy[k]);
+                fprintf(cf, "\n");
+                fprintf(cf, "clip2_debug_area,%.6f,clip2_raw_area2,%lld,clip2_debug_centroid,%d,%d,clip2_float_area,%.6f,clip2_float_overridden,%d\n", clip2_area, clip2_raw_area2, clip2_centx, clip2_centy, clip2_float_area, clip2_float_overridden);
+                if (clip2_float_vcount > 0) {
+                    fprintf(cf, "clip2_float_verts_count,%d\n", clip2_float_vcount);
+                    fprintf(cf, "clip2_float_verts:");
+                    for (int k = 0; k < clip2_float_vcount; ++k) fprintf(cf, ",%d:%d", clip2_float_vx[k], clip2_float_vy[k]);
+                    fprintf(cf, "\n");
+                }
+            } else {
+                fprintf(cf, "clip2_verts_count,0\n");
+            }
+            /* also write projection scale and bbox area */
+            if (clip1_vx) { free(clip1_vx); clip1_vx = NULL; }
+            if (clip1_vy) { free(clip1_vy); clip1_vy = NULL; }
+            if (clip2_vx) { free(clip2_vx); clip2_vx = NULL; }
+            if (clip2_vy) { free(clip2_vy); clip2_vy = NULL; }
+            if (clip1_float_vx) { free(clip1_float_vx); clip1_float_vx = NULL; }
+            if (clip1_float_vy) { free(clip1_float_vy); clip1_float_vy = NULL; }
+            if (clip2_float_vx) { free(clip2_float_vx); clip2_float_vx = NULL; }
+            if (clip2_float_vy) { free(clip2_float_vy); clip2_float_vy = NULL; }
+
+            int bx0 = faces->minx[f1] > faces->minx[f2] ? faces->minx[f1] : faces->minx[f2];
+            int bx1 = faces->maxx[f1] < faces->maxx[f2] ? faces->maxx[f1] : faces->maxx[f2];
+            int by0 = faces->miny[f1] > faces->miny[f2] ? faces->miny[f1] : faces->miny[f2];
+            int by1 = faces->maxy[f1] < faces->maxy[f2] ? faces->maxy[f1] : faces->maxy[f2];
+            double bbox_area = 0.0; if (bx0 <= bx1 && by0 <= by1) bbox_area = (double)(bx1 - bx0) * (double)(by1 - by0);
+            fprintf(cf, "proj_scale,%.6f,screenScale,%d,bbox_area,%.6f\n", FIXED_TO_FLOAT(s_global_proj_scale_fixed), mode/320, bbox_area);
+            fclose(cf);
+
+            /* free temporary clip arrays (no longer needed) */
+            if (clip1_vx) { free(clip1_vx); clip1_vx = NULL; }
+            if (clip1_vy) { free(clip1_vy); clip1_vy = NULL; }
+            if (clip2_vx) { free(clip2_vx); clip2_vx = NULL; }
+            if (clip2_vy) { free(clip2_vy); clip2_vy = NULL; }
+
+            /* Scale sweep diagnostics: reprojection at multiple zoom multipliers to detect scale-dependent flips */
+            if (dbg_pair_i) {
+                FILE *cfs = fopen("centroid.txt","a");
+                if (cfs) {
+                    Fixed32 saved_scale = s_global_proj_scale_fixed;
+                    int mults[] = {1, 2, 4, 8};
+                    fprintf(cfs, "scale_sweep,cur_scale,%.4f\n", FIXED_TO_FLOAT(saved_scale));
+                    for (int mi = 0; mi < (int)(sizeof(mults)/sizeof(mults[0])); ++mi) {
+                        int m = mults[mi];
+                        Fixed32 new_scale = FIXED_MUL_64(saved_scale, INT_TO_FIXED(m));
+                        s_global_proj_scale_fixed = new_scale;
+                        /* recompute 2D projection under new scale */
+                        compute2DFromObserver(model, params->angle_w);
+                        int ov_s = projected_polygons_overlap(model, f1, f2);
+                        int ocx1 = 0, ocy1 = 0, ocx2 = 0, ocy2 = 0; double oia1 = 0.0, oia2 = 0.0;
+                        overlapClipCalls++;
+                        compute_intersection_centroid_ordered(model, f1, f2, &ocx1, &ocy1, &oia1);
+                        compute_intersection_centroid_ordered(model, f2, f1, &ocx2, &ocy2, &oia2);
+                        double obest = oia1;
+                        if (oia2 > obest) obest = oia2;
+                        if (obest >= MIN_INTERSECTION_AREA_PIXELS) overlapClipAccept++;
+                        fprintf(cfs, "mult,%d,scale,%.4f,ov,%d,ia1,%.6f,ia2,%.6f,ic1,%d,%d,ic2,%d,%d\n",
+                                m, FIXED_TO_FLOAT(new_scale), ov_s, oia1, oia2, ocx1, ocy1, ocx2, ocy2);
+                    }
+                    fclose(cfs);
+                    /* restore projection */
+                    s_global_proj_scale_fixed = saved_scale;
+                    compute2DFromObserver(model, params->angle_w);
+                }
+            }
+        }
+    }
+
+    // Ask user whether to show faces on model (default = YES on empty input)
+    char resp[16];
+    printf("Show faces on model? (O/n) [ENTER = yes]: ");
+    if (fgets(resp, sizeof(resp), stdin) == NULL) return;
+    if (resp[0] == 'N' || resp[0] == 'n') return; // explicit no
+    // anything else (including '\n' on empty line) -> show
+
+    // Prepare view and display f1 (green) and f2 (orange)
+    startgraph(mode);
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+
+    int old_frame = framePolyOnly;
+    framePolyOnly = 1; // not filled
+
+    // Show the entire model in wireframe first, then overlay the two faces
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1; // ensure all faces visible for wireframe
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+
+    // Overlay explicit colored faces (ensure visibility); force the two faces visible and draw indices
+    unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
+    faces->display_flag[f1] = 1;
+    faces->display_flag[f2] = 1;
+    drawFace(model, f1, 10, 1); // green with index
+    drawFace(model, f2, 6, 1);  // orange with index
+    // restore (though we restore all flags later from backup)
+    faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
+
+    MoveTo(3, 185);
+    printf("%d and %d overlap: %s\n", f1, f2, ov ? "YES" : "NO");
+    printf("'F' to save overlap.csv, any key to return\n");
+
+    /* Read hardware key directly (same technique used in main loop) */
+    int inspector_key = 0;
+    asm {
+        sep #0x20
+    readloop2:
+        lda >0xC000
+        bpl readloop2
+        and #0x007f
+        sta inspector_key
+        sta >0xC010
+        rep #0x30
+    }
+
+    if (inspector_key == 'F' || inspector_key == 'f') {
+        FILE *of = fopen("overlap.csv", "w");
+        if (of) {
+            fprintf(of, "face1,%d,face2,%d,overlap,%s\n", f1, f2, ov ? "YES" : "NO");
+            fprintf(of, "face_id,vertex_order,vertex_index,x2d,y2d\n");
+            int off1 = faces->vertex_indices_ptr[f1];
+            int n1 = faces->vertex_count[f1];
+            for (int vi = 0; vi < n1; ++vi) {
+                int idx = faces->vertex_indices_buffer[off1 + vi] - 1;
+                if (idx >= 0 && idx < vtx->vertex_count) fprintf(of, "%d,%d,%d,%d,%d\n", f1, vi, idx, vtx->x2d[idx], vtx->y2d[idx]);
+            }
+            int off2 = faces->vertex_indices_ptr[f2];
+            int n2 = faces->vertex_count[f2];
+            for (int vi = 0; vi < n2; ++vi) {
+                int idx = faces->vertex_indices_buffer[off2 + vi] - 1;
+                if (idx >= 0 && idx < vtx->vertex_count) fprintf(of, "%d,%d,%d,%d,%d\n", f2, vi, idx, vtx->x2d[idx], vtx->y2d[idx]);
+            }
+            fclose(of);
+            printf("Saved overlap.csv\n");
+        } else {
+            printf("Error: cannot open overlap.csv for writing\n");
+        }
+    }
+
+    endgraph();
+    DoText();
+
+    // Restore state
+    framePolyOnly = old_frame;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+}
+********************* fin inspect_polygons_overlap avec debug *********************
+
+********************* SAV segs_intersect_int *********************
+static int segs_intersect_int(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
+    long long o1 = orient_ll(x1,y1,x2,y2,x3,y3);
+    long long o2 = orient_ll(x1,y1,x2,y2,x4,y4);
+    long long o3 = orient_ll(x3,y3,x4,y4,x1,y1);
+    long long o4 = orient_ll(x3,y3,x4,y4,x2,y2);
+    /* Proper intersection only: require strict orientation differences
+     * This excludes colinear overlaps and endpoint-touching, which we treat
+     * as NON-overlapping for the purposes of projected_polygons_overlap. */
+    if (((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0))) return 1;
+    /* Ignore colinear or on-segment cases (return 0) */
+    return 0;
+}
+
+********************* SAV scan_all_overlaps *********************
+/* Global non-interactive scanner (triggered by G/g) that writes ovscan.csv and ovscanrpt.txt */
+void scan_all_overlaps(Model3D* model, ObserverParams* params) {
+    if (!model) { printf("No model loaded\n"); return; }
+    FaceArrays3D* faces = &model->faces; VertexArrays3D* vtx = &model->vertices;
+
+    int saved_jitter = jitter; jitter = 0;
+    Fixed32 saved_scale = s_global_proj_scale_fixed;
+
+    /* gather bbox-intersecting pairs */
+    typedef struct { int a; int b; } Pair;
+    int pair_count = 0;
+    for (int i = 0; i < faces->face_count; ++i) for (int j = i+1; j < faces->face_count; ++j) {
+        if (cull_back_faces) { if (faces->plane_d[i] <= 0 || faces->plane_d[j] <= 0) continue; }
+        int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
+        int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
+        if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
+        pair_count++;
+    }
+    if (pair_count == 0) { printf("No bbox-intersecting pairs found.\n"); jitter = saved_jitter; return; }
+    Pair* pairs = (Pair*)malloc(sizeof(Pair) * pair_count); int pi = 0;
+    for (int i = 0; i < faces->face_count; ++i) for (int j = i+1; j < faces->face_count; ++j) {
+        if (cull_back_faces) { if (faces->plane_d[i] <= 0 || faces->plane_d[j] <= 0) continue; }
+        int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
+        int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
+        if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
+        pairs[pi].a = i; pairs[pi].b = j; pi++;
+    }
+
+    FILE *of = fopen("ovscan.csv","w");
+    if (!of) { printf("Error: cannot open ovscan.csv for writing\n"); free(pairs); jitter = saved_jitter; return; }
+    fprintf(of, "f1,f2,ov_current,ov_fixed,ov_float,ia1_fixed,ia2_fixed,ia1_float,ia2_float,bbox_area,cf1_fixed_v,cf1_float_v,cf2_fixed_v,cf2_float_v,cf1_raw_area2,cf2_raw_area2,cf1_float_over,cf2_float_over,notes\n");
+
+    int divergent_pairs = 0; int override_changed = 0;
+    for (int k = 0; k < pair_count; ++k) {
+        int f1 = pairs[k].a; int f2 = pairs[k].b;
+        compute2DFromObserver(model, params->angle_w);
+        int ov_current = projected_polygons_overlap(model, f1, f2);
+
+        int icx1=0,icy1=0; double ia1=0.0; debug_overlap_subj = f1; debug_overlap_clip = f2; compute_intersection_centroid_ordered(model, f1, f2, &icx1, &icy1, &ia1); debug_overlap_subj = -1; debug_overlap_clip = -1;
+        double ia1_fixed = debug_clip_fixed_area; double ia1_float = debug_clip_float_area; int cf1_fixed_v = debug_clip_fixed_vcount; int cf1_float_v = debug_clip_float_vcount; long long cf1_raw = debug_clip_raw_area2; int cf1_float_over = debug_clip_float_overridden;
+
+        int icx2=0,icy2=0; double ia2=0.0; debug_overlap_subj = f2; debug_overlap_clip = f1; compute_intersection_centroid_ordered(model, f2, f1, &icx2, &icy2, &ia2); debug_overlap_subj = -1; debug_overlap_clip = -1;
+        double ia2_fixed = debug_clip_fixed_area; double ia2_float = debug_clip_float_area; int cf2_fixed_v = debug_clip_fixed_vcount; int cf2_float_v = debug_clip_float_vcount; long long cf2_raw = debug_clip_raw_area2; int cf2_float_over = debug_clip_float_overridden;
+
+        int bx0 = faces->minx[f1] > faces->minx[f2] ? faces->minx[f1] : faces->minx[f2];
+        int bx1 = faces->maxx[f1] < faces->maxx[f2] ? faces->maxx[f1] : faces->maxx[f2];
+        int by0 = faces->miny[f1] > faces->miny[f2] ? faces->miny[f1] : faces->miny[f2];
+        int by1 = faces->maxy[f1] < faces->maxy[f2] ? faces->maxy[f1] : faces->maxy[f2];
+        double bbox_area = 0.0; if (bx0 <= bx1 && by0 <= by1) bbox_area = (double)(bx1 - bx0) * (double)(by1 - by0);
+        const double eps = 1e-9;
+        int valid1_fixed = (cf1_fixed_v >= 3 && ia1_fixed >= MIN_INTERSECTION_AREA_PIXELS && ia1_fixed <= bbox_area + eps);
+        int valid2_fixed = (cf2_fixed_v >= 3 && ia2_fixed >= MIN_INTERSECTION_AREA_PIXELS && ia2_fixed <= bbox_area + eps);
+        int ov_fixed = (valid1_fixed || valid2_fixed) ? 1 : 0;
+        int valid1_float = (cf1_float_v >= 3 && ia1_float >= MIN_INTERSECTION_AREA_PIXELS && ia1_float <= bbox_area + eps);
+        int valid2_float = (cf2_float_v >= 3 && ia2_float >= MIN_INTERSECTION_AREA_PIXELS && ia2_float <= bbox_area + eps);
+        int ov_float = (valid1_float || valid2_float) ? 1 : 0;
+        char notes[128] = "";
+        if (ov_fixed != ov_float) { divergent_pairs++; snprintf(notes, sizeof(notes), "ov_fixed!=ov_float"); }
+        if (ov_current != ov_fixed) { override_changed++; if (notes[0]) strncat(notes, ";cur!=fixed", sizeof(notes)-strlen(notes)-1); else snprintf(notes, sizeof(notes), "cur!=fixed"); }
+        fprintf(of, "%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%lld,%lld,%d,%d,%s\n",
+                f1, f2, ov_current, ov_fixed, ov_float, ia1_fixed, ia2_fixed, ia1_float, ia2_float, bbox_area,
+                cf1_fixed_v, cf1_float_v, cf2_fixed_v, cf2_float_v, cf1_raw, cf2_raw, cf1_float_over, cf2_float_over, notes);
+    }
+    fclose(of);
+    FILE *rf = fopen("ovscanrpt.txt","w");
+    if (rf) { fprintf(rf, "ovscan: total_pairs,%d,divergent_pairs,%d,override_changed,%d\n", pair_count, divergent_pairs, override_changed); fclose(rf); }
+    printf("Scan complete: %d pairs scanned, %d divergent, %d where current differs from fixed\n", pair_count, divergent_pairs, override_changed);
+    free(pairs);
+    jitter = saved_jitter; s_global_proj_scale_fixed = saved_scale;
+}
+********************* fin SAV scan_all_overlaps *********************
