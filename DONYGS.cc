@@ -2416,38 +2416,77 @@ int check_sort_repair(Model3D* model, int face_count) {
 
             int pos1 = pos_of_face[f1];
             int pos2 = pos_of_face[f2];
-            int rc = ray_cast(model, f1, f2);
+            /* Try both intersection centroids (both orders) and prefer the one
+             * with the larger positive clipped area. If the selected point yields
+             * an indeterminate ray_cast (rc==0), try the other centroid, then
+             * finally fall back to bbox-center as last resort. This mirrors the
+             * inspector's behaviour but is slightly more tolerant (tries multiple
+             * candidates) to avoid missing detectable inversions.
+             */
+            long long a1 = 0, a2 = 0;
+            int cx1 = 0, cy1 = 0, cx2 = 0, cy2 = 0;
+            int have1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &cx1, &cy1, &a1) && a1 > 0;
+            int have2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &cx2, &cy2, &a2) && a2 > 0;
+
+            int cx = 0, cy = 0;
+            int point_source = 0; /* 1=cent1, 2=cent2, 3=bbox */
+            int rc = 0;
+
+            /* Prefer the larger centroid area when available */
+            if (have1 || have2) {
+                if (have1 && (!have2 || a1 >= a2)) { cx = cx1; cy = cy1; point_source = 1; }
+                else { cx = cx2; cy = cy2; point_source = 2; }
+                rc = ray_cast_at(model, f1, f2, cx, cy);
+                /* If indeterminate, try the other centroid if present */
+                if (rc == 0 && have1 && have2 && point_source == 1) {
+                    cx = cx2; cy = cy2; point_source = 2;
+                    rc = ray_cast_at(model, f1, f2, cx, cy);
+                } else if (rc == 0 && have1 && have2 && point_source == 2) {
+                    cx = cx1; cy = cy1; point_source = 1;
+                    rc = ray_cast_at(model, f1, f2, cx, cy);
+                }
+            }
+
+            /* Last resort: bbox center */
+            if (rc == 0) {
+                int ix0 = (minx1 > minx2) ? minx1 : minx2;
+                int ix1 = (maxx1 < maxx2) ? maxx1 : maxx2;
+                int iy0 = (miny1 > miny2) ? miny1 : miny2;
+                int iy1 = (maxy1 < maxy2) ? maxy1 : maxy2;
+                cx = (ix0 + ix1) / 2; cy = (iy0 + iy1) / 2; point_source = 3;
+                rc = ray_cast_at(model, f1, f2, cx, cy);
+            }
+
+            if (debug_overlap_subj == f1 && debug_overlap_clip == f2) {
+                if (point_source == 1) printf("check_sort_repair: using centroid f1->f2 (%d,%d) area1=%lld\n", cx, cy, a1);
+                else if (point_source == 2) printf("check_sort_repair: using centroid f2->f1 (%d,%d) area2=%lld\n", cx, cy, a2);
+                else printf("check_sort_repair: using bbox-center (%d,%d)\n", cx, cy);
+            }
             if (rc == 0) continue; // undetermined
 
-            if (rc == -1) {
-                // f1 is closer than f2 -> should be AFTER f2 (pos1 > pos2)
-                if (!(pos1 > pos2)) {
-                    // move f1 to immediately after f2 (minimal change)
-                    int tmp = faces->sorted_face_indices[pos1];
-                    if (pos1 < pos2) {
-                        // shift left the block [pos1+1 .. pos2] into [pos1 .. pos2-1]
-                        memmove(&faces->sorted_face_indices[pos1], &faces->sorted_face_indices[pos1+1], sizeof(int) * (pos2 - pos1));
-                        faces->sorted_face_indices[pos2] = tmp;
-                        // update positions
-                        for (int k = pos1; k <= pos2; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
+            if (rc == -1 || rc == 1) {
+                /* Single-direction strategy: always move the *closer* face forward
+                 * (towards higher indices) to be immediately AFTER the other face.
+                 * This avoids oscillations caused by moving faces backward.
+                 */
+                int closer = (rc == -1) ? f1 : f2;
+                int other  = (rc == -1) ? f2 : f1;
+                int pclos = pos_of_face[closer];
+                int pother = pos_of_face[other];
+                if (pclos <= pother) {
+                    /* Move `closer` to position `pother` (immediately after `other`). */
+                    int tmp = faces->sorted_face_indices[pclos];
+                    if (pclos < pother) {
+                        memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
+                        faces->sorted_face_indices[pother] = tmp;
+                        for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
+                        ++repairs;
+                        printf("check_sort_repair: moved face %d FORWARD AFTER %d (pos %d -> %d)\n", closer, other, pclos, pother);
                     } else {
-                        // pos1 == pos2 should not happen for distinct faces; ignore gracefully
+                        /* pclos == pother should not happen for distinct faces; ignore. */
                     }
-                    ++repairs;
-                    printf("check_sort_repair: moved face %d AFTER %d (pos %d -> %d)\n", f1, f2, pos1, pos2);
-                }
-            } else if (rc == 1) {
-                // f1 is farther than f2 -> should be BEFORE f2 (pos1 < pos2)
-                if (!(pos1 < pos2)) {
-                    int tmp = faces->sorted_face_indices[pos1];
-                    if (pos1 > pos2) {
-                        // shift right the block [pos2 .. pos1-1] into [pos2+1 .. pos1]
-                        memmove(&faces->sorted_face_indices[pos2+1], &faces->sorted_face_indices[pos2], sizeof(int) * (pos1 - pos2));
-                        faces->sorted_face_indices[pos2] = tmp;
-                        for (int k = pos2; k <= pos1; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
-                    }
-                    ++repairs;
-                    printf("check_sort_repair: moved face %d BEFORE %d (pos %d -> %d)\n", f1, f2, pos1, pos2);
+                } else {
+                    /* Already after `other` (pclos > pother): no change needed. */
                 }
             }
         }
@@ -3118,12 +3157,16 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         debug_clip_fixed_area = (double)area2_1 * 0.5 / ((double)FIXED_SCALE * (double)FIXED_SCALE);
         int tx2=0, ty2=0; long long a22 = 0; debug_overlap_subj = f2; debug_overlap_clip = f1; ok2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &tx2, &ty2, &a22); debug_overlap_subj = -1; debug_overlap_clip = -1; area2_2 = (unsigned long long)(a22 >= 0 ? a22 : -a22);
         /* Also compute double areas for diagnostic parity */
-        int dtx=0,dty=0; compute_intersection_centroid_ordered(model, f1, f2, &dtx, &dty, &iarea1);
-        compute_intersection_centroid_ordered(model, f2, f1, &dtx, &dty, &iarea2);
+        int dtx=0,dty=0; long long _tmpa2_1 = 0; /* diagnostic parity via QD bbox */
+        compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &dtx, &dty, &_tmpa2_1);
+        iarea1 = (double)_tmpa2_1;
+        long long _tmpa2_2 = 0;
+        compute_intersection_centroid_ordered_qd_fixed(model, f2, f1, &dtx, &dty, &_tmpa2_2);
+        iarea2 = (double)_tmpa2_2; 
     } else {
         /* default behavior: double-based clipping (existing path) */
-        debug_overlap_subj = f1; debug_overlap_clip = f2; ok1 = compute_intersection_centroid_ordered(model, f1, f2, &icx1, &icy1, &iarea1); debug_overlap_subj = -1; debug_overlap_clip = -1;
-        debug_overlap_subj = f2; debug_overlap_clip = f1; ok2 = compute_intersection_centroid_ordered(model, f2, f1, &icx2, &icy2, &iarea2); debug_overlap_subj = -1; debug_overlap_clip = -1;
+        debug_overlap_subj = f1; debug_overlap_clip = f2; long long _ia2_1 = 0; ok1 = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &icx1, &icy1, &_ia2_1); iarea1 = ok1 ? (double)_ia2_1 : 0.0; debug_overlap_subj = -1; debug_overlap_clip = -1;
+        debug_overlap_subj = f2; debug_overlap_clip = f1; long long _ia2_2 = 0; ok2 = compute_intersection_centroid_ordered_qd_fixed(model, f2, f1, &icx2, &icy2, &_ia2_2); iarea2 = ok2 ? (double)_ia2_2 : 0.0; debug_overlap_subj = -1; debug_overlap_clip = -1;
     }
 
     double bbox_area = 0.0; if (!(oxmin > oxmax || oymin > oymax)) bbox_area = (double)(oxmax - oxmin) * (double)(oymax - oymin);
@@ -3174,356 +3217,451 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     return 0;
 }
 
+
+/* compute_intersection_centroid_ordered
+ * Signature (kept here as a comment for reference):
+ * static int compute_intersection_centroid_ordered(Model3D* model, int subj, int clip, int* outx, int* outy, double* out_area);
+ *
+ * Reason for removal: centroid-from-clipped-polygon implementation is deprecated —
+ * we now use runs-based region bbox or fixed-point variants. Keep a stub so
+ * callers remain valid; preserve the original signature above for future
+ * reference.
+ */
 static int compute_intersection_centroid_ordered(Model3D* model, int subj, int clip, int* outx, int* outy, double* out_area) {
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int nsub = faces->vertex_count[subj];
-    int nclip = faces->vertex_count[clip];
-    
-    FILE* f = fopen("debugarea.txt", "w");
-    if (!f) f = fopen("/tmp/debugarea.txt", "w");
-    
-    if (f) fprintf(f, "=== INTERSECTION DEBUG ===\n");
-    if (f) fprintf(f, "Subject face %d: %d vertices\n", subj, nsub);
-    if (f) fprintf(f, "Clip face %d: %d vertices\n", clip, nclip);
-    
-    if (nsub <= 0 || nclip <= 0) { 
-        if (f) { fprintf(f, "Invalid vertex counts\n"); fclose(f); }
-        if (out_area) *out_area = 0.0; 
-        return 0; 
-    }
-
-    int needcap = nsub + nclip + 8;
-    if (clip_bufcap < needcap) {
-        long long *nsx = (long long*)realloc(clip_sx, sizeof(long long) * needcap);
-        long long *nsy = (long long*)realloc(clip_sy, sizeof(long long) * needcap);
-        long long *ntx = (long long*)realloc(clip_tx, sizeof(long long) * needcap);
-        long long *nty = (long long*)realloc(clip_ty, sizeof(long long) * needcap);
-        if (!nsx || !nsy || !ntx || !nty) {
-            if (nsx) clip_sx = nsx; if (nsy) clip_sy = nsy; if (ntx) clip_tx = ntx; if (nty) clip_ty = nty;
-            clip_bufcap = (clip_sx && clip_sy && clip_tx && clip_ty) ? needcap : clip_bufcap;
-            if (f) { fprintf(f, "Allocation failed\n"); fclose(f); }
-            if (out_area) *out_area = 0.0; return 0;
-        }
-        clip_sx = nsx; clip_sy = nsy; clip_tx = ntx; clip_ty = nty; clip_bufcap = needcap;
-    }
-
-    int off_sub = faces->vertex_indices_ptr[subj];
-    for (int i = 0; i < nsub; ++i) {
-        int vid = faces->vertex_indices_buffer[off_sub + i] - 1;
-        clip_sx[i] = ((long long)vtx->x2d[vid]) << FIXED_SHIFT;
-        clip_sy[i] = ((long long)vtx->y2d[vid]) << FIXED_SHIFT;
-    }
-    int curr_n = nsub;
-
-    int off_clip = faces->vertex_indices_ptr[clip];
-    if (f) {
-    fprintf(f, "\nSubject polygon (face %d):\n", subj);
-    for (int i = 0; i < nsub; ++i) {
-        int vid = faces->vertex_indices_buffer[off_sub + i] - 1;
-        fprintf(f, "  v[%d] = (%d, %d)\n", i, vtx->x2d[vid], vtx->y2d[vid]);
-    }
-    
-    fprintf(f, "\nClip polygon (face %d):\n", clip);
-    for (int j = 0; j < nclip; ++j) {
-        int vj = faces->vertex_indices_buffer[off_clip + j] - 1;
-        fprintf(f, "  v[%d] = (%d, %d)\n", j, vtx->x2d[vj], vtx->y2d[vj]);
-    }
-}
-
-    long long clip_area2 = 0;
-    for (int j = 0; j < nclip; ++j) {
-        int vj = faces->vertex_indices_buffer[off_clip + j] - 1;
-        int vj1 = faces->vertex_indices_buffer[off_clip + ((j + 1) % nclip)] - 1;
-        long long x0 = (long long)vtx->x2d[vj]; 
-        long long y0 = (long long)vtx->y2d[vj];
-        long long x1 = (long long)vtx->x2d[vj1]; 
-        long long y1 = (long long)vtx->y2d[vj1];
-        clip_area2 += x0 * y1 - x1 * y0;
-    }
-    int clip_ccw = (clip_area2 >= 0) ? 1 : -1;
-
-    for (int edge_idx = 0; edge_idx < nclip; ++edge_idx) {
-        if (curr_n == 0) break;
-        
-        int v1_idx = faces->vertex_indices_buffer[off_clip + edge_idx] - 1;
-        int v2_idx = faces->vertex_indices_buffer[off_clip + ((edge_idx + 1) % nclip)] - 1;
-        long long ex1 = ((long long)vtx->x2d[v1_idx]) << FIXED_SHIFT;
-        long long ey1 = ((long long)vtx->y2d[v1_idx]) << FIXED_SHIFT;
-        long long ex2 = ((long long)vtx->x2d[v2_idx]) << FIXED_SHIFT;
-        long long ey2 = ((long long)vtx->y2d[v2_idx]) << FIXED_SHIFT;
-        
-        long long edge_dx = ex2 - ex1;
-        long long edge_dy = ey2 - ey1;
-        
-        int out_n = 0;
-        
-        for (int i = 0; i < curr_n; ++i) {
-            long long cur_x = clip_sx[i];
-            long long cur_y = clip_sy[i];
-            long long next_x = clip_sx[(i + 1) % curr_n];
-            long long next_y = clip_sy[(i + 1) % curr_n];
-            
-            long long cur_cross = edge_dx * (cur_y - ey1) - edge_dy * (cur_x - ex1);
-            long long next_cross = edge_dx * (next_y - ey1) - edge_dy * (next_x - ex1);
-            
-            int cur_inside = (clip_ccw * cur_cross > 0);
-            int next_inside = (clip_ccw * next_cross > 0);
-            
-            if (cur_inside) {
-                clip_tx[out_n] = cur_x;
-                clip_ty[out_n] = cur_y;
-                out_n++;
-            }
-            
-            if (cur_inside != next_inside) {
-                long long seg_dx = next_x - cur_x;
-                long long seg_dy = next_y - cur_y;
-                long long denom = seg_dx * edge_dy - seg_dy * edge_dx;
-                
-                if (denom != 0) {
-                    long long numer = (ex1 - cur_x) * edge_dy - (ey1 - cur_y) * edge_dx;
-                    long long isect_x = cur_x + (numer * seg_dx) / denom;
-                    long long isect_y = cur_y + (numer * seg_dy) / denom;
-                    
-                    clip_tx[out_n] = isect_x;
-                    clip_ty[out_n] = isect_y;
-                    out_n++;
-                }
-            }
-        }
-        
-        if (out_n == 0) { 
-            curr_n = 0; 
-            break; 
-        }
-        
-        for (int k = 0; k < out_n; ++k) {
-            clip_sx[k] = clip_tx[k];
-            clip_sy[k] = clip_ty[k];
-        }
-        curr_n = out_n;
-    }
-
-    if (f) fprintf(f, "\nAfter clipping: curr_n = %d\n", curr_n);
-    if (f) {
-        fprintf(f, "Vertices before deduplication:\n");
-        for (int i = 0; i < curr_n; ++i) {
-            fprintf(f, "  v[%d] = (%f, %f)\n", i, 
-                   (double)clip_sx[i] / (double)FIXED_SCALE,
-                   (double)clip_sy[i] / (double)FIXED_SCALE);
-        }
-    }
-
-    /* REMOVE DUPLICATE CONSECUTIVE VERTICES - Version robuste */
-    if (curr_n > 0) {
-        int unique_n = 0;
-        long long tolerance = FIXED_SCALE / 16;  /* 1/16 pixel tolerance */
-        
-        if (f) fprintf(f, "\nRemoving duplicates (tolerance = %lld fixed units):\n", tolerance);
-        
-        for (int i = 0; i < curr_n; ++i) {
-            /* Compare with the LAST added unique vertex, not the next in original list */
-            int should_add = 1;
-            
-            if (unique_n > 0) {
-                long long dx = clip_sx[i] - clip_tx[unique_n - 1];
-                long long dy = clip_sy[i] - clip_ty[unique_n - 1];
-                long long dist_sq = dx * dx + dy * dy;
-                long long tol_sq = tolerance * tolerance;
-                
-                if (f) fprintf(f, "  v[%d]: dx=%lld, dy=%lld, dist_sq=%lld, tol_sq=%lld\n", 
-                              i, dx, dy, dist_sq, tol_sq);
-                
-                if (dist_sq <= tol_sq) {
-                    should_add = 0;
-                    if (f) fprintf(f, "    -> DUPLICATE, skipping\n");
-                }
-            }
-            
-            if (should_add) {
-                clip_tx[unique_n] = clip_sx[i];
-                clip_ty[unique_n] = clip_sy[i];
-                if (f) fprintf(f, "    -> Added as unique[%d]\n", unique_n);
-                unique_n++;
-            }
-        }
-        
-        /* Also check if first and last are duplicates (closing the loop) */
-        if (unique_n > 1) {
-            long long dx = clip_tx[0] - clip_tx[unique_n - 1];
-            long long dy = clip_ty[0] - clip_ty[unique_n - 1];
-            long long dist_sq = dx * dx + dy * dy;
-            long long tol_sq = tolerance * tolerance;
-            
-            if (f) fprintf(f, "Checking first vs last: dist_sq=%lld, tol_sq=%lld\n", dist_sq, tol_sq);
-            
-            if (dist_sq <= tol_sq) {
-                unique_n--;  /* Remove the last vertex as it's duplicate of first */
-                if (f) fprintf(f, "  -> First and last are duplicates, removed last\n");
-            }
-        }
-        
-        if (f) fprintf(f, "After deduplication: unique_n = %d\n", unique_n);
-        
-        /* Copy unique vertices back */
-        if (unique_n >= 3) {
-            for (int i = 0; i < unique_n; ++i) {
-                clip_sx[i] = clip_tx[i];
-                clip_sy[i] = clip_ty[i];
-            }
-            curr_n = unique_n;
-        } else {
-            if (f) fprintf(f, "Not enough unique vertices (%d < 3)\n", unique_n);
-            curr_n = 0;
-        }
-    }
-
-    if (f) fprintf(f, "\nFinal curr_n = %d\n", curr_n);
-
-    int result = 0;
-    double final_area = 0.0;
-    
-    if (curr_n >= 3) {
-        double *px = (double*)malloc(curr_n * sizeof(double));
-        double *py = (double*)malloc(curr_n * sizeof(double));
-        
-        if (!px || !py) {
-            free(px); free(py);
-            if (f) { fprintf(f, "malloc failed for px/py\n"); fclose(f); }
-            if (out_area) *out_area = 0.0;
-            return 0;
-        }
-        
-        if (f) fprintf(f, "\nFinal vertices:\n");
-        for (int i = 0; i < curr_n; ++i) {
-            px[i] = (double)clip_sx[i] / (double)FIXED_SCALE;
-            py[i] = (double)clip_sy[i] / (double)FIXED_SCALE;
-            if (f) fprintf(f, "  v[%d] = (%f, %f)\n", i, px[i], py[i]);
-        }
-        
-        double signed_area = 0.0;
-        double cx_sum = 0.0;
-        double cy_sum = 0.0;
-        
-        if (f) fprintf(f, "\nCalculating area:\n");
-        for (int i = 0; i < curr_n; ++i) {
-            int j = (i + 1) % curr_n;
-            double cross = px[i] * py[j] - px[j] * py[i];
-            signed_area += cross;
-            cx_sum += (px[i] + px[j]) * cross;
-            cy_sum += (py[i] + py[j]) * cross;
-            if (f) fprintf(f, "  cross[%d] = %f\n", i, cross);
-        }
-        
-        signed_area *= 0.5;
-        final_area = fabs(signed_area);
-        
-        if (f) fprintf(f, "signed_area = %f\n", signed_area);
-        if (f) fprintf(f, "final_area = %f\n", final_area);
-        
-        if (final_area > 1e-9) {
-            double centroid_x = cx_sum / (6.0 * signed_area);
-            double centroid_y = cy_sum / (6.0 * signed_area);
-            
-            int pixx = (int)(centroid_x + (centroid_x >= 0 ? 0.5 : -0.5));
-            int pixy = (int)(centroid_y + (centroid_y >= 0 ? 0.5 : -0.5));
-            
-            if (f) fprintf(f, "centroid = (%d, %d)\n", pixx, pixy);
-            
-            if (outx) *outx = pixx;
-            else debug_clip_centroid_x = pixx;
-            if (outy) *outy = pixy;
-            else debug_clip_centroid_y = pixy;
-            
-            result = 1;
-        } else {
-            if (f) fprintf(f, "Area too small\n");
-        }
-        
-        free(px);
-        free(py);
-
-        if (curr_n > 0) {
-            debug_clip_vcount = curr_n;
-            if (debug_clip_vcount > DEBUG_CLIP_MAX) debug_clip_vcount = DEBUG_CLIP_MAX;
-            for (int ii = 0; ii < debug_clip_vcount; ++ii) {
-                debug_clip_vx[ii] = (int)(clip_sx[ii] >> FIXED_SHIFT);
-                debug_clip_vy[ii] = (int)(clip_sy[ii] >> FIXED_SHIFT);
-            }
-        } else {
-            debug_clip_vcount = 0;
-        }
-
-        debug_clip_raw_area2 = (long long)(signed_area * 2.0 * FIXED_SCALE * FIXED_SCALE);
-        debug_clip_area = final_area;
-        debug_clip_fixed_area = final_area;
-        debug_clip_fixed_vcount = curr_n;
-        if (debug_clip_fixed_vcount > DEBUG_CLIP_MAX) debug_clip_fixed_vcount = DEBUG_CLIP_MAX;
-        for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
-            debug_clip_fixed_vx[ii] = (int)(clip_sx[ii] >> FIXED_SHIFT);
-            debug_clip_fixed_vy[ii] = (int)(clip_sy[ii] >> FIXED_SHIFT);
-        }
-
-        debug_clip_float_overridden = 0;
-
-        if (result) {
-            int sub_off = faces->vertex_indices_ptr[subj];
-            int clip_off = faces->vertex_indices_ptr[clip];
-            int sub_minx = 0x7fffffff, sub_maxx = -0x7fffffff, sub_miny = 0x7fffffff, sub_maxy = -0x7fffffff;
-            int clip_minx = 0x7fffffff, clip_maxx = -0x7fffffff, clip_miny = 0x7fffffff, clip_maxy = -0x7fffffff;
-            
-            for (int i = 0; i < nsub; ++i) {
-                int vid = faces->vertex_indices_buffer[sub_off + i] - 1;
-                int x = vtx->x2d[vid];
-                int y = vtx->y2d[vid];
-                if (x < sub_minx) sub_minx = x; if (x > sub_maxx) sub_maxx = x;
-                if (y < sub_miny) sub_miny = y; if (y > sub_maxy) sub_maxy = y;
-            }
-            
-            for (int i = 0; i < nclip; ++i) {
-                int vid = faces->vertex_indices_buffer[clip_off + i] - 1;
-                int x = vtx->x2d[vid];
-                int y = vtx->y2d[vid];
-                if (x < clip_minx) clip_minx = x; if (x > clip_maxx) clip_maxx = x;
-                if (y < clip_miny) clip_miny = y; if (y > clip_maxy) clip_maxy = y;
-            }
-            
-            int ix0 = sub_minx > clip_minx ? sub_minx : clip_minx;
-            int ix1 = sub_maxx < clip_maxx ? sub_maxx : clip_maxx;
-            int iy0 = sub_miny > clip_miny ? sub_miny : clip_miny;
-            int iy1 = sub_maxy < clip_maxy ? sub_maxy : clip_maxy;
-            
-            double bbox_area = 0.0;
-            if (ix0 <= ix1 && iy0 <= iy1) bbox_area = (double)(ix1 - ix0) * (double)(iy1 - iy0);
-            
-            if (f) fprintf(f, "bbox_area = %f\n", bbox_area);
-            
-            if (final_area > bbox_area + 1e-9) {
-                if (f) fprintf(f, "Sanity check FAILED, capping area\n");
-                final_area = bbox_area * 0.9;
-            }
-        }
-    } else {
-        if (f) fprintf(f, "curr_n < 3, no polygon\n");
-    }
-    
-    if (f) fprintf(f, "\nFinal: result=%d, final_area=%f\n", result, final_area);
-    if (out_area) {
-        *out_area = final_area;
-        if (f) fprintf(f, "Set *out_area = %f\n", final_area);
-    }
-    
-    if (f) fclose(f);
-    
-    return result;
+    (void)model; (void)subj; (void)clip; (void)outx; (void)outy; (void)out_area;
+    return 0; 
 }
 
 static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
-    double area_double = 0.0;
-    int ok = compute_intersection_centroid_ordered(model, subj, clip, outx, outy, &area_double);
-    if (out_area2) *out_area2 = debug_clip_raw_area2;
-    return ok;
+    /* Robust integer implementation for diagnostics and fixed-area comparisons.
+     * - Clips `subj` by `clip` using Sutherland–Hodgman (double intermediates).
+     * - Produces integer output vertices (rounded), computes signed raw area2
+     *   (shoelace: 2 * pixel-area) and centroid (integer-rounded).
+     * - Returns 1 if a clipped polygon (>=3 verts) was produced; 0 otherwise.
+     * - Writes *out_area2 in FIXED units (raw_area2 * FIXED_SCALE^2).
+     */
+    if (!model || out_area2 == NULL) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    if (subj < 0 || clip < 0 || subj >= faces->face_count || clip >= faces->face_count) return 0;
+
+    int sn = faces->vertex_count[subj];
+    int cn = faces->vertex_count[clip];
+    if (sn < 3 || cn < 3) {
+        debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; return 0;
+    }
+
+    /* Gather integer input polygons (screen coords) */
+    int *sx = (int*)malloc(sizeof(int) * sn);
+    int *sy = (int*)malloc(sizeof(int) * sn);
+    int *cx = (int*)malloc(sizeof(int) * cn);
+    int *cy = (int*)malloc(sizeof(int) * cn);
+    if (!sx || !sy || !cx || !cy) {
+        if (sx) free(sx); if (sy) free(sy); if (cx) free(cx); if (cy) free(cy);
+        debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0; return 0;
+    }
+    for (int i = 0; i < sn; ++i) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[subj] + i] - 1;
+        sx[i] = vtx->x2d[vi]; sy[i] = vtx->y2d[vi];
+    }
+    for (int i = 0; i < cn; ++i) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[clip] + i] - 1;
+        cx[i] = vtx->x2d[vi]; cy[i] = vtx->y2d[vi];
+    }
+
+    /* Working buffers on heap to avoid stack exhaustion for large polygons */
+    double *buf_x1 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
+    double *buf_y1 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
+    double *buf_x2 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
+    double *buf_y2 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
+    int *out_px = (int*)malloc(sizeof(int) * DEBUG_CLIP_MAX);
+    int *out_py = (int*)malloc(sizeof(int) * DEBUG_CLIP_MAX);
+    if (!buf_x1 || !buf_y1 || !buf_x2 || !buf_y2 || !out_px || !out_py) {
+        free(sx); free(sy); free(cx); free(cy);
+        if (buf_x1) free(buf_x1); if (buf_y1) free(buf_y1); if (buf_x2) free(buf_x2); if (buf_y2) free(buf_y2);
+        if (out_px) free(out_px); if (out_py) free(out_py);
+        debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0; return 0;
+    }
+
+    int cur_n = sn;
+    for (int i = 0; i < cur_n && i < DEBUG_CLIP_MAX; ++i) { buf_x1[i] = (double)sx[i]; buf_y1[i] = (double)sy[i]; }
+
+    /* Sutherland–Hodgman: clip against each edge of `clip` */
+    for (int ci = 0; ci < cn && cur_n > 0; ++ci) {
+        int ci2 = (ci + 1) % cn;
+        double cx1d = (double)cx[ci], cy1d = (double)cy[ci];
+        double cx2d = (double)cx[ci2], cy2d = (double)cy[ci2];
+        int out_n_tmp = 0;
+        for (int si = 0; si < cur_n; ++si) {
+            int sj = (si + 1) % cur_n;
+            double sx1d = buf_x1[si], sy1d = buf_y1[si];
+            double sx2d = buf_x1[sj], sy2d = buf_y1[sj];
+            double side1 = (cx2d - cx1d) * (sy1d - cy1d) - (cy2d - cy1d) * (sx1d - cx1d);
+            double side2 = (cx2d - cx1d) * (sy2d - cy1d) - (cy2d - cy1d) * (sx2d - cx1d);
+            int inside1 = (side1 >= 0.0);
+            int inside2 = (side2 >= 0.0);
+            if (inside1 && inside2) {
+                if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = sx2d; buf_y2[out_n_tmp] = sy2d; out_n_tmp++; }
+            } else if (inside1 && !inside2) {
+                double dx = sx2d - sx1d, dy = sy2d - sy1d;
+                double ex = cx2d - cx1d, ey = cy2d - cy1d;
+                double denom = ex * dy - ey * dx;
+                double t = 0.0;
+                if (fabs(denom) > 1e-12) t = (ex * (sy1d - cy1d) - ey * (sx1d - cx1d)) / denom;
+                double ix = sx1d + t * dx; double iy = sy1d + t * dy;
+                if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = ix; buf_y2[out_n_tmp] = iy; out_n_tmp++; }
+            } else if (!inside1 && inside2) {
+                double dx = sx2d - sx1d, dy = sy2d - sy1d;
+                double ex = cx2d - cx1d, ey = cy2d - cy1d;
+                double denom = ex * dy - ey * dx;
+                double t = 0.0;
+                if (fabs(denom) > 1e-12) t = (ex * (sy1d - cy1d) - ey * (sx1d - cx1d)) / denom;
+                double ix = sx1d + t * dx; double iy = sy1d + t * dy;
+                if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = ix; buf_y2[out_n_tmp] = iy; out_n_tmp++; }
+                if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = sx2d; buf_y2[out_n_tmp] = sy2d; out_n_tmp++; }
+            }
+        }
+        cur_n = out_n_tmp;
+        for (int k = 0; k < cur_n; ++k) { buf_x1[k] = buf_x2[k]; buf_y1[k] = buf_y2[k]; }
+    }
+
+    /* Round and remove duplicate/colinear vertices into out_px/out_py */
+    int final_n = 0;
+    for (int i = 0; i < cur_n; ++i) {
+        int px = (int)floor(buf_x1[i] + 0.5);
+        int py = (int)floor(buf_y1[i] + 0.5);
+        if (final_n > 0 && out_px[final_n-1] == px && out_py[final_n-1] == py) continue;
+        if (final_n >= 2) {
+            int x1 = out_px[final_n-2], y1 = out_py[final_n-2];
+            int x2 = out_px[final_n-1], y2 = out_py[final_n-1];
+            long long cross = (long long)(x2 - x1) * (long long)(py - y1) - (long long)(y2 - y1) * (long long)(px - x1);
+            if (cross == 0) { out_px[final_n-1] = px; out_py[final_n-1] = py; continue; }
+        }
+        if (final_n < DEBUG_CLIP_MAX) { out_px[final_n] = px; out_py[final_n] = py; final_n++; }
+    }
+    if (final_n >= 2 && out_px[0] == out_px[final_n-1] && out_py[0] == out_py[final_n-1]) final_n--;
+
+    if (final_n < 3) {
+        debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0;
+        free(sx); free(sy); free(cx); free(cy);
+        free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
+        return 0;
+    }
+
+    /* Copy to debug buffers */
+    if (final_n > DEBUG_CLIP_MAX) final_n = DEBUG_CLIP_MAX;
+    for (int i = 0; i < final_n; ++i) { debug_clip_fixed_vx[i] = out_px[i]; debug_clip_fixed_vy[i] = out_py[i]; }
+    debug_clip_fixed_vcount = final_n;
+
+    /* Compute signed raw area2 and centroid numerators */
+    long long raw_area2_signed = 0;
+    long long cx_num = 0, cy_num = 0;
+    for (int i = 0; i < final_n; ++i) {
+        int j = (i + 1) % final_n;
+        long long xi = (long long)out_px[i], yi = (long long)out_py[i];
+        long long xj = (long long)out_px[j], yj = (long long)out_py[j];
+        long long cross = xi * yj - yi * xj;
+        raw_area2_signed += cross;
+        cx_num += (xi + xj) * cross;
+        cy_num += (yi + yj) * cross;
+    }
+
+    if (raw_area2_signed == 0) {
+        debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0;
+        if (outx) *outx = out_px[0]; if (outy) *outy = out_py[0];
+        free(sx); free(sy); free(cx); free(cy);
+        free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
+        return 1;
+    }
+
+    long long abs_raw = (raw_area2_signed >= 0) ? raw_area2_signed : -raw_area2_signed;
+    debug_clip_raw_area2 = abs_raw;
+    debug_clip_fixed_area = fabs((double)raw_area2_signed) * 0.5;
+
+    /* Centroid formula: C = (1/(6*A)) * sum((xi+xj)*cross), with raw_area2_signed == 2*A
+     * => Cx = (2 * cx_num) / (3 * raw_area2_signed)
+     */
+    long long numer_x = 2 * cx_num;
+    long long numer_y = 2 * cy_num;
+    long long denom = 3 * raw_area2_signed;
+    if (denom < 0) { denom = -denom; numer_x = -numer_x; numer_y = -numer_y; }
+    long long cx_i = (numer_x >= 0) ? (numer_x + denom/2) / denom : -(( -numer_x + denom/2) / denom);
+    long long cy_i = (numer_y >= 0) ? (numer_y + denom/2) / denom : -(( -numer_y + denom/2) / denom);
+    if (outx) *outx = (int)cx_i; if (outy) *outy = (int)cy_i;
+
+    /* Return fixed-scaled raw area2 */
+    unsigned long long a2_fixed = (unsigned long long)abs_raw * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+    *out_area2 = (long long)a2_fixed;
+
+    free(sx); free(sy); free(cx); free(cy);
+    free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
+    return 1;
+}
+
+/* Alternative implementation using QuickDraw regions (faster to reason about for
+ * overlapping faces and robust to colinear/edge-sharing cases). This does NOT
+ * compute the exact area-centroid, it returns the center of the region bbox.
+ * Returns 1 and sets (*outx,*outy) and *out_area2 (bbox area) on success, 0 on no-overlap.
+ */
+static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, int* ix0, int* iy0, int* ix1, int* iy1, long long* out_area2) {
+    if (!model || !ix0 || !iy0 || !ix1 || !iy1) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    if (subj < 0 || clip < 0 || subj >= faces->face_count || clip >= faces->face_count) return 0;
+
+    int n1 = faces->vertex_count[subj];
+    int n2 = faces->vertex_count[clip];
+    if (n1 <= 0 || n2 <= 0) return 0;
+
+    /* Vertex index offsets used later */
+    int off1 = faces->vertex_indices_ptr[subj];
+    int off2 = faces->vertex_indices_ptr[clip];
+
+    /* Compute per-face bounding boxes (used to clamp the region bbox) */
+    int minx1, maxx1, miny1, maxy1;
+    {
+        int vi = faces->vertex_indices_buffer[off1] - 1;
+        minx1 = maxx1 = vtx->x2d[vi];
+        miny1 = maxy1 = vtx->y2d[vi];
+        for (int i = 1; i < n1; ++i) {
+            vi = faces->vertex_indices_buffer[off1 + i] - 1;
+            int vx = vtx->x2d[vi], vy = vtx->y2d[vi];
+            if (vx < minx1) minx1 = vx; if (vx > maxx1) maxx1 = vx;
+            if (vy < miny1) miny1 = vy; if (vy > maxy1) maxy1 = vy;
+        }
+    }
+    int minx2, maxx2, miny2, maxy2;
+    {
+        int wi = faces->vertex_indices_buffer[off2] - 1;
+        minx2 = maxx2 = vtx->x2d[wi];
+        miny2 = maxy2 = vtx->y2d[wi];
+        for (int i = 1; i < n2; ++i) {
+            wi = faces->vertex_indices_buffer[off2 + i] - 1;
+            int wx = vtx->x2d[wi], wy = vtx->y2d[wi];
+            if (wx < minx2) minx2 = wx; if (wx > maxx2) maxx2 = wx;
+            if (wy < miny2) miny2 = wy; if (wy > maxy2) maxy2 = wy;
+        }
+    }
+
+    /* Logging removed: region debug logs were deleted per request */
+
+    RegionHndl r1 = NewRgn();
+    RegionHndl r2 = NewRgn();
+    RegionHndl r3 = NewRgn();
+    if (!r1 || !r2 || !r3) {
+        if (r1) DisposeRgn(r1);
+        if (r2) DisposeRgn(r2);
+        if (r3) DisposeRgn(r3);
+        return 0;
+    }
+
+    /* Build region for subj */
+    OpenRgn();
+    off1 = faces->vertex_indices_ptr[subj];
+    int v0 = faces->vertex_indices_buffer[off1] - 1;
+    MoveTo(vtx->x2d[v0], vtx->y2d[v0]);
+    for (int i = 1; i < n1; ++i) {
+        int vi = faces->vertex_indices_buffer[off1 + i] - 1;
+        LineTo(vtx->x2d[vi], vtx->y2d[vi]);
+    }
+    CloseRgn(r1);
+
+    /* r1 debug dump removed */
+
+    /* Build region for clip */
+    OpenRgn();
+    off2 = faces->vertex_indices_ptr[clip];
+    int w0 = faces->vertex_indices_buffer[off2] - 1;
+    MoveTo(vtx->x2d[w0], vtx->y2d[w0]);
+    for (int i = 1; i < n2; ++i) {
+        int wi = faces->vertex_indices_buffer[off2 + i] - 1;
+        LineTo(vtx->x2d[wi], vtx->y2d[wi]);
+    }
+    CloseRgn(r2);
+
+    /* r2 debug dump removed */
+
+    /* Intersection */
+    SectRgn(r1, r2, r3);
+
+    /* debug Region drawing disabled */
+
+    int r1_succ = 0;
+    /* Compute runs-based intersection from r1 and r2 (avoid relying on r3 header) */
+    {
+        /* Parse r1 runs */
+        int r1_succ = 0;
+        HLock((Handle)r1);
+        short* sp1 = (short*)(*r1);
+        int s1 = (int)sp1[0]; int n1short = (s1>0)?(s1/2):0;
+        int idx1 = 5;
+        int cap1 = (n1short>8)?n1short:8; int cnt1 = 0;
+        int (*run1)[3] = (int(*)[3])malloc(sizeof(int[3]) * cap1);
+        while (idx1 < n1short) {
+            int y = (int)sp1[idx1++]; if ((unsigned short)y == 0x3FFF) continue;
+            while (idx1 < n1short && (unsigned short)sp1[idx1] != 0x3FFF) {
+                int xs = (int)sp1[idx1++]; if (idx1 >= n1short) break; int xe = (int)sp1[idx1++];
+                if (cnt1 >= cap1) { cap1 *= 2; run1 = (int(*)[3])realloc(run1, sizeof(int[3]) * cap1); }
+                run1[cnt1][0] = y; run1[cnt1][1] = xs; run1[cnt1][2] = xe; cnt1++;
+            }
+            if (idx1 < n1short && (unsigned short)sp1[idx1] == 0x3FFF) idx1++;
+        }
+        HUnlock((Handle)r1);
+
+        /* Parse r2 runs */
+        HLock((Handle)r2);
+        short* sp2 = (short*)(*r2);
+        int s2 = (int)sp2[0]; int n2short = (s2>0)?(s2/2):0;
+        int idx2 = 5;
+        int cap2 = (n2short>8)?n2short:8; int cnt2 = 0;
+        int (*run2)[3] = (int(*)[3])malloc(sizeof(int[3]) * cap2);
+        while (idx2 < n2short) {
+            int y = (int)sp2[idx2++]; if ((unsigned short)y == 0x3FFF) continue;
+            while (idx2 < n2short && (unsigned short)sp2[idx2] != 0x3FFF) {
+                int xs = (int)sp2[idx2++]; if (idx2 >= n2short) break; int xe = (int)sp2[idx2++];
+                if (cnt2 >= cap2) { cap2 *= 2; run2 = (int(*)[3])realloc(run2, sizeof(int[3]) * cap2); }
+                run2[cnt2][0] = y; run2[cnt2][1] = xs; run2[cnt2][2] = xe; cnt2++;
+            }
+            if (idx2 < n2short && (unsigned short)sp2[idx2] == 0x3FFF) idx2++;
+        }
+        HUnlock((Handle)r2);
+
+        /* Two-pointer pass to compute overlaps by matching y values */
+        int i = 0, j = 0;
+        int runs_minx = 32767, runs_maxx = -32768, runs_miny = 32767, runs_maxy = -32768;
+        while (i < cnt1 && j < cnt2) {
+            int y1 = run1[i][0]; int y2v = run2[j][0];
+            if (y1 < y2v) { i++; continue; }
+            if (y1 > y2v) { j++; continue; }
+            int i2 = i; while (i2 < cnt1 && run1[i2][0] == y1) i2++;
+            int j2 = j; while (j2 < cnt2 && run2[j2][0] == y1) j2++;
+            for (int a = i; a < i2; ++a) {
+                for (int b = j; b < j2; ++b) {
+                    int lo = (run1[a][1] > run2[b][1]) ? run1[a][1] : run2[b][1];
+                    int hi = (run1[a][2] < run2[b][2]) ? run1[a][2] : run2[b][2];
+                    if (lo <= hi) {
+                        if (lo < runs_minx) runs_minx = lo;
+                        if (hi > runs_maxx) runs_maxx = hi;
+                        if (y1 < runs_miny) runs_miny = y1;
+                        if (y1 > runs_maxy) runs_maxy = y1;
+                    }
+                }
+            }
+            i = i2; j = j2;
+        }
+
+        if (runs_minx <= runs_maxx && runs_miny <= runs_maxy) {
+            *ix0 = runs_minx; *iy0 = runs_miny; *ix1 = runs_maxx; *iy1 = runs_maxy;
+            r1_succ = 1;
+        } else {
+            r1_succ = 0;
+        }
+
+        free(run1); free(run2);
+    }
+
+    int has = 0;
+    if (!EmptyRgn(r3)) {
+
+        HLock((Handle)r3);
+        short* sp = (short*)(*r3);
+        int w0 = (int)sp[0];
+
+
+        /* On classic QuickDraw the region record starts with a size (bytes) in sp[0],
+         * followed by the bbox words [top,left,bottom,right] in sp[1..4]. Use that
+         * convention when possible; otherwise fall back to the previous heuristic.
+         */
+        int raw_top, raw_left, raw_bottom, raw_right;
+        if (w0 >= 10 && (w0/2) >= 5) {
+            raw_top = (int)sp[1]; raw_left = (int)sp[2]; raw_bottom = (int)sp[3]; raw_right = (int)sp[4];
+        } else {
+            /* Fallback: use first four words as before */
+            raw_top = (int)sp[0]; raw_left = (int)sp[1]; raw_bottom = (int)sp[2]; raw_right = (int)sp[3];
+        }
+        /* Normalize X and Y orientations into (left,top,right,bottom) from header */
+        int h_top = (raw_top < raw_bottom) ? raw_top : raw_bottom;
+        int h_bottom = (raw_top < raw_bottom) ? raw_bottom : raw_top;
+        int h_left = (raw_left < raw_right) ? raw_left : raw_right;
+        int h_right = (raw_left < raw_right) ? raw_right : raw_left;
+
+
+        /* Parse the runs in the region record to compute a bbox based on actual runs.
+         * Format after the 5 header words is a sequence of scanline descriptions:
+         *   y, x1, x2, x3, x4, ..., 0x3FFF  (end of that scanline runs)
+         * repeated. We'll walk the words and extract min/max X/Y seen in runs.
+         */
+        int nshorts = (w0 > 0) ? (w0 / 2) : 0;
+        int idx = 5; /* start after size and header (sp[0..4]) */
+        int runs_minx = 32767, runs_maxx = -32768, runs_miny = 32767, runs_maxy = -32768;
+        while (idx < nshorts) {
+            int y = (int)sp[idx++];
+            if (y == 0x3FFF) continue; /* robustness */
+            runs_miny = (y < runs_miny) ? y : runs_miny;
+            runs_maxy = (y > runs_maxy) ? y : runs_maxy;
+            /* Read until 0x3FFF sentinel */
+            while (idx < nshorts && (unsigned short)sp[idx] != 0x3FFF) {
+                int xs = (int)sp[idx++]; if (idx >= nshorts) break;
+                int xe = (int)sp[idx++];
+                if (xs < runs_minx) runs_minx = xs;
+                if (xe > runs_maxx) runs_maxx = xe;
+            }
+            /* consume sentinel if present */
+            if (idx < nshorts && (unsigned short)sp[idx] == 0x3FFF) idx++;
+        }
+        if (runs_minx <= runs_maxx && runs_miny <= runs_maxy) {
+    
+            /* Prefer runs bbox as authoritative, but do not override runs-based result if present */
+            if (!r1_succ) {
+                *ix0 = runs_minx; *iy0 = runs_miny; *ix1 = runs_maxx; *iy1 = runs_maxy;
+            } else {
+    
+            }
+        } else {
+            /* Fall back to header bbox if runs parsing failed */
+
+            if (!r1_succ) {
+                *ix0 = h_left; *iy0 = h_top; *ix1 = h_right; *iy1 = h_bottom;
+            } else {
+
+            }
+        }
+
+        /* Clamp region bbox to intersection of face bboxes to avoid overshoot */
+        int ibx0 = (minx1 > minx2) ? minx1 : minx2;
+        int ibx1 = (maxx1 < maxx2) ? maxx1 : maxx2;
+        int iby0 = (miny1 > miny2) ? miny1 : miny2;
+        int iby1 = (maxy1 < maxy2) ? maxy1 : maxy2;
+
+        if (*ix0 < ibx0) *ix0 = ibx0;
+        if (*iy0 < iby0) *iy0 = iby0;
+        if (*ix1 > ibx1) *ix1 = ibx1;
+        if (*iy1 > iby1) *iy1 = iby1;
+
+        if (*ix0 <= *ix1 && *iy0 <= *iy1) {
+            if (out_area2) *out_area2 = (long long)((*ix1 - *ix0) * (*iy1 - *iy0));
+            has = 1;
+
+        } else {
+
+        }
+        HUnlock((Handle)r3);
+    } else {
+
+    }
+
+    DisposeRgn(r1); DisposeRgn(r2); DisposeRgn(r3);
+
+    return has;
+}
+
+static int compute_intersection_centroid_ordered_qd_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
+    int ix0,iy0,ix1,iy1; long long a2=0;
+    if (!compute_intersection_region_bbox(model, subj, clip, &ix0, &iy0, &ix1, &iy1, &a2)) return 0;
+    if (outx) *outx = (ix0 + ix1) / 2;
+    if (outy) *outy = (iy0 + iy1) / 2;
+    if (out_area2) *out_area2 = a2;
+    return 1;
 }
 
 segment "code03";
@@ -3814,9 +3952,11 @@ int ray_cast(Model3D* model, int f1, int f2) {
     return ray_cast_at(model, f1, f2, cx, cy);
 }
 
-/* Ray cast at explicit screen coordinate (cx,cy) in projected 2D coords */
-static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
-    if (!model) return 0;
+/* Compute ray cast distances (tf) for faces f1 and f2 at screen coordinate (cx,cy).
+ * Returns 1 and fills *out_tf1/*out_tf2 on success, 0 if denom near zero (coplanar/parallel) or invalid.
+ */
+static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2) {
+    if (!model || !out_tf1 || !out_tf2) return 0;
     FaceArrays3D* faces = &model->faces;
     if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
     float proj_scale = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
@@ -3833,11 +3973,18 @@ static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
     float D2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
     float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;
     float denom2 = A2 * Dx + B2 * Dy + C2 * Dz;
-    if (fabsf(denom1) < 0.001f || fabsf(denom2) < 0.001f) return 0; // coplanar or parallel
-    float tf1 = -D1 / denom1;
-    float tf2 = -D2 / denom2;
-    if (tf1 > tf2) return 1;  // f1 is farther than f2
-    else if (tf1 < tf2) return -1; // f1 is closer than f2
+    if (fabsf(denom1) < 1e-6f || fabsf(denom2) < 1e-6f) return 0; /* coplanar or parallel */
+    *out_tf1 = -D1 / denom1;
+    *out_tf2 = -D2 / denom2;
+    return 1;
+}
+
+/* Ray cast at explicit screen coordinate (cx,cy) in projected 2D coords */
+static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
+    float tf1 = 0.0f, tf2 = 0.0f;
+    if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) return 0;
+    if (tf1 > tf2) return 1;  /* f1 is farther than f2 */
+    else if (tf1 < tf2) return -1; /* f1 is closer than f2 */
     else return 0;
 }
 
@@ -3860,27 +4007,237 @@ static int compute_bbox_intersection_center(Model3D* model, int f1, int f2, int 
     return 1;
 }
 
+/* Compute axis-aligned integer intersection bbox of projected face bboxes.
+ * Returns 1 and fills (*ix0,*iy0,*ix1,*iy1) on success, 0 if no intersection.
+ */
+static int compute_bbox_intersection(Model3D* model, int f1, int f2, int *ix0, int *iy0, int *ix1, int *iy1) {
+    if (!model || !ix0 || !iy0 || !ix1 || !iy1) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
+    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+    int a0 = (minx1 > minx2) ? minx1 : minx2;
+    int a1 = (maxx1 < maxx2) ? maxx1 : maxx2;
+    int b0 = (miny1 > miny2) ? miny1 : miny2;
+    int b1 = (maxy1 < maxy2) ? maxy1 : maxy2;
+    if (a0 > a1 || b0 > b1) return 0;
+    *ix0 = a0; *iy0 = b0; *ix1 = a1; *iy1 = b1;
+    return 1;
+}
+
+/* Integer point-in-polygon test using ray-crossing on integer vertex arrays.
+ * Returns 1 if point (px,py) is inside or on edge, 0 otherwise.
+ */
+static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const int vy[]) {
+    if (n < 3) return 0;
+    int inside = 0;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        int xi = vx[i], yi = vy[i];
+        int xj = vx[j], yj = vy[j];
+        /* Check if point is exactly on a vertex */
+        if (px == xi && py == yi) return 1;
+        /* Ray crossing: test if edge (j->i) crosses horizontal line at py */
+        int yi_gt_py = (yi > py);
+        int yj_gt_py = (yj > py);
+        if (yi_gt_py != yj_gt_py) {
+            /* Compute intersection X coordinate in integer-safe way: xi + (py - yi) * (xj - xi) / (yj - yi) */
+            long long dx = (long long)(xj - xi);
+            long long dy = (long long)(yj - yi);
+            long long lhs = (long long)(px - xi) * dy;
+            long long rhs = (long long)(py - yi) * dx;
+            if ((dy > 0 && lhs < rhs) || (dy < 0 && lhs > rhs)) inside = !inside;
+        }
+    }
+    return inside;
+}
+
+/* Helper: show_graphical_inspect
+ * --------------------------------
+ * Extracted from the inline block inside `inspect_ray_cast` to improve
+ * readability and maintenance.  All QuickDraw/graphics-only work is kept
+ * here so callers can remain text-mode-safe.
+ */
+static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overlap,
+                                  int saved_ix0, int saved_iy0, int saved_ix1, int saved_iy1,
+                                  int has_bbox, int cx, int cy, int point_source, int cmp)
+{
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    /* Local copies / locals that were previously in inspect_ray_cast */
+    VertexArrays3D* vtx = &model->vertices;      /* required by drawPolygons/_jitter */
+    int crx = 0, cry = 0;                         /* bbox center (fallback) */
+    int ccx = 0, ccy = 0;                         /* QD centroid scratch */
+    double iarea1 = 0.0;                          /* local area diagnostic */
+    long long qd_area2 = 0;                      /* QD-area return value */
+    int centroid_ok = 0;
+
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    if (backup_flags == NULL) { printf("Memory allocation failed\n"); DoText(); return; }
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+    int old_frame = framePolyOnly;
+
+    startgraph(mode);
+
+    framePolyOnly = 1; // wireframe
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+    else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+
+    unsigned char saved_f1 = faces->display_flag[f1];
+    unsigned char saved_f2 = faces->display_flag[f2];
+    faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
+    drawFace(model, f1, 10, 1);
+    drawFace(model, f2, 6, 1);
+
+    {
+        int _old_frame = framePolyOnly; framePolyOnly = 1;
+        drawFace(model, f1, -1, 0);
+        framePolyOnly = _old_frame;
+    }
+    {
+        int _old_frame = framePolyOnly; framePolyOnly = 1;
+        drawFace(model, f2, -1, 0);
+        framePolyOnly = _old_frame;
+    }
+
+    if (has_bbox) {
+        Rect r;
+        int screenScale = mode / 320;
+        int sc_ix0 = screenScale * (saved_ix0 + pan_dx);
+        int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
+        int sc_iy0 = (saved_iy0 + pan_dy);
+        int sc_iy1 = (saved_iy1 + pan_dy);
+        SetSolidPenPat(15);
+        SetRect(&r, sc_ix0, sc_iy0, sc_ix1, sc_iy1);
+        FrameRect(&r);
+
+        if (debug_clip_fixed_vcount >= 3) {
+            SetSolidPenPat(7);
+            int first_sx = screenScale * (debug_clip_fixed_vx[0] + pan_dx);
+            int first_sy = (debug_clip_fixed_vy[0] + pan_dy);
+            MoveTo(first_sx, first_sy);
+            for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
+                int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
+                int sy = (debug_clip_fixed_vy[ii] + pan_dy);
+                LineTo(sx, sy);
+            }
+            LineTo(first_sx, first_sy);
+
+            SetSolidPenPat(15);
+            for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
+                int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
+                int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
+                Rect vr; SetRect(&vr, sx-1, sy-1, sx+1, sy+1); FrameRect(&vr);
+            }
+
+            double s_cross = 0.0, cx_sum = 0.0, cy_sum = 0.0;
+            for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
+                int jj = (ii + 1) % debug_clip_fixed_vcount;
+                double xi = (double)debug_clip_fixed_vx[ii]; double yi = (double)debug_clip_fixed_vy[ii];
+                double xj = (double)debug_clip_fixed_vx[jj]; double yj = (double)debug_clip_fixed_vy[jj];
+                double cross = xi * yj - xj * yi;
+                s_cross += cross;
+                cx_sum += (xi + xj) * cross;
+                cy_sum += (yi + yj) * cross;
+            }
+            if (s_cross != 0.0) {
+                double centroid_fx = cx_sum / (3.0 * s_cross);
+                double centroid_fy = cy_sum / (3.0 * s_cross);
+                int sc_fx = screenScale * ((int)(centroid_fx + 0.5) + pan_dx);
+                int sc_fy = ((int)(centroid_fy + 0.5) + pan_dy);
+                SetSolidPenPat(3);
+                Rect fr; SetRect(&fr, sc_fx-2, sc_fy-2, sc_fx+2, sc_fy+2); FrameRect(&fr);
+                (void)centroid_fx; (void)centroid_fy;
+            }
+        }
+    }
+
+    int screenScale = mode / 320;
+    if (!no_overlap) {
+        int tx0, ty0, tx1, ty1; long long tarea = 0;
+        int region_ok = compute_intersection_region_bbox(model, f1, f2, &tx0, &ty0, &tx1, &ty1, &tarea);
+        if (region_ok) {
+            int sc_tx0 = screenScale * (tx0 + pan_dx);
+            int sc_tx1 = screenScale * (tx1 + pan_dx);
+            int sc_ty0 = (ty0 + pan_dy);
+            int sc_ty1 = (ty1 + pan_dy);
+            SetSolidPenPat(9);
+            Rect rr; SetRect(&rr, sc_tx0, sc_ty0, sc_tx1, sc_ty1); FrameRect(&rr);
+
+            int qdx = (tx0 + tx1) / 2;
+            int qdy = (ty0 + ty1) / 2;
+            int sc_cx = screenScale * (qdx + pan_dx);
+            int sc_cy = (qdy + pan_dy);
+            int d = 4 * screenScale;
+            int th = screenScale > 0 ? screenScale : 1;
+            Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
+            Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
+
+            int centroid_ok = 0;
+            long long qd_area2 = 0;
+            int qd_ok = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &ccx, &ccy, &qd_area2);
+            if (qd_ok) {
+                MoveTo(1,10);
+                printf("QD centroid: x=%d y=%d - area2: %.2f\n", ccx, ccy, (double)qd_area2);
+                iarea1 = (double)qd_area2;
+                float d1=0.0f,d2=0.0f;
+                if (ray_cast_distances(model, f1, f2, ccx, ccy, &d1, &d2)) {
+                    if (d1 < d2) cmp = -1; else if (d1 > d2) cmp = 1; else cmp = 0;
+                } else {
+                    cmp = ray_cast_at(model, f1, f2, ccx, ccy);
+                }
+                centroid_ok = 1; cx = ccx; cy = ccy; point_source = 1;
+            } else {
+                MoveTo(1,10); printf("QD centroid: KO\n");
+                if (has_bbox) { cx = crx; cy = cry; point_source = 2; }
+            }
+        } else {
+            if (has_bbox) {
+                int sc_ix0 = screenScale * (saved_ix0 + pan_dx);
+                int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
+                int sc_iy0 = (saved_iy0 + pan_dy);
+                int sc_iy1 = (saved_iy1 + pan_dy);
+                SetSolidPenPat(15);
+                Rect r; SetRect(&r, sc_ix0, sc_iy0, sc_ix1, sc_iy1); FrameRect(&r);
+                int fcx = (saved_ix0 + saved_ix1) / 2; int fcy = (saved_iy0 + saved_iy1) / 2;
+                int sc_cx = screenScale * (fcx + pan_dx);
+                int sc_cy = (fcy + pan_dy);
+                int d = 4 * screenScale;
+                int th = screenScale > 0 ? screenScale : 1;
+                Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
+                Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
+            } else {
+                MoveTo(3, 10);
+                printf("Region bbox: undetermined\n");
+            }
+        }
+    }
+
+    MoveTo(3, 195);
+    if (no_overlap) {
+        printf("Face %d and face %d do not overlap\n", f1, f2);
+    } else if (point_source == 1) {
+        if (cmp == -1) printf("QD bbox center: %d,%d - f%d front\n", cx, cy, f1);
+        else if (cmp == 1) printf("QD bbox center: %d,%d - f%d front\n", cx, cy, f2);
+        else printf("QD bbox center: %d,%d - undetermined\n", cx, cy);
+    } else if (point_source == 2) {
+        if (cmp == -1) printf("bbox center: %d,%d - f%d front\n", cx, cy, f1);
+        else if (cmp == 1) printf("bbox center: %d,%d - f%d front\n", cx, cy, f2);
+        else printf("bbox center: %d,%d - undetermined\n", cx, cy);
+    } else {
+        printf("bbox center: none - undetermined\n");
+    }
+    keypress();
+
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+    framePolyOnly = old_frame;
+    endgraph();
+    DoText();
+}
+
 /*
  * inspect_ray_cast
- * -----------------
- * Interactive diagnostic helper for ray-casting between two faces.
- * Behavior:
- *  - Prompts user for two face IDs.
- *  - Computes clipped intersection centroids in BOTH orders using
- *    compute_intersection_centroid_ordered_fixed(model, subj, clip, &x,&y,&area2).
- *    The centroid with the largest positive area is selected and used as the
- *    test point for the ray cast. This guarantees the test point lies inside
- *    the projected overlap region (more robust than bbox-center).
- *  - If neither order yields a positive-area clipped polygon, the result is
- *    marked indeterminate (no fallback to bbox-center by default).
- *  - Displays diagnostics: centroid coordinates & areas, bbox-center tf values,
- *    and computed tf distances for both faces at the selected point (positive
- *    tf = in front). It also starts a graphical inspection overlay to visualize
- *    the faces and intersection.
- * Notes:
- *  - Clipping & centroid computations use integer/fixed routines (deterministic).
- *  - Ray-plane intersection uses the existing `ray_cast_at` routine (floating
- *    point). This can be converted to fixed arithmetic later if desired.
  */
 void inspect_ray_cast(Model3D* model) {
     if (!model) return;
@@ -3900,7 +4257,15 @@ void inspect_ray_cast(Model3D* model) {
     if (scanf("%d", &f2) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
     { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
     if (f2 < 0 || f2 >= face_count) { printf("Invalid face id 2\n"); return; }
-    
+
+    /* Quick reject: if projected polygons do not overlap, note it and continue to graphical mode
+     * (do not run the other tests). The graphics overlay will show a single-line message.
+     */
+    int no_overlap = 0;
+    if (!projected_polygons_overlap(model, f1, f2)) {
+        no_overlap = 1;
+    }
+
     int cmp = 0;
     int icx1 = 0, icy1 = 0; double iarea1 = 0.0;
     int icx2 = 0, icy2 = 0; double iarea2 = 0.0;
@@ -3914,108 +4279,81 @@ void inspect_ray_cast(Model3D* model) {
     /* Precompute projected vertex arrays for bbox computation and reuse later */
     VertexArrays3D* vtx = &model->vertices;
 
-    // RegionHndl rh1 = NewRgn();
-    // RegionHndl rh2 = NewRgn();
-    // DisposeRgn(rh1); 
-    // DisposeRgn(rh2);
-
-
     int saved_ix0 = 0, saved_ix1 = 0, saved_iy0 = 0, saved_iy1 = 0;
     int has_bbox = 0;
-    {
-        int offset1 = faces->vertex_indices_ptr[f1];
-        int* ib1 = &faces->vertex_indices_buffer[offset1];
-        int vc1 = faces->vertex_count[f1];
-        int minx1, maxx1, miny1, maxy1;
-        if (vc1 > 0) {
-            int vi = ib1[0] - 1;
-            minx1 = maxx1 = vtx->x2d[vi];
-            miny1 = maxy1 = vtx->y2d[vi];
-            for (int ii = 1; ii < vc1; ++ii) {
-                vi = ib1[ii] - 1;
-                int x = vtx->x2d[vi]; int y = vtx->y2d[vi];
-                if (x < minx1) minx1 = x; if (x > maxx1) maxx1 = x;
-                if (y < miny1) miny1 = y; if (y > maxy1) maxy1 = y;
-            }
-        } else {
-            minx1 = faces->minx[f1]; maxx1 = faces->maxx[f1]; miny1 = faces->miny[f1]; maxy1 = faces->maxy[f1];
-        }
 
-        int offset2 = faces->vertex_indices_ptr[f2];
-        int* ib2 = &faces->vertex_indices_buffer[offset2];
-        int vc2 = faces->vertex_count[f2];
-        int minx2, maxx2, miny2, maxy2;
-        if (vc2 > 0) {
-            int vi = ib2[0] - 1;
-            minx2 = maxx2 = vtx->x2d[vi];
-            miny2 = maxy2 = vtx->y2d[vi];
-            for (int ii = 1; ii < vc2; ++ii) {
-                vi = ib2[ii] - 1;
-                int x = vtx->x2d[vi]; int y = vtx->y2d[vi];
-                if (x < minx2) minx2 = x; if (x > maxx2) maxx2 = x;
-                if (y < miny2) miny2 = y; if (y > maxy2) maxy2 = y;
-            }
-        } else {
-            minx2 = faces->minx[f2]; maxx2 = faces->maxx[f2]; miny2 = faces->miny[f2]; maxy2 = faces->maxy[f2];
-        }
+    if (!no_overlap) {
 
-        saved_ix0 = (minx1 > minx2) ? minx1 : minx2;
-        saved_ix1 = (maxx1 < maxx2) ? maxx1 : maxx2;
-        saved_iy0 = (miny1 > miny2) ? miny1 : miny2;
-        saved_iy1 = (maxy1 < maxy2) ? maxy1 : maxy2;
-        if (saved_ix0 <= saved_ix1 && saved_iy0 <= saved_iy1) {
-            has_bbox = 1;
-            crx = (saved_ix0 + saved_ix1) / 2;
-            cry = (saved_iy0 + saved_iy1) / 2;
-            printf("Bbox intersection center: x=%d y=%d\n", crx, cry);
-            int bbox_w = saved_ix1 - saved_ix0;
-            int bbox_h = saved_iy1 - saved_iy0;
-            double bbox_area = (double)bbox_w * (double)bbox_h;
-            printf("Intersection rectangle: width=%d height=%d area=%.2f (pixels^2)\n", bbox_w, bbox_h, bbox_area);
-        }
-            // Before switching to graphical inspection, print bbox metrics for debug
-        else {
-            printf("Intersection rectangle: none\n");
-        }
+    if (compute_bbox_intersection(model, f1, f2, &saved_ix0, &saved_iy0, &saved_ix1, &saved_iy1)) {
+        has_bbox = 1;
+        crx = (saved_ix0 + saved_ix1) / 2;
+        cry = (saved_iy0 + saved_iy1) / 2;
+        printf("Bbox intersection center: x=%d y=%d\n", crx, cry);
+        int bbox_w = saved_ix1 - saved_ix0;
+        int bbox_h = saved_iy1 - saved_iy0;
+        double bbox_area = (double)bbox_w * (double)bbox_h;
+        printf("Intersection rectangle: width=%d height=%d area=%.2f (pixels^2)\n", bbox_w, bbox_h, bbox_area);
+    } else {
+        printf("Intersection rectangle: none\n");
     }
 
     {
+        /* Non-graphical path: QuickDraw is not active here, so do NOT call QD-based functions.
+         * Use bbox-center as a deterministic fallback for text-mode diagnostics.
+         * The QD centroid (runs-based) will be computed later inside the graphical
+         * inspection block where QuickDraw is initialized.
+         */
         int centroid_ok = 0;
-        if (compute_intersection_centroid_ordered(model,f1,f2,&ccx,&ccy,&iarea1)) {
-            centroid_ok = 1;
-            printf("Centroid of f1 clipped by f2: x=%d y=%d area=%.6f\n", ccx, ccy, iarea1);
-            cmp = ray_cast_at(model, f2, f1, ccx, ccy);
-        } else {
-            cmp = 0; /* undetermined */
-        }
-        /* Choose test point: prefer centroid when available, else bbox center if present, else try bbox helper */
-        if (centroid_ok) {
-            cx = ccx; cy = ccy; point_source = 1;
-        } else if (has_bbox) {
-            cx = crx; cy = cry; point_source = 2;
-        } else if (compute_bbox_intersection_center(model, f1, f2, &crx, &cry)) {
-            has_bbox = 1; cx = crx; cy = cry; point_source = 2;
-        } else {
-            cx = 0; cy = 0; point_source = 0; /* last resort */
-        }
+        iarea1 = 0.0;
+        /* Prefer integer bbox center as a safe, always-available test point */
+        if (has_bbox) { cx = crx; cy = cry; point_source = 2; }
+        else if (compute_bbox_intersection_center(model, f1, f2, &crx, &cry)) { has_bbox = 1; cx = crx; cy = cry; point_source = 2; }
+        else { cx = 0; cy = 0; point_source = 0; }
     }
 
+    } else {
+        /* No overlap: set defaults and skip tests (graphical mode will show single-line message). */
+        has_bbox = 0; cx = 0; cy = 0; point_source = 0; iarea1 = 0.0; cmp = 0;
+    }
 
+    /* Compute and print ray_cast distances at the chosen test point (cx,cy) */
+    {
+        float proj_scale = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
+        float Dx = ((float)cx - (float)CENTRE_X) / proj_scale;
+        float Dy = ((float)CENTRE_Y - (float)cy) / proj_scale;
+        float Dz = 1.0f;
+        float A1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
+        float B1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
+        float C1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
+        float D1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
+        float A2 = (float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
+        float B2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
+        float C2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
+        float D2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
+        float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;
+        float denom2 = A2 * Dx + B2 * Dy + C2 * Dz;
+        if (fabsf(denom1) < 1e-6f || fabsf(denom2) < 1e-6f) {
+            printf("ray_cast distances at (%d,%d): denom very small (possible coplanar/parallel)\n", cx, cy);
+        } else {
+            float tf1 = -D1 / denom1;
+            float tf2 = -D2 / denom2;
+            printf("ray_cast distances at (%d,%d): tf(f%d)=%.6f tf(f%d)=%.6f (smaller=in front)\n", cx, cy, f1, tf1, f2, tf2);
+        }
+    }
 
     printf("Press any key to show graphical inspection...\n");
     keypress();
+    show_graphical_inspect(model, f1, f2, no_overlap, saved_ix0, saved_iy0, saved_ix1, saved_iy1, has_bbox, cx, cy, point_source, cmp);
+    return;
 
+
+    // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * 
     // --- Graphical inspection ---
+    // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * 
+    //
     startgraph(mode);
-    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
-    if (backup_flags == NULL) {
-        printf("Memory allocation failed\n");
-        endgraph(); DoText(); return;
-    }
-    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
-    int old_frame = framePolyOnly;
-    framePolyOnly = 1; // wireframe
 
+    framePolyOnly = 1; // wireframe
     // Ensure all faces visible for wireframe backdrop
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
     if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
@@ -4039,9 +4377,7 @@ void inspect_ray_cast(Model3D* model) {
         framePolyOnly = old_frame;
     }
 
-    /* Use cached `faces->minx/maxx/miny/maxy` computed in `calculateFaceDepths()`; do NOT recompute here. */
     /* The intersection rectangle is stored in `saved_ix0..saved_iy1` and drawn via FrameRect below. */
-
     if (has_bbox) {
         Rect r;
         int screenScale = mode / 320;
@@ -4049,40 +4385,148 @@ void inspect_ray_cast(Model3D* model) {
         int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
         int sc_iy0 = (saved_iy0 + pan_dy);
         int sc_iy1 = (saved_iy1 + pan_dy);
-        SetSolidPenPat(15); // white
-        SetRect(&r, sc_ix0, sc_iy0, sc_ix1, sc_iy1);
-        FrameRect(&r);
 
-        /* cross at chosen center: use `cx/cy` (centroid if available, else bbox center) */
-        int sc_cx = screenScale * (cx + pan_dx);
-        int sc_cy = (cy + pan_dy);
-        int d = 4 * screenScale; // scale cross size with horizontal scale for consistency
-        MoveTo(sc_cx - d, sc_cy); LineTo(sc_cx + d, sc_cy);
-        MoveTo(sc_cx, sc_cy - d); LineTo(sc_cx, sc_cy + d);
+    /* Draw the clipped intersection polygon (if available) */
+        if (debug_clip_fixed_vcount >= 3) {
+            /* Outline in pen 7 (distinct) */
+            SetSolidPenPat(7);
+            int first_sx = screenScale * (debug_clip_fixed_vx[0] + pan_dx);
+            int first_sy = (debug_clip_fixed_vy[0] + pan_dy);
+            MoveTo(first_sx, first_sy);
+            for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
+                int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
+                int sy = (debug_clip_fixed_vy[ii] + pan_dy);
+                LineTo(sx, sy);
+            }
+            LineTo(first_sx, first_sy); // close
+
+            /* Draw small white boxes at each vertex */
+            SetSolidPenPat(15);
+            for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
+                int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
+                int sy = (debug_clip_fixed_vy[ii] + pan_dy);
+                Rect vr; SetRect(&vr, sx-1, sy-1, sx+1, sy+1); FrameRect(&vr);
+            }
+
+            /* Compute and draw floating centroid (double) of the integer polygon for diagnostics */
+            double s_cross = 0.0, cx_sum = 0.0, cy_sum = 0.0;
+            for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
+                int jj = (ii + 1) % debug_clip_fixed_vcount;
+                double xi = (double)debug_clip_fixed_vx[ii]; double yi = (double)debug_clip_fixed_vy[ii];
+                double xj = (double)debug_clip_fixed_vx[jj]; double yj = (double)debug_clip_fixed_vy[jj];
+                double cross = xi * yj - xj * yi;
+                s_cross += cross;
+                cx_sum += (xi + xj) * cross;
+                cy_sum += (yi + yj) * cross;
+            }
+            if (s_cross != 0.0) {
+                double centroid_fx = cx_sum / (3.0 * s_cross);
+                double centroid_fy = cy_sum / (3.0 * s_cross);
+                int sc_fx = screenScale * ((int)(centroid_fx + 0.5) + pan_dx);
+                int sc_fy = ((int)(centroid_fy + 0.5) + pan_dy);
+                /* Red small filled rect for float centroid */
+                SetSolidPenPat(3);
+                Rect fr; SetRect(&fr, sc_fx-2, sc_fy-2, sc_fx+2, sc_fy+2); FrameRect(&fr);
+
+                /* debug overlap suppressed in graphical text mode (minimal display) */
+                (void)centroid_fx; (void)centroid_fy;
+            }
+        }
+
     }
-    // Show summary message in graphics mode and indicate which test point was used
-    MoveTo(3, 190);
-    if (point_source == 1) printf("Test point: centroid (%d,%d)\n", cx, cy);
-    else if (point_source == 2) printf("Test point: bbox-center (%d,%d)\n", cx, cy);
-    else printf("Test point: none\n");
 
-    if (cmp != 0) {
-        int front = (cmp == -1) ? f1 : f2;
-        int back = (cmp == -1) ? f2 : f1;
-        MoveTo(3, 198);
-        printf("Face %d is in front of face %d\n", front, back);
+        int screenScale = mode / 320;
+        // If there was no projected polygon overlap, skip region/centroid computations and just show the faces and bbox (if any). The text-mode diagnostics will indicate no overlap, and the graphical overlay will show the faces without a highlighted intersection region (and a single-line message about no overlap).
+        if (!no_overlap) {
+
+        /* Compute region bbox and draw it (non-invasive but visible). Also compute QD centroid
+         * here because QuickDraw is active in the graphical inspection block. If QD fails,
+         * keep the integer bbox fallback drawn above.
+         */
+        {
+            int tx0, ty0, tx1, ty1; long long tarea = 0;
+            int region_ok = compute_intersection_region_bbox(model, f1, f2, &tx0, &ty0, &tx1, &ty1, &tarea);
+            if (region_ok) {
+                int sc_tx0 = screenScale * (tx0 + pan_dx);
+                int sc_tx1 = screenScale * (tx1 + pan_dx);
+                int sc_ty0 = (ty0 + pan_dy);
+                int sc_ty1 = (ty1 + pan_dy);
+                SetSolidPenPat(9); /* distinct pen for region bbox */
+                Rect rr; SetRect(&rr, sc_tx0, sc_ty0, sc_tx1, sc_ty1); FrameRect(&rr);
+                /* draw yellow cross at center of QD bbox */
+                {
+                    int qdx = (tx0 + tx1) / 2;
+                    int qdy = (ty0 + ty1) / 2;
+                    int sc_cx = screenScale * (qdx + pan_dx);
+                    int sc_cy = (qdy + pan_dy);
+                    int d = 4 * screenScale;
+                    int th = screenScale > 0 ? screenScale : 1;
+                    Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
+                    Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
+                }
+
+                /* Now compute the runs-based/QD centroid (only valid with QD active) */
+                int centroid_ok = 0;
+                long long qd_area2 = 0;
+                int qd_ok = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &ccx, &ccy, &qd_area2);
+                if (qd_ok) {
+                    iarea1 = (double)qd_area2;
+                    /* determine ordering via distances (no console output here) */
+                    float d1=0.0f,d2=0.0f;
+                    if (ray_cast_distances(model, f1, f2, ccx, ccy, &d1, &d2)) {
+                        if (d1 < d2) cmp = -1; else if (d1 > d2) cmp = 1; else cmp = 0;
+                    } else {
+                        cmp = ray_cast_at(model, f1, f2, ccx, ccy);
+                    }
+                    centroid_ok = 1; cx = ccx; cy = ccy; point_source = 1;
+                } else {
+                    /* QD centroid not available despite region_ok (rare). Leave fallback visuals as-is. */
+                    MoveTo(1,10);printf("QD centroid: KO\n");
+                    if (has_bbox) { cx = crx; cy = cry; point_source = 2; }
+                }
+            }
+            else {
+                /* QD not available — draw fallback bbox if present */
+                if (has_bbox) {
+                    int sc_ix0 = screenScale * (saved_ix0 + pan_dx);
+                    int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
+                    int sc_iy0 = (saved_iy0 + pan_dy);
+                    int sc_iy1 = (saved_iy1 + pan_dy);
+                    SetSolidPenPat(15); /* white for fallback bbox (historic) */
+                    Rect r; SetRect(&r, sc_ix0, sc_iy0, sc_ix1, sc_iy1); FrameRect(&r);
+                    /* draw white cross at center of fallback bbox */
+                    int fcx = (saved_ix0 + saved_ix1) / 2; int fcy = (saved_iy0 + saved_iy1) / 2;
+                    int sc_cx = screenScale * (fcx + pan_dx);
+                    int sc_cy = (fcy + pan_dy);
+                    int d = 4 * screenScale;
+                    int th = screenScale > 0 ? screenScale : 1;
+                    Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
+                    Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
+                } else {
+                    MoveTo(3, 10);
+                    printf("Region bbox: undetermined\n");
+                }
+        } /* end if (!no_overlap) */
+            }
+        }
+
+    /* Minimal textual status (single short line) shown in graphics mode */
+    MoveTo(3, 190);
+    if (no_overlap) {
+        printf("Face %d and face %d do not overlap\n", f1, f2);
+    } else if (point_source == 1) {
+        if (cmp == -1) printf("QD bbox center: %d,%d; face %d front\n", cx, cy, f1);
+        else if (cmp == 1) printf("QD bbox center: %d,%d; face %d front\n", cx, cy, f2);
+        else printf("QD bbox center: %d,%d  undetermined\n", cx, cy);
+    } else if (point_source == 2) {
+        if (cmp == -1) printf("bbox center: %d,%d; face %d front\n", cx, cy, f1);
+        else if (cmp == 1) printf("bbox center: %d,%d; face %d front\n", cx, cy, f2);
+        else printf("bbox center: %d,%d; undetermined\n", cx, cy);
     } else {
-        MoveTo(3, 198);
-        printf("Ray_cast undetermined\n");
+        printf("bbox center: none; undetermined\n");
     }
     keypress();
 
-    // Restore
-    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
-    free(backup_flags);
-    framePolyOnly = old_frame;
-    endgraph();
-    DoText();
 }
 
 
@@ -5200,7 +5644,7 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
                                 if (point_in_poly_int(tx2, ty2, faces, vtx, i, n1) && point_in_poly_int(tx2, ty2, faces, vtx, j, n2)) sampled = 1;
                             }
                         }
-                        int icx = 0, icy = 0; double iarea = 0.0; compute_intersection_centroid_ordered(model, i, j, &icx, &icy, &iarea);
+                        int icx = 0, icy = 0; double iarea = 0.0; long long _ia2 = 0; compute_intersection_centroid_ordered_qd_fixed(model, i, j, &icx, &icy, &_ia2); iarea = (double)_ia2;
                         int ident = faces_vertices_equal(faces, vtx, i, j);
                         int dtn = snprintf(tmp, sizeof(tmp), "%d,%d,%s,%d,%.6f,%d\n", i, j, ov ? "YES" : "NO", sampled, iarea, ident);
                         if (dtn >= 0) {
@@ -5252,7 +5696,7 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
                                     if (point_in_poly_int(tx2, ty2, faces, vtx, ii, faces->vertex_count[ii]) && point_in_poly_int(tx2, ty2, faces, vtx, jj, faces->vertex_count[jj])) sampled2 = 1;
                                 }
                             }
-                            int icx2 = 0, icy2 = 0; double iarea2 = 0.0; compute_intersection_centroid_ordered(model, ii, jj, &icx2, &icy2, &iarea2);
+                            int icx2 = 0, icy2 = 0; double iarea2 = 0.0; long long _ia22 = 0; compute_intersection_centroid_ordered_qd_fixed(model, ii, jj, &icx2, &icy2, &_ia22); iarea2 = (double)_ia22;
                             int ident2 = faces_vertices_equal(faces, vtx, ii, jj);
                             fprintf(dbf, "%d,%d,%s,%d,%.6f,%d\n", ii, jj, ov2 ? "YES" : "NO", sampled2, iarea2, ident2);
                         }
@@ -5336,10 +5780,10 @@ void scan_all_overlaps(Model3D* model, ObserverParams* params) {
         compute2DFromObserver(model, params->angle_w);
         int ov_current = projected_polygons_overlap(model, f1, f2);
 
-        int icx1=0,icy1=0; double ia1=0.0; debug_overlap_subj = f1; debug_overlap_clip = f2; compute_intersection_centroid_ordered(model, f1, f2, &icx1, &icy1, &ia1); debug_overlap_subj = -1; debug_overlap_clip = -1;
+        int icx1=0,icy1=0; double ia1=0.0; debug_overlap_subj = f1; debug_overlap_clip = f2; long long _ia1tmp = 0; compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &icx1, &icy1, &_ia1tmp); ia1 = (double)_ia1tmp; debug_overlap_subj = -1; debug_overlap_clip = -1;
         double ia1_fixed = debug_clip_fixed_area; double ia1_float = debug_clip_float_area; int cf1_fixed_v = debug_clip_fixed_vcount; int cf1_float_v = debug_clip_float_vcount; long long cf1_raw = debug_clip_raw_area2; int cf1_float_over = debug_clip_float_overridden;
 
-        int icx2=0,icy2=0; double ia2=0.0; debug_overlap_subj = f2; debug_overlap_clip = f1; compute_intersection_centroid_ordered(model, f2, f1, &icx2, &icy2, &ia2); debug_overlap_subj = -1; debug_overlap_clip = -1;
+        int icx2=0,icy2=0; double ia2=0.0; debug_overlap_subj = f2; debug_overlap_clip = f1; long long _ia2tmp = 0; compute_intersection_centroid_ordered_qd_fixed(model, f2, f1, &icx2, &icy2, &_ia2tmp); ia2 = (double)_ia2tmp; debug_overlap_subj = -1; debug_overlap_clip = -1;
         double ia2_fixed = debug_clip_fixed_area; double ia2_float = debug_clip_float_area; int cf2_fixed_v = debug_clip_fixed_vcount; int cf2_float_v = debug_clip_float_vcount; long long cf2_raw = debug_clip_raw_area2; int cf2_float_over = debug_clip_float_overridden;
 
         int bx0 = faces->minx[f1] > faces->minx[f2] ? faces->minx[f1] : faces->minx[f2];
