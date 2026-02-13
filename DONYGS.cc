@@ -4195,6 +4195,61 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
             int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
             Rect vr; SetRect(&vr, sx-1, sy-1, sx+1, sy+1); FrameRect(&vr);
         }
+
+        /* Draw centroid cross (orange = pen 6) at the polygon centroid computed from
+         * the integer polygon vertices (debug_clip_fixed_vx/debug_clip_fixed_vy).
+         * This is more robust than trusting `cx,cy` returned by the clipping routine. */
+        {
+            double s_cross = 0.0, cx_sum = 0.0, cy_sum = 0.0;
+            for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
+                int jj = (ii + 1) % debug_clip_fixed_vcount;
+                double xi = (double)debug_clip_fixed_vx[ii]; double yi = (double)debug_clip_fixed_vy[ii];
+                double xj = (double)debug_clip_fixed_vx[jj]; double yj = (double)debug_clip_fixed_vy[jj];
+                double cross = xi * yj - xj * yi;
+                s_cross += cross;
+                cx_sum += (xi + xj) * cross;
+                cy_sum += (yi + yj) * cross;
+            }
+            int draw_cx = cx; int draw_cy = cy;
+            if (s_cross != 0.0) {
+                double centroid_fx = cx_sum / (3.0 * s_cross);
+                double centroid_fy = cy_sum / (3.0 * s_cross);
+                draw_cx = (int)(centroid_fx + 0.5);
+                draw_cy = (int)(centroid_fy + 0.5);
+            } else {
+                /* fallback: use bbox center of the integer polygon */
+                int minx = debug_clip_fixed_vx[0], maxx = debug_clip_fixed_vx[0], miny = debug_clip_fixed_vy[0], maxy = debug_clip_fixed_vy[0];
+                for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
+                    if (debug_clip_fixed_vx[ii] < minx) minx = debug_clip_fixed_vx[ii];
+                    if (debug_clip_fixed_vx[ii] > maxx) maxx = debug_clip_fixed_vx[ii];
+                    if (debug_clip_fixed_vy[ii] < miny) miny = debug_clip_fixed_vy[ii];
+                    if (debug_clip_fixed_vy[ii] > maxy) maxy = debug_clip_fixed_vy[ii];
+                }
+                draw_cx = (minx + maxx) / 2;
+                draw_cy = (miny + maxy) / 2;
+            }
+
+            SetSolidPenPat(6); /* orange */
+            int sc_cx = screenScale * (draw_cx + pan_dx);
+            int sc_cy = screenScale * (draw_cy + pan_dy);
+            int half = 4; /* cross half-length in pixels */
+            MoveTo(sc_cx - half, sc_cy); LineTo(sc_cx + half, sc_cy);
+            MoveTo(sc_cx, sc_cy - half); LineTo(sc_cx, sc_cy + half);
+
+            /* Ray-cast at the computed centroid to determine which face is in front */
+            {
+                float tf1 = 0.0f, tf2 = 0.0f;
+                int rc = 0; /* -1 => f1 closer, 1 => f2 closer, 0 => indeterminate */
+                if (ray_cast_distances(model, f1, f2, draw_cx, draw_cy, &tf1, &tf2)) {
+                    if (tf1 < tf2) rc = -1; else if (tf1 > tf2) rc = 1; else rc = 0;
+                } else rc = 0;
+
+                MoveTo(3, 10);
+                if (rc == -1) printf("Face %d is in front of face %d\n", f1, f2);
+                else if (rc == 1) printf("Face %d is in front of face %d\n", f2, f1);
+                else printf("Face order: undetermined\n");
+            }
+        }
     } else {
         MoveTo(3, 10); printf("Intersection polygon: none (no clipped polygon)\n");
     }
