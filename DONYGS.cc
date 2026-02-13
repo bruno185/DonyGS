@@ -3291,6 +3291,20 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
         cx[i] = vtx->x2d[vi]; cy[i] = vtx->y2d[vi];
     }
 
+    /* Optional detailed debug dump for failing cases (writes centroidlog.txt) */
+    FILE* dlog = NULL;
+    if ((debug_overlap_subj == subj && debug_overlap_clip == clip) || (subj == 12 && clip == 50)) {
+        dlog = fopen("centroidlog.txt", "w");
+        if (dlog) {
+            fprintf(dlog, "--- compute_intersection_centroid_ordered_fixed debug (subj=%d clip=%d) ---\n", subj, clip);
+            fprintf(dlog, "input subj verts (count=%d):\n", sn);
+            for (int i = 0; i < sn; ++i) fprintf(dlog, "%d %d\n", sx[i], sy[i]);
+            fprintf(dlog, "input clip verts (count=%d):\n", cn);
+            for (int i = 0; i < cn; ++i) fprintf(dlog, "%d %d\n", cx[i], cy[i]);
+            fflush(dlog);
+        }
+    }
+
     /* Working buffers on heap to avoid stack exhaustion for large polygons */
     double *buf_x1 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
     double *buf_y1 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
@@ -3327,17 +3341,19 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
             } else if (inside1 && !inside2) {
                 double dx = sx2d - sx1d, dy = sy2d - sy1d;
                 double ex = cx2d - cx1d, ey = cy2d - cy1d;
-                double denom = ex * dy - ey * dx;
+                /* denom = cross(segment, clipEdge) */
+                double denom = dx * ey - dy * ex;
                 double t = 0.0;
-                if (fabs(denom) > 1e-12) t = (ex * (sy1d - cy1d) - ey * (sx1d - cx1d)) / denom;
+                if (fabs(denom) > 1e-12) t = ((cx1d - sx1d) * ey - (cy1d - sy1d) * ex) / denom;
                 double ix = sx1d + t * dx; double iy = sy1d + t * dy;
                 if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = ix; buf_y2[out_n_tmp] = iy; out_n_tmp++; }
             } else if (!inside1 && inside2) {
                 double dx = sx2d - sx1d, dy = sy2d - sy1d;
                 double ex = cx2d - cx1d, ey = cy2d - cy1d;
-                double denom = ex * dy - ey * dx;
+                /* denom = cross(segment, clipEdge) */
+                double denom = dx * ey - dy * ex;
                 double t = 0.0;
-                if (fabs(denom) > 1e-12) t = (ex * (sy1d - cy1d) - ey * (sx1d - cx1d)) / denom;
+                if (fabs(denom) > 1e-12) t = ((cx1d - sx1d) * ey - (cy1d - sy1d) * ex) / denom;
                 double ix = sx1d + t * dx; double iy = sy1d + t * dy;
                 if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = ix; buf_y2[out_n_tmp] = iy; out_n_tmp++; }
                 if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = sx2d; buf_y2[out_n_tmp] = sy2d; out_n_tmp++; }
@@ -3345,6 +3361,11 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
         }
         cur_n = out_n_tmp;
         for (int k = 0; k < cur_n; ++k) { buf_x1[k] = buf_x2[k]; buf_y1[k] = buf_y2[k]; }
+        if (dlog) {
+            fprintf(dlog, "after clip edge %d -> vertex_count=%d\n", ci, cur_n);
+            for (int kk = 0; kk < cur_n; ++kk) fprintf(dlog, "  %.6f %.6f\n", buf_x1[kk], buf_y1[kk]);
+            fflush(dlog);
+        }
     }
 
     /* Round and remove duplicate/colinear vertices into out_px/out_py */
@@ -3365,6 +3386,7 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
 
     if (final_n < 3) {
         debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0;
+        if (dlog) { fprintf(dlog, "final_n < 3 -> no polygon\n"); fclose(dlog); }
         free(sx); free(sy); free(cx); free(cy);
         free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
         return 0;
@@ -3374,6 +3396,11 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
     if (final_n > DEBUG_CLIP_MAX) final_n = DEBUG_CLIP_MAX;
     for (int i = 0; i < final_n; ++i) { debug_clip_fixed_vx[i] = out_px[i]; debug_clip_fixed_vy[i] = out_py[i]; }
     debug_clip_fixed_vcount = final_n;
+    if (dlog) {
+        fprintf(dlog, "rounded final polygon (count=%d):\n", final_n);
+        for (int i = 0; i < final_n; ++i) fprintf(dlog, "%d %d\n", out_px[i], out_py[i]);
+        fflush(dlog);
+    }
 
     /* Compute signed raw area2 and centroid numerators */
     long long raw_area2_signed = 0;
@@ -3390,9 +3417,11 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
 
     if (raw_area2_signed == 0) {
         debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0;
+        if (dlog) { fprintf(dlog, "raw_area2_signed == 0 -> degenerate polygon\n"); fflush(dlog); }
         if (outx) *outx = out_px[0]; if (outy) *outy = out_py[0];
         free(sx); free(sy); free(cx); free(cy);
         free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
+        if (dlog) fclose(dlog);
         return 1;
     }
 
@@ -3414,6 +3443,7 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
     /* Return fixed-scaled raw area2 */
     unsigned long long a2_fixed = (unsigned long long)abs_raw * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
     *out_area2 = (long long)a2_fixed;
+
 
     free(sx); free(sy); free(cx); free(cy);
     free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
@@ -4073,6 +4103,105 @@ static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const
     return inside;
 }
 
+/* Interactive helper: prompt for two face IDs, compute fixed-point intersection polygon
+ * (via compute_intersection_centroid_ordered_fixed) and display wireframe model with the
+ * clipped polygon overlaid. Mapped to the 'M' key by the caller.
+ */
+static void inspect_intersection_fixed_ui(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+    if (face_count <= 0) { printf("No faces in model\n"); return; }
+
+    printf("Enter face id 1 (0..%d): ", face_count - 1);
+    int f1 = -1;
+    if (scanf("%d", &f1) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
+    { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
+    if (f1 < 0 || f1 >= face_count) { printf("Invalid face id 1\n"); return; }
+
+    printf("Enter face id 2 (0..%d): ", face_count - 1);
+    int f2 = -1;
+    if (scanf("%d", &f2) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
+    { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
+    if (f2 < 0 || f2 >= face_count) { printf("Invalid face id 2\n"); return; }
+
+    /* Clear previous debug polygon and compute fixed clipping (try both orders) */
+    debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0;
+    int cx = 0, cy = 0; long long a2 = 0;
+    compute_intersection_centroid_ordered_fixed(model, f1, f2, &cx, &cy, &a2);
+    if (debug_clip_fixed_vcount < 3) compute_intersection_centroid_ordered_fixed(model, f2, f1, &cx, &cy, &a2);
+
+    /* Export debug file with 2D points for face1, face2 and computed intersection polygon */
+    {
+        FILE* wf = fopen("centroid.txt", "w");
+        if (wf) {
+            VertexArrays3D* vtx = &model->vertices;
+            FaceArrays3D* faces = &model->faces;
+
+            fprintf(wf, "# face1 id=%d\n", f1);
+            int fn1 = faces->vertex_count[f1];
+            for (int i = 0; i < fn1; ++i) {
+                int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + i] - 1;
+                fprintf(wf, "%d %d\n", vtx->x2d[vi], vtx->y2d[vi]);
+            }
+
+            fprintf(wf, "# face2 id=%d\n", f2);
+            int fn2 = faces->vertex_count[f2];
+            for (int i = 0; i < fn2; ++i) {
+                int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f2] + i] - 1;
+                fprintf(wf, "%d %d\n", vtx->x2d[vi], vtx->y2d[vi]);
+            }
+
+            fprintf(wf, "# intersection_polygon count=%d area_fixed=%lld centroid=(%d,%d)\n", debug_clip_fixed_vcount, a2, cx, cy);
+            for (int i = 0; i < debug_clip_fixed_vcount; ++i) fprintf(wf, "%d %d\n", debug_clip_fixed_vx[i], debug_clip_fixed_vy[i]);
+
+            fclose(wf);
+            printf("Wrote debug file: centroid.txt (face1=%d face2=%d vertices=%d)\n", f1, f2, debug_clip_fixed_vcount);
+        } else {
+            printf("Failed to open centroid.txt for writing\n");
+        }
+    }
+
+    /* Start graphics and draw wireframe + overlay the debug polygon (if present) */
+    startgraph(mode);
+    int old_frame = framePolyOnly; framePolyOnly = 1; /* wireframe */
+    VertexArrays3D* vtx = &model->vertices;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+    else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+
+    /* Draw intersection polygon populated by compute_intersection_centroid_ordered_fixed */
+    if (debug_clip_fixed_vcount >= 3) {
+        int screenScale = mode / 320;
+        SetSolidPenPat(7);
+        int first_sx = screenScale * (debug_clip_fixed_vx[0] + pan_dx);
+        int first_sy = screenScale * (debug_clip_fixed_vy[0] + pan_dy);
+        MoveTo(first_sx, first_sy);
+        for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
+            int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
+            int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
+            LineTo(sx, sy);
+        }
+        LineTo(first_sx, first_sy);
+
+        SetSolidPenPat(15);
+        for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
+            int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
+            int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
+            Rect vr; SetRect(&vr, sx-1, sy-1, sx+1, sy+1); FrameRect(&vr);
+        }
+    } else {
+        MoveTo(3, 10); printf("Intersection polygon: none (no clipped polygon)\n");
+    }
+
+    keypress();
+
+    framePolyOnly = old_frame;
+    endgraph();
+    DoText();
+}
+
+
 /* Helper: show_graphical_inspect
  * --------------------------------
  * Extracted from the inline block inside `inspect_ray_cast` to improve
@@ -4127,8 +4256,8 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
         int screenScale = mode / 320;
         int sc_ix0 = screenScale * (saved_ix0 + pan_dx);
         int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
-        int sc_iy0 = (saved_iy0 + pan_dy);
-        int sc_iy1 = (saved_iy1 + pan_dy);
+        int sc_iy0 = screenScale * (saved_iy0 + pan_dy);
+        int sc_iy1 = screenScale * (saved_iy1 + pan_dy);
         SetSolidPenPat(15);
         SetRect(&r, sc_ix0, sc_iy0, sc_ix1, sc_iy1);
         FrameRect(&r);
@@ -4136,11 +4265,11 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
         if (debug_clip_fixed_vcount >= 3) {
             SetSolidPenPat(7);
             int first_sx = screenScale * (debug_clip_fixed_vx[0] + pan_dx);
-            int first_sy = (debug_clip_fixed_vy[0] + pan_dy);
+            int first_sy = screenScale * (debug_clip_fixed_vy[0] + pan_dy);
             MoveTo(first_sx, first_sy);
             for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
                 int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
-                int sy = (debug_clip_fixed_vy[ii] + pan_dy);
+                int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
                 LineTo(sx, sy);
             }
             LineTo(first_sx, first_sy);
@@ -4166,7 +4295,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
                 double centroid_fx = cx_sum / (3.0 * s_cross);
                 double centroid_fy = cy_sum / (3.0 * s_cross);
                 int sc_fx = screenScale * ((int)(centroid_fx + 0.5) + pan_dx);
-                int sc_fy = ((int)(centroid_fy + 0.5) + pan_dy);
+                int sc_fy = screenScale * ((int)(centroid_fy + 0.5) + pan_dy);
                 SetSolidPenPat(3);
                 Rect fr; SetRect(&fr, sc_fx-2, sc_fy-2, sc_fx+2, sc_fy+2); FrameRect(&fr);
                 (void)centroid_fx; (void)centroid_fy;
@@ -4390,19 +4519,19 @@ void inspect_ray_cast(Model3D* model) {
         int screenScale = mode / 320;
         int sc_ix0 = screenScale * (saved_ix0 + pan_dx);
         int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
-        int sc_iy0 = (saved_iy0 + pan_dy);
-        int sc_iy1 = (saved_iy1 + pan_dy);
+        int sc_iy0 = screenScale * (saved_iy0 + pan_dy);
+        int sc_iy1 = screenScale * (saved_iy1 + pan_dy);
 
     /* Draw the clipped intersection polygon (if available) */
         if (debug_clip_fixed_vcount >= 3) {
             /* Outline in pen 7 (distinct) */
             SetSolidPenPat(7);
             int first_sx = screenScale * (debug_clip_fixed_vx[0] + pan_dx);
-            int first_sy = (debug_clip_fixed_vy[0] + pan_dy);
+            int first_sy = screenScale * (debug_clip_fixed_vy[0] + pan_dy);
             MoveTo(first_sx, first_sy);
             for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
                 int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
-                int sy = (debug_clip_fixed_vy[ii] + pan_dy);
+                int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
                 LineTo(sx, sy);
             }
             LineTo(first_sx, first_sy); // close
@@ -4411,7 +4540,7 @@ void inspect_ray_cast(Model3D* model) {
             SetSolidPenPat(15);
             for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
                 int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
-                int sy = (debug_clip_fixed_vy[ii] + pan_dy);
+                int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
                 Rect vr; SetRect(&vr, sx-1, sy-1, sx+1, sy+1); FrameRect(&vr);
             }
 
@@ -8191,6 +8320,12 @@ segment "code22";
                 check_sort_repair(model, model->faces.face_count);
                 printf("Press any key to continue...\n");
                 keypress();
+                goto loopReDraw;
+
+            case 77: // 'M' - interactive: select two faces -> compute fixed intersection polygon & display (wireframe + overlay)
+            case 109: // 'm' (lowercase) - same as 'M'
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                inspect_intersection_fixed_ui(model);
                 goto loopReDraw;
 
             case 60: // '<' - Run check_sort and wait for key so user can read results
