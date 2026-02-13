@@ -2436,14 +2436,30 @@ int check_sort_repair(Model3D* model, int face_count) {
             if (have1 || have2) {
                 if (have1 && (!have2 || a1 >= a2)) { cx = cx1; cy = cy1; point_source = 1; }
                 else { cx = cx2; cy = cy2; point_source = 2; }
-                rc = ray_cast_at(model, f1, f2, cx, cy);
+                {
+                    float _tf1 = 0.0f, _tf2 = 0.0f;
+                    if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                        if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                    } else rc = 0; /* indeterminate — ray_cast_at would also be indeterminate */
+                    
+                }
                 /* If indeterminate, try the other centroid if present */
                 if (rc == 0 && have1 && have2 && point_source == 1) {
                     cx = cx2; cy = cy2; point_source = 2;
-                    rc = ray_cast_at(model, f1, f2, cx, cy);
+                    {
+                        float _tf1 = 0.0f, _tf2 = 0.0f;
+                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                        } else rc = 0;
+                    }
                 } else if (rc == 0 && have1 && have2 && point_source == 2) {
                     cx = cx1; cy = cy1; point_source = 1;
-                    rc = ray_cast_at(model, f1, f2, cx, cy);
+                    {
+                        float _tf1 = 0.0f, _tf2 = 0.0f;
+                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                        } else rc = 0;
+                    }
                 }
             }
 
@@ -2454,7 +2470,13 @@ int check_sort_repair(Model3D* model, int face_count) {
                 int iy0 = (miny1 > miny2) ? miny1 : miny2;
                 int iy1 = (maxy1 < maxy2) ? maxy1 : maxy2;
                 cx = (ix0 + ix1) / 2; cy = (iy0 + iy1) / 2; point_source = 3;
-                rc = ray_cast_at(model, f1, f2, cx, cy);
+                {
+                    float _tf1 = 0.0f, _tf2 = 0.0f;
+                    if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                        if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                    } else rc = 0;
+                    
+                }
             }
 
             if (debug_overlap_subj == f1 && debug_overlap_clip == f2) {
@@ -4318,25 +4340,10 @@ void inspect_ray_cast(Model3D* model) {
 
     /* Compute and print ray_cast distances at the chosen test point (cx,cy) */
     {
-        float proj_scale = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
-        float Dx = ((float)cx - (float)CENTRE_X) / proj_scale;
-        float Dy = ((float)CENTRE_Y - (float)cy) / proj_scale;
-        float Dz = 1.0f;
-        float A1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
-        float B1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
-        float C1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
-        float D1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
-        float A2 = (float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
-        float B2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
-        float C2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
-        float D2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
-        float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;
-        float denom2 = A2 * Dx + B2 * Dy + C2 * Dz;
-        if (fabsf(denom1) < 1e-6f || fabsf(denom2) < 1e-6f) {
+        float tf1 = 0.0f, tf2 = 0.0f;
+        if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) {
             printf("ray_cast distances at (%d,%d): denom very small (possible coplanar/parallel)\n", cx, cy);
         } else {
-            float tf1 = -D1 / denom1;
-            float tf2 = -D2 / denom2;
             printf("ray_cast distances at (%d,%d): tf(f%d)=%.6f tf(f%d)=%.6f (smaller=in front)\n", cx, cy, f1, tf1, f2, tf2);
         }
     }
@@ -4476,7 +4483,7 @@ void inspect_ray_cast(Model3D* model) {
                     if (ray_cast_distances(model, f1, f2, ccx, ccy, &d1, &d2)) {
                         if (d1 < d2) cmp = -1; else if (d1 > d2) cmp = 1; else cmp = 0;
                     } else {
-                        cmp = ray_cast_at(model, f1, f2, ccx, ccy);
+                        cmp = 0;
                     }
                     centroid_ok = 1; cx = ccx; cy = ccy; point_source = 1;
                 } else {
