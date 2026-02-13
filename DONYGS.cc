@@ -4103,6 +4103,41 @@ static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const
     return inside;
 }
 
+/* Helper: show model wireframe, highlight two faces and display a message (MoveTo + printf).
+ * - Renders the model in wireframe, highlights `f1`/`f2`, performs MoveTo(3,198) then prints `msg`,
+ *   waits for a key, and restores rendering state. Kept minimal and non-invasive.
+ */
+static void show_inspect_faces_with_message(Model3D* model, int f1, int f2, const char* msg) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    if (backup_flags == NULL) { printf("Memory allocation failed\n"); return; }
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+    int old_frame = framePolyOnly;
+
+    startgraph(mode);
+    framePolyOnly = 1; /* wireframe */
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+    else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+
+    unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
+    faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
+    drawFace(model, f1, 10, 1);
+    drawFace(model, f2, 6, 1);
+    faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
+
+    MoveTo(3,198);
+    printf("%s", msg);
+    keypress();
+
+    framePolyOnly = old_frame;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+    endgraph(); DoText();
+}
+
 /* Interactive helper: prompt for two face IDs, compute fixed-point intersection polygon
  * (via compute_intersection_centroid_ordered_fixed) and display wireframe model with the
  * clipped polygon overlaid. Mapped to the 'M' key by the caller.
@@ -4124,6 +4159,20 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
     if (scanf("%d", &f2) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
     { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
     if (f2 < 0 || f2 >= face_count) { printf("Invalid face id 2\n"); return; }
+
+    {
+        int bix0=0, biy0=0, bix1=0, biy1=0;
+        if (!compute_bbox_intersection(model, f1, f2, &bix0, &biy0, &bix1, &biy1)) {
+            char msg[128]; snprintf(msg, sizeof(msg), "No bbox intersection for face %d and %d", f1, f2);
+            show_inspect_faces_with_message(model, f1, f2, msg);
+            return;
+        }
+        if (!projected_polygons_overlap(model, f1, f2)) {
+            char msg[128]; snprintf(msg, sizeof(msg), "No overlap for faces %d and %d\n", f1, f2);
+            show_inspect_faces_with_message(model, f1, f2, msg);
+            return;
+        }
+    }
 
     /* Clear previous debug polygon and compute fixed clipping (try both orders) */
     debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0;
@@ -4251,7 +4300,51 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
             }
         }
     } else {
-        MoveTo(3, 10); printf("Intersection polygon: none (no clipped polygon)\n");
+        /* No clipped polygon produced. Check whether projected_polygons_overlap considers this a (degenerate) overlap. */
+        if (projected_polygons_overlap(model, f1, f2)) {
+            /* Try to find a representative interior sample inside the integer intersection bbox (center then 3x3 grid).
+             * If found, draw a small marker and run ray_cast_distances at that point; otherwise fall back to bbox center. */
+            int ix0=0,iy0=0,ix1=0,iy1=0;
+            int sx = 0, sy = 0; int found = 0;
+            if (compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1)) {
+                int cx0 = (ix0 + ix1) / 2; int cy0 = (iy0 + iy1) / 2;
+                if (point_in_poly_int(cx0, cy0, faces, vtx, f1, faces->vertex_count[f1]) && point_in_poly_int(cx0, cy0, faces, vtx, f2, faces->vertex_count[f2])) { sx = cx0; sy = cy0; found = 1; }
+                else {
+                    int W = ix1 - ix0; int H = iy1 - iy0;
+                    for (int gx = 0; gx < 3 && !found; ++gx) for (int gy = 0; gy < 3 && !found; ++gy) {
+                        int tx = ix0 + (((2*gx + 1) * W + 3) / 6);
+                        int ty = iy0 + (((2*gy + 1) * H + 3) / 6);
+                        if (point_in_poly_int(tx, ty, faces, vtx, f1, faces->vertex_count[f1]) && point_in_poly_int(tx, ty, faces, vtx, f2, faces->vertex_count[f2])) { sx = tx; sy = ty; found = 1; break; }
+                    }
+                }
+            }
+            if (!found) { /* fallback to bbox center of polygons */
+                int bx0 = faces->minx[f1] > faces->minx[f2] ? faces->minx[f1] : faces->minx[f2];
+                int bx1 = faces->maxx[f1] < faces->maxx[f2] ? faces->maxx[f1] : faces->maxx[f2];
+                int by0 = faces->miny[f1] > faces->miny[f2] ? faces->miny[f1] : faces->miny[f2];
+                int by1 = faces->maxy[f1] < faces->maxy[f2] ? faces->maxy[f1] : faces->maxy[f2];
+                sx = (bx0 + bx1) / 2; sy = (by0 + by1) / 2;
+            }
+
+            /* Draw small marker at sample point */
+            SetSolidPenPat(3);
+            int screenScale = mode / 320;
+            int sc_sx = screenScale * (sx + pan_dx);
+            int sc_sy = screenScale * (sy + pan_dy);
+            Rect r; SetRect(&r, sc_sx-2, sc_sy-2, sc_sx+2, sc_sy+2); FrameRect(&r);
+
+            /* Ray-cast at sample point to determine which face is in front */
+            float _tf1 = 0.0f, _tf2 = 0.0f;
+            int rc = 0;
+            if (ray_cast_distances(model, f1, f2, sx, sy, &_tf1, &_tf2)) { if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0; } else rc = 0;
+
+            MoveTo(3, 10);
+            if (rc == -1) printf("Intersection degenerate (edge-only). Face %d is in front of face %d at sample (%d,%d)\n", f1, f2, sx, sy);
+            else if (rc == 1) printf("Intersection degenerate (edge-only). Face %d is in front of face %d at sample (%d,%d)\n", f2, f1, sx, sy);
+            else printf("Intersection degenerate (edge-only). Face order: undetermined at sample (%d,%d)\n", sx, sy);
+        } else {
+            MoveTo(3, 10); printf("Intersection polygon: none (no clipped polygon)\n");
+        }
     }
 
     keypress();
