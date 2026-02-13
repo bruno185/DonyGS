@@ -2503,7 +2503,7 @@ int check_sort_repair(Model3D* model, int face_count) {
                         faces->sorted_face_indices[pother] = tmp;
                         for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
                         ++repairs;
-                        printf("check_sort_repair: moved face %d FORWARD AFTER %d (pos %d -> %d)\n", closer, other, pclos, pother);
+                        printf("check_sort_repair: moved face %d FORWARD BY ONE (pos %d -> %d)\n", closer, pclos, pclos+1);
                     } else {
                         /* pclos == pother should not happen for distinct faces; ignore. */
                     }
@@ -4162,6 +4162,11 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
         }
     }
 
+    /* Preserve original display flags so we can restore them after the graphical inspection */
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    if (backup_flags == NULL) { printf("Memory allocation failed\n"); return; }
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+
     /* Start graphics and draw wireframe + overlay the debug polygon (if present) */
     startgraph(mode);
     int old_frame = framePolyOnly; framePolyOnly = 1; /* wireframe */
@@ -4196,7 +4201,10 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
 
     keypress();
 
+    /* Restore state */
     framePolyOnly = old_frame;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
     endgraph();
     DoText();
 }
@@ -4328,8 +4336,8 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
             long long qd_area2 = 0;
             int qd_ok = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &ccx, &ccy, &qd_area2);
             if (qd_ok) {
-                MoveTo(1,10);
-                printf("QD centroid: x=%d y=%d - area2: %.2f\n", ccx, ccy, (double)qd_area2);
+                // MoveTo(1,10);
+                // printf("QD centroid: x=%d y=%d - area2: %.2f\n", ccx, ccy, (double)qd_area2);
                 iarea1 = (double)qd_area2;
                 float d1=0.0f,d2=0.0f;
                 if (ray_cast_distances(model, f1, f2, ccx, ccy, &d1, &d2)) {
