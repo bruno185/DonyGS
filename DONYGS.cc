@@ -126,6 +126,27 @@ static int debug_clip_float_overridden = 0; /* 1 if float result overrode fixed 
 static const double MIN_INTERSECTION_AREA_PIXELS = 2.0; /* strict overlap test threshold (set to 2 pixels) */
 
 // User-selected colors: -1 means not set (use defaults), 0-15 are colors, 16=random
+
+/* Named QuickDraw color indices (0..15) — use these instead of numeric literals */
+#define COL_BLACK           0
+#define COL_GREY            1
+#define COL_BROWN           2
+#define COL_PURPLE          3
+#define COL_BLUE            4
+#define COL_GREEN           5
+#define COL_ORANGE          6   /* orange / brown */
+#define COL_RED             7   /* commonly used frame color */
+#define COL_FRAME           7   /* commonly used frame color */
+#define COL_ROSE            8
+#define COL_YELLOW          9
+#define COL_LIGHT_GREEN    10
+#define COL_AQUA           11
+#define COL_PALE_PURPLE    12
+#define COL_LIGHT_BLUE     13
+#define COL_FILL_DEFAULT   14  /* default fill pen */
+#define COL_LIGHT_GREY     14 
+#define COL_WHITE          15  /* white */
+
 static int user_fill_color = -1;  // Interior color
 static int user_frame_color = -1; // Frame color
 // Random color buffers (allocated per face when random mode is active)
@@ -785,9 +806,9 @@ void painter_newell_sancha_fast(Model3D* model, int face_count) {
 
 void debug_two_faces(Model3D* model, int f1, int f2) {
     startgraph(mode);
-    drawFace(model, f1, 10, 1);
+    drawFace(model, f1, COL_LIGHT_GREEN, 1);
     keypress();
-    drawFace(model, f2, 10, 1);
+    drawFace(model, f2, COL_LIGHT_GREEN, 1);
     keypress();
     endgraph();
     DoText();
@@ -4190,8 +4211,8 @@ static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const
 
     unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
     faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
-    drawFace(model, f1, 10, 1);
-    drawFace(model, f2, 6, 1);
+    drawFace(model, f1, COL_LIGHT_GREEN, 1);
+    drawFace(model, f2, COL_ORANGE, 1);
     faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
 
     MoveTo(3,198);
@@ -4306,7 +4327,7 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
     /* Draw intersection polygon populated by compute_intersection_centroid_ordered_fixed */
     if (debug_clip_fixed_vcount >= 3) {
         int screenScale = mode / 320;
-        SetSolidPenPat(7);
+        SetSolidPenPat(COL_FRAME);
         int first_sx = screenScale * (debug_clip_fixed_vx[0] + pan_dx);
         int first_sy = screenScale * (debug_clip_fixed_vy[0] + pan_dy);
         MoveTo(first_sx, first_sy);
@@ -4317,7 +4338,7 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
         }
         LineTo(first_sx, first_sy);
 
-        SetSolidPenPat(15);
+        SetSolidPenPat(COL_WHITE);
         for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
             int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
             int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
@@ -4357,7 +4378,7 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
                 draw_cy = (miny + maxy) / 2;
             }
 
-            SetSolidPenPat(6); /* orange */
+            SetSolidPenPat(COL_ORANGE); /* orange */
             int sc_cx = screenScale * (draw_cx + pan_dx);
             int sc_cy = screenScale * (draw_cy + pan_dy);
             int half = 4; /* cross half-length in pixels */
@@ -4384,7 +4405,7 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
             int sx = cx; int sy = cy;
 
             /* Draw small marker at sample point */
-            SetSolidPenPat(3);
+            SetSolidPenPat(COL_PURPLE);
             int screenScale = mode / 320;
             int sc_sx = screenScale * (sx + pan_dx);
             int sc_sy = screenScale * (sy + pan_dy);
@@ -4455,8 +4476,8 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
     unsigned char saved_f1 = faces->display_flag[f1];
     unsigned char saved_f2 = faces->display_flag[f2];
     faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
-    drawFace(model, f1, 10, 1);
-    drawFace(model, f2, 6, 1);
+    drawFace(model, f1, COL_LIGHT_GREEN, 1);
+    drawFace(model, f2, COL_ORANGE, 1);
 
     {
         int _old_frame = framePolyOnly; framePolyOnly = 1;
@@ -4477,12 +4498,12 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
         int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
         int sc_iy0 = screenScale * (saved_iy0 + pan_dy);
         int sc_iy1 = screenScale * (saved_iy1 + pan_dy);
-        SetSolidPenPat(15);
+        SetSolidPenPat(COL_WHITE);
         SetRect(&r, sc_ix0, sc_iy0, sc_ix1, sc_iy1);
         FrameRect(&r);
 
         if (debug_clip_fixed_vcount >= 3) {
-            SetSolidPenPat(7);
+            SetSolidPenPat(COL_FRAME);
             int first_sx = screenScale * (debug_clip_fixed_vx[0] + pan_dx);
             int first_sy = screenScale * (debug_clip_fixed_vy[0] + pan_dy);
             MoveTo(first_sx, first_sy);
@@ -4493,7 +4514,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
             }
             LineTo(first_sx, first_sy);
 
-            SetSolidPenPat(15);
+            SetSolidPenPat(COL_WHITE);
             for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
                 int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
                 int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
@@ -4515,7 +4536,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
                 double centroid_fy = cy_sum / (3.0 * s_cross);
                 int sc_fx = screenScale * ((int)(centroid_fx + 0.5) + pan_dx);
                 int sc_fy = screenScale * ((int)(centroid_fy + 0.5) + pan_dy);
-                SetSolidPenPat(3);
+                SetSolidPenPat(COL_PURPLE);
                 Rect fr; SetRect(&fr, sc_fx-2, sc_fy-2, sc_fx+2, sc_fy+2); FrameRect(&fr);
                 (void)centroid_fx; (void)centroid_fy;
             }
@@ -4532,7 +4553,8 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
             int sc_tx1 = screenScale * (tx1 + pan_dx);
             int sc_ty0 = (ty0 + pan_dy);
             int sc_ty1 = (ty1 + pan_dy);
-            SetSolidPenPat(9);
+            /* Draw region bbox in WHITE by default; highlight in yellow only when QD centroid available */
+            SetSolidPenPat(COL_WHITE);
             Rect rr; SetRect(&rr, sc_tx0, sc_ty0, sc_tx1, sc_ty1); FrameRect(&rr);
 
             int qdx = (tx0 + tx1) / 2;
@@ -4563,7 +4585,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
                 /* If QD centroid succeeded and we have an intersection bbox, draw that AABB + center cross in yellow
                  * to visually highlight that the QD-run centroid is available. This overlays the default white rectangle. */
                 if (has_bbox) {
-                    Rect br; SetSolidPenPat(14); /* yellow */
+                    Rect br; SetSolidPenPat(COL_YELLOW); /* yellow */
                     int sc_ix0 = screenScale * (saved_ix0 + pan_dx);
                     int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
                     int sc_iy0 = (saved_iy0 + pan_dy);
@@ -4602,7 +4624,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
                 int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
                 int sc_iy0 = (saved_iy0 + pan_dy);
                 int sc_iy1 = (saved_iy1 + pan_dy);
-                SetSolidPenPat(15);
+                SetSolidPenPat(COL_WHITE);
                 Rect r; SetRect(&r, sc_ix0, sc_iy0, sc_ix1, sc_iy1); FrameRect(&r);
                 int fcx = (saved_ix0 + saved_ix1) / 2; int fcy = (saved_iy0 + saved_iy1) / 2;
                 int sc_cx = screenScale * (fcx + pan_dx);
@@ -4872,7 +4894,7 @@ static void inspect_face_pair_ui(Model3D* model) {
         /* Highlight faces and show indices */
         unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
         faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
-        drawFace(model, f1, 10, 1); drawFace(model, f2, 6, 1);
+        drawFace(model, f1, COL_LIGHT_GREEN, 1); drawFace(model, f2, COL_ORANGE, 1);
 
         /* Compute diagnostics (we are in graphical mode so allow QD tests) */
         compare_faces_diagnostic(model, f1, f2, 1, &r);
@@ -4883,7 +4905,7 @@ static void inspect_face_pair_ui(Model3D* model) {
          * If QD centroid is available, use yellow to highlight the AABB/center. */
         if (r.bbox_ok && r.poly_overlap) {
             Rect rr;
-            SetSolidPenPat(r.qd_centroid_ok ? 14 : 15); /* yellow if QD centroid OK, otherwise white */
+            SetSolidPenPat(r.qd_centroid_ok ? COL_YELLOW : COL_WHITE); /* pen 9 (yellow) if QD centroid OK, otherwise white */
             int sc_ix0 = screenScale * (r.bbox_ix0 + pan_dx);
             int sc_ix1 = screenScale * (r.bbox_ix1 + pan_dx);
             int sc_iy0 = (r.bbox_iy0 + pan_dy);
@@ -4903,9 +4925,9 @@ static void inspect_face_pair_ui(Model3D* model) {
             printf("f%d overlaps f%d", f1, f2);
             /* prefer centroid raycast; fallback to bbox raycast */
             if (r.sh_raycast == 1) printf("  f%d in front", f1);
-            else if (r.sh_raycast == 2) printf("  f%d in front", f2);
-            else if (r.bbox_raycast == 1) printf("  f%d in front", f1);
-            else if (r.bbox_raycast == 2) printf("  f%d in front", f2);
+            else if (r.sh_raycast == 2) printf(" - f%d in front", f2);
+            else if (r.bbox_raycast == 1) printf(" - f%d in front", f1);
+            else if (r.bbox_raycast == 2) printf(" - f%d in front", f2);
         } else {
             printf("f%d do not overlap f%d", f1, f2);
         }
@@ -5076,8 +5098,8 @@ void inspect_ray_cast(Model3D* model) {
     unsigned char saved_f1 = faces->display_flag[f1];
     unsigned char saved_f2 = faces->display_flag[f2];
     faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
-    drawFace(model, f1, 10, 1);
-    drawFace(model, f2, 6, 1);
+    drawFace(model, f1, COL_LIGHT_GREEN, 1);
+    drawFace(model, f2, COL_ORANGE, 1);
 
     // Draw red frame around both faces (outline) using FramePoly via drawFace (frame-only)
     {
@@ -5103,7 +5125,7 @@ void inspect_ray_cast(Model3D* model) {
     /* Draw the clipped intersection polygon (if available) */
         if (debug_clip_fixed_vcount >= 3) {
             /* Outline in pen 7 (distinct) */
-            SetSolidPenPat(7);
+            SetSolidPenPat(COL_FRAME);
             int first_sx = screenScale * (debug_clip_fixed_vx[0] + pan_dx);
             int first_sy = screenScale * (debug_clip_fixed_vy[0] + pan_dy);
             MoveTo(first_sx, first_sy);
@@ -5115,7 +5137,7 @@ void inspect_ray_cast(Model3D* model) {
             LineTo(first_sx, first_sy); // close
 
             /* Draw small white boxes at each vertex */
-            SetSolidPenPat(15);
+            SetSolidPenPat(COL_WHITE);
             for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
                 int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
                 int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
@@ -5139,7 +5161,7 @@ void inspect_ray_cast(Model3D* model) {
                 int sc_fx = screenScale * ((int)(centroid_fx + 0.5) + pan_dx);
                 int sc_fy = ((int)(centroid_fy + 0.5) + pan_dy);
                 /* Red small filled rect for float centroid */
-                SetSolidPenPat(3);
+                SetSolidPenPat(COL_PURPLE);
                 Rect fr; SetRect(&fr, sc_fx-2, sc_fy-2, sc_fx+2, sc_fy+2); FrameRect(&fr);
 
                 /* debug overlap suppressed in graphical text mode (minimal display) */
@@ -5165,19 +5187,18 @@ void inspect_ray_cast(Model3D* model) {
                 int sc_tx1 = screenScale * (tx1 + pan_dx);
                 int sc_ty0 = (ty0 + pan_dy);
                 int sc_ty1 = (ty1 + pan_dy);
-                SetSolidPenPat(9); /* distinct pen for region bbox */
+                /* Draw region bbox in WHITE by default; QD-specific highlight will be drawn below if available. */
+                SetSolidPenPat(COL_WHITE);
                 Rect rr; SetRect(&rr, sc_tx0, sc_ty0, sc_tx1, sc_ty1); FrameRect(&rr);
-                /* draw yellow cross at center of QD bbox */
-                {
-                    int qdx = (tx0 + tx1) / 2;
-                    int qdy = (ty0 + ty1) / 2;
-                    int sc_cx = screenScale * (qdx + pan_dx);
-                    int sc_cy = (qdy + pan_dy);
-                    int d = 4 * screenScale;
-                    int th = screenScale > 0 ? screenScale : 1;
-                    Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
-                    Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
-                }
+                /* draw center cross (default color) */
+                int qdx = (tx0 + tx1) / 2;
+                int qdy = (ty0 + ty1) / 2;
+                int sc_cx = screenScale * (qdx + pan_dx);
+                int sc_cy = (qdy + pan_dy);
+                int d = 4 * screenScale;
+                int th = screenScale > 0 ? screenScale : 1;
+                Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
+                Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
 
                 /* Now compute the runs-based/QD centroid (only valid with QD active) */
                 int centroid_ok = 0;
@@ -5193,6 +5214,12 @@ void inspect_ray_cast(Model3D* model) {
                         cmp = 0;
                     }
                     centroid_ok = 1; cx = ccx; cy = ccy; point_source = 1;
+
+                    /* QD centroid is available — repaint the region bbox + center cross in yellow (pen 9) */
+                    SetSolidPenPat(COL_YELLOW);
+                    SetRect(&rr, sc_tx0, sc_ty0, sc_tx1, sc_ty1); FrameRect(&rr);
+                    Rect hr_y; SetRect(&hr_y, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr_y);
+                    Rect vr_y; SetRect(&vr_y, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr_y);
                 } else {
                     /* QD centroid not available despite region_ok (rare). Leave fallback visuals as-is. */
                     MoveTo(1,10);printf("QD centroid: KO\n");
@@ -5206,7 +5233,7 @@ void inspect_ray_cast(Model3D* model) {
                     int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
                     int sc_iy0 = (saved_iy0 + pan_dy);
                     int sc_iy1 = (saved_iy1 + pan_dy);
-                    SetSolidPenPat(15); /* white for fallback bbox (historic) */
+                    SetSolidPenPat(COL_WHITE); /* white for fallback bbox (historic) */
                     Rect r; SetRect(&r, sc_ix0, sc_iy0, sc_ix1, sc_iy1); FrameRect(&r);
                     /* draw white cross at center of fallback bbox */
                     int fcx = (saved_ix0 + saved_ix1) / 2; int fcy = (saved_iy0 + saved_iy1) / 2;
@@ -5307,7 +5334,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
         // Overlay selected face in filled green (pen 10)
         faces->display_flag[target_face] = 1;
-        drawFace(model, target_face, 10, 1);
+        drawFace(model, target_face, COL_LIGHT_GREEN, 1);
 
         // Find position in sorted list for display
         int pos_in_sorted = -1;
@@ -5652,13 +5679,13 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     for (int i = 0; i < misplaced_count; ++i) {
         int f = misplaced[i];
         faces->display_flag[f] = 1;
-        drawFace(model, f, 6, 0);
+        drawFace(model, f, COL_ORANGE, 0);
     }
 
     // 3) Overlay: selected face in green (pen 10)
     // Ensure target face is visible for drawFace
     faces->display_flag[target_face] = 1;
-    drawFace(model, target_face, 10, 1);
+    drawFace(model, target_face, COL_LIGHT_GREEN, 1);
 
     MoveTo(2, 195);
     printf("%d face(s) should be after face %d, %d overlap%s\n", misplaced_count, target_face, overlap_count, overlap_count > 1 ? "s" : "");
@@ -5893,10 +5920,10 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     for (int i = 0; i < misplaced_count; ++i) {
         int f = misplaced[i];
         faces->display_flag[f] = 1;
-        drawFace(model, f, 12, 0);
+        drawFace(model, f, COL_PALE_PURPLE, 0);
     }
     faces->display_flag[target_face] = 1;
-    drawFace(model, target_face, 10, 1);
+    drawFace(model, target_face, COL_LIGHT_GREEN, 1);
 
 
     MoveTo(2, 195);
@@ -6046,8 +6073,8 @@ void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char
     unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
     faces->display_flag[f1] = 1;
     faces->display_flag[f2] = 1;
-    drawFace(model, f1, 10, 1); // green with index
-    drawFace(model, f2, 6, 1);  // orange with index
+    drawFace(model, f1, COL_LIGHT_GREEN, 1); // green with index
+    drawFace(model, f2, COL_ORANGE, 1);  // orange with index
     // restore (though we restore all flags later from backup)
     faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
 
@@ -6219,8 +6246,8 @@ void test_all_overlap(Model3D* model, ObserverParams* params, const char* filena
         /* Highlight faces */
         unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
         faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
-        drawFace(model, f1, 10, show_face_ids); // green
-        drawFace(model, f2, 6, show_face_ids);  // orange
+        drawFace(model, f1, COL_LIGHT_GREEN, show_face_ids); // green
+        drawFace(model, f2, COL_ORANGE, show_face_ids);  // orange
         faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
 
         /* Compute overlap using existing test */
@@ -6558,7 +6585,7 @@ void display_model_face_ids(Model3D* model, ObserverParams* params, const char* 
         int f = faces->sorted_face_indices[si];
         if (!faces->display_flag[f]) continue;
         // Draw face filled with green (fillPenPat = 10)
-        drawFace(model, f, 10, 0);
+        drawFace(model, f, COL_LIGHT_GREEN, 0);
 
         // Compute integer bounding box center (use same logic as drawFace)
         int offset = faces->vertex_indices_ptr[f];
@@ -6585,10 +6612,10 @@ void display_model_face_ids(Model3D* model, ObserverParams* params, const char* 
             memcpy(&pstr[1], tmp, len);
 
             // Draw index in green
-            SetSolidPenPat(10);
+            SetSolidPenPat(COL_LIGHT_GREEN);
             MoveTo(screenCx, screenCy);
             DrawString(pstr);
-            SetSolidPenPat(14);
+            SetSolidPenPat(COL_FILL_DEFAULT);
         }
     }
 
@@ -7967,14 +7994,14 @@ void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
             Pattern pat;
             GetPenPat(pat);
             FillPoly(polyHandle, pat);
-            SetSolidPenPat(7);
+            SetSolidPenPat(COL_FRAME);
             FramePoly(polyHandle);
-            SetSolidPenPat(14);
+            SetSolidPenPat(COL_FILL_DEFAULT);
         } else if (framePolyOnly) {
             /* Draw explicit solid wireframe using MoveTo/LineTo to avoid dotted
              * outlines produced by FramePoly in certain pen/pattern states. */
             SetPenMode(0); // PenMode = Copy ==> avoid dotted lines
-            SetSolidPenPat(7);
+            SetSolidPenPat(COL_FRAME);
             FramePoly(polyHandle);
             // int first_h = poly->polyPoints[0].h;
             // int first_v = poly->polyPoints[0].v;
@@ -7983,14 +8010,14 @@ void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
             //     LineTo(poly->polyPoints[kk].h, poly->polyPoints[kk].v);
             // }
             // LineTo(first_h, first_v);
-            SetSolidPenPat(14);
+            SetSolidPenPat(COL_FILL_DEFAULT);
         } else {
             Pattern pat;
             GetPenPat(pat);
             FillPoly(polyHandle, pat);
-            SetSolidPenPat(7);
+            SetSolidPenPat(COL_FRAME);
             FramePoly(polyHandle);
-            SetSolidPenPat(14);
+            SetSolidPenPat(COL_FILL_DEFAULT);
         }
 
         // Draw face index centered in the polygon using QuickDraw MoveTo + DrawString
@@ -8061,7 +8088,7 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
     // printf("\nDrawing polygons on screen:\n");
 
     // Set fill pen once per frame (reduces state changes)
-    SetSolidPenPat(14);
+    SetSolidPenPat(COL_FILL_DEFAULT);
 
     // Use sorted_face_indices to draw in correct depth order
     // Draw ALL faces - painter's algorithm handles occlusion
@@ -8137,7 +8164,7 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
                         } else if (user_fill_color >= 0) {
                             frame_color = user_fill_color;
                         } else {
-                            frame_color = 14; // default fill color
+                            frame_color = COL_FILL_DEFAULT; // default fill color
                         }
                     } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
                         frame_color = random_frame_colors[face_id];
@@ -8148,7 +8175,7 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
                     }
                     SetSolidPenPat(frame_color);
                     FramePoly(polyHandle);
-                    SetSolidPenPat(14); // keep fill pen as default for next faces
+                    SetSolidPenPat(COL_FILL_DEFAULT); // keep fill pen as default for next faces
                 } else {
                     // Fill color
                     int fill_color;
@@ -8157,7 +8184,7 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
                     } else if (user_fill_color >= 0) {
                         fill_color = user_fill_color;
                     } else {
-                        fill_color = 14;
+                        fill_color = COL_FILL_DEFAULT;
                     }
                     SetSolidPenPat(fill_color);
                     GetPenPat(pat);
@@ -8173,11 +8200,11 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
                     } else if (user_frame_color >= 0) {
                         frame_color = user_frame_color;
                     } else {
-                        frame_color = 7;
+                        frame_color = COL_FRAME;
                     }
                     SetSolidPenPat(frame_color);
                     FramePoly(polyHandle);
-                    SetSolidPenPat(14); // restore fill pen
+                    SetSolidPenPat(COL_FILL_DEFAULT); // restore fill pen
                 }
                 valid_faces_drawn++;
                 if (vcount_face == 3) triangle_count++;
@@ -8236,7 +8263,7 @@ void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int 
     poly_handle_locked = 1;
 
     SetPenMode(0);
-    SetSolidPenPat(14);
+    SetSolidPenPat(COL_FILL_DEFAULT);
 
     int start_face = 0;
     int max_faces_to_draw = face_count;
@@ -8306,18 +8333,18 @@ void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int 
                         } else if (user_fill_color >= 0) {
                             frame_color = user_fill_color;
                         } else {
-                            frame_color = 14; // default fill color
+                            frame_color = COL_FILL_DEFAULT; // default fill color
                         }
                     } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
                         frame_color = random_frame_colors[face_id];
                     } else if (user_frame_color >= 0) {
                         frame_color = user_frame_color;
                     } else {
-                        frame_color = 7;
+                        frame_color = COL_FRAME;
                     }
                     SetSolidPenPat(frame_color);
                     FramePoly(polyHandle);
-                    SetSolidPenPat(14); // keep fill pen as default for next faces
+                    SetSolidPenPat(COL_FILL_DEFAULT); // keep fill pen as default for next faces
                 } else {
                     int fill_color;
                     if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
@@ -8325,7 +8352,7 @@ void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int 
                     } else if (user_fill_color >= 0) {
                         fill_color = user_fill_color;
                     } else {
-                        fill_color = 14;
+                        fill_color = COL_FILL_DEFAULT;
                     }
                     SetSolidPenPat(fill_color);
                     GetPenPat(pat);
@@ -8340,11 +8367,11 @@ void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int 
                     } else if (user_frame_color >= 0) {
                         frame_color = user_frame_color;
                     } else {
-                        frame_color = 7;
+                        frame_color = COL_FRAME;
                     }
                     SetSolidPenPat(frame_color);
                     FramePoly(polyHandle);
-                    SetSolidPenPat(14); // restore fill pen
+                    SetSolidPenPat(COL_FILL_DEFAULT); // restore fill pen
                 }
                 valid_faces_drawn++;
                 if (vcount_face == 3) triangle_count++;
@@ -8508,11 +8535,11 @@ void frameInconclusivePairs(Model3D* model) {
             if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) continue;
 
             // Frame polygon in white (use same pen as drawPolygons framing)
-            SetSolidPenPat(10);
+            SetSolidPenPat(COL_LIGHT_GREEN);
             Pattern pat;
             GetPenPat(pat);
             FillPoly(polyHandle, pat);
-            SetSolidPenPat(9);
+            SetSolidPenPat(COL_YELLOW);
             FramePoly(polyHandle);
         }
     }
@@ -8564,7 +8591,7 @@ void DoColor() {
             PaintRect(&r);
 
             if (i == 0) {
-                SetSolidPenPat(15); // White frame for black background
+                SetSolidPenPat(COL_WHITE); // White frame for black background
                 FrameRect(&r);
             }
 
@@ -8623,7 +8650,7 @@ static void show_help_pager(void) {
         "6: Set both colors to RANDOM mode",
         "7: Choose fill color (0-15, 16=random, -1=default)",
         "8: Choose frame color (0-15, 16=random, -1=default)",
-        "9: Reset colors to defaults (fill=14, frame=7)",
+        "9: Reset colors to defaults (fill=COL_FILL_DEFAULT(14), frame=COL_FRAME(7))",
         "P: Toggle frame-only polygons (default: OFF)",
         "B: Toggle back-face culling (observer-space D<=0)",
         "I: Toggle display of inconclusive face pairs",
@@ -8876,10 +8903,10 @@ segment "code22";
                 printf("    Pan offset: (%d, %d)\n", pan_dx, pan_dy);
                 if (user_fill_color == 16) printf("    Fill color: Random\n");
                 else if (user_fill_color >= 0) printf("    Fill color: %d\n", user_fill_color);
-                else printf("    Fill color: Default (14)\n");
+                else printf("    Fill color: Default (COL_FILL_DEFAULT /*14*/)\n");
                 if (user_frame_color == 16) printf("    Frame color: Random\n");
                 else if (user_frame_color >= 0) printf("    Frame color: %d\n", user_frame_color);
-                else printf("    Frame color: Default (7)\n");
+                else printf("    Frame color: Default (COL_FRAME /*7*/)\n");
                 printf ("Processing time: %d ticks (1/60 sec.)\n", last_process_time_end - last_process_time_start);
                 printf("===================================\n");
                 printf("\n");
