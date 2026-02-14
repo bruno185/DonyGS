@@ -1,0 +1,149 @@
+REMOVED: 2026-01-14 - Commit 067edb4 : painter_super removed (see commit for original implementation)
+- Reason: experimental mode regressed intermittently; removed per request.
+- Compile & push performed.
+
+NOTE: 2026-01-13 - Commit 339afdf : painter_correct - éviter oscillations
+- Ajout de `min_allowed_pos[]` pour marquer les cibles déplacées dans la passe BEFORE.
+- Clamp dans la passe AFTER pour empêcher qu'une face déplacée retourne à un indice plus élevé.
+- Compile et push effectués (branche main).
+
+fixed:
+probleme de overlap :
+avion, 90,20,0 (+ zoom) : o => 45 et 2 : overlap = NO : erreur !
+avion, 110,20,0 (+ zoom) : o => 45 et 3 : overlap = YES : erreur !
+Enregistrer dans un fichier les coordonnees des faces du modele ?
+
+
+fixed:
+probleme fil de fer : à voir... solution provisoire : dans bigloop, faire un processModelFast(mod
+el, &params, filename);                                                                          Solution  ==> modification de processModelFast : if framePolyOnly : pas de tri des faces. Et bigloop quand framePolyOnly = 0.
+TODO:
+avec les angle 350 / 50, avion, les faces 3 et 44 sont en overlap, et sont inversées suivant le test after.
+IA :
+ourquoi (brièvement) 
+Si tu compares A,B et B,C avec des tests décisifs (→ A<B et B<C), puis A vs C est inconclusif et tu appliques Zmin pour trancher, tu peux obtenir C<A par Zmin.
+Résultat : A<B, B<C, C<A → cycle (non‑transitif).
+Autrement dit, mélanger des relations « décidées » et des tie‑breakers locaux ne garantit pas la transitivité du comparateur global.
+Solution recommandée
+Construire d’abord un graphe dirigé à partir des relations décisives (arêtes f1→f2 quand test dit « f1 avant f2 »).
+Tenter un tri topologique (Kahn) sur ce graphe :
+si acyclique → ordre compatible avec toutes relations décisives ;
+si cycle détecté → résoudre le cycle en orientant/arbitrant les arêtes du cycle selon Zmin (ou une heuristique déterministe), puis relancer le topo.
+Ceci garantit qu’on respecte prioritairement les relations décidées et qu’on n’introduit pas d’ordre contradictoire arbitraire.
+Proposition d’implémentation
+J’implémente le pipeline : construire graphe → topo → detection de cycles → résolution par Zmin → topo final, avec logs (mode debug).
+Optionnel : un mode « agressif » qui applique ensuite swaps adjacents pour rapprocher/corriger l’ordre effectif dans la structure existante.
+
+
+En cours : ms copile a créer une version alternative du test overlap.
+Traduite en fixed64 par GH copilot, mais résultat non satisfaisant : face 7 vs 45 : overlap. 
+Crooisement réel des aretes => toléance 0,5 pixel => plantage (stack overfloxw ?) => Fixed32 : ok mais pb. de face de profil "coupant" autre face. A suivre avec MS copilot, en donnant des exemples numériques
+
+voici la suite. Je vois 4 cas :
+Le cas standard où les polys sont disjointes ou se touching (arete, somment) : pas overlap
+Le cas standard où les polys se chevauchent visiblement : overlap
+Le cas ou la face 1 est vue de profil, donc projetée comme un trait à l'écran (ou surface très fine), "coupee la face 1 : dans ce cas le programme doit dir eoverlap.
+Enfin, il y  un cas où ls faces ne se touchent pas en 3D mais une fois projetées, il peut y avoir des croisements d'aretes. Dans ce cas, il faut que le programme dise non overlap. En utilisant un epsilon par exemple.
+Voici les exemples numériques :
+
+Face 45
+x2d=233 y2d=114
+x2d=98 y2d=88
+x2d=105 y2d=89
+x2d=239 y2d=115
+
+Face 3
+x2d=218 y2d=108
+x2d=218 y2d=114
+x2d=206 y2d=112
+x2d=206 y2d=105
+
+Face 44
+x2d=226 y2d=124
+x2d=91 y2d=97
+x2d=98 y2d=88
+x2d=233 y2d=114
+
+Face 6
+x2d=191 y2d=106
+x2d=206 y2d=105
+x2d=206 y2d=112
+
+Face 7
+x2d=191 y2d=106
+x2d=212 y2d=101
+x2d=206 y2d=105
+
+Face 3
+x2d=218 y2d=108
+x2d=218 y2d=114
+x2d=206 y2d=112
+x2d=206 y2d=105
+
+Résultat attendu :
+3 vs 45 : YES
+3 vs 44 : YES 
+3 VS 6 : NO
+3 vs 7 : NO
+7 vs 45 : NO
+7 vs 44 : NO
+6 vs 45 : YES
+6 vs 44 : YES
+
+
+Dans projected_polygons_overlap :
+
+            if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) {
+                /* Mark candidate on proper segment intersection (do not accept immediately) */
+                candidate = 1;
+                overlapCheckCount++; overlapSegiAccept++;
+                if (dbg_pair) printf("OVERLAP_DEBUG: pair %d,%d -> seg-intersect -> candidate marked\n", f1, f2);
+                // break;
+                return 1; /* QUICK ACCEPT on edge intersection */
+            }
+
+Si on break : les faces 7 et 45 son ok : NO overlap. MAis 6 et 45 ko : 45 coupe 6, mais pas d'overlap
+Si on continue : les faces 45 et 6 sont Ok (coupe => overlap) mais les faces 7 et 45 sont KO : overlap.
+
+A suivre avec MS copilot
+On tatoone toujours, 7 vs 45 = YES, malgré epsilon 
+
+OK maintenant avec nouvelle version de segs_intersect_int, qui utilise une marge d'erreur de 1 pixel.
+
+
+Maintenant c'est ray_cast qui est faux : parma : angle H = 80, faces 13 vs 53 => résultat inversé. 
+F13 devrait être devant. 
+On péitine la derière version de compute_intersection_centroid_ordered donne une point proche du centre de bbox, mais area = 0
+Et ray_cast donne des faces inversées
+
+Piste : utilise les Rgn de QuickDraw II ?
+
+Amélioration de centroid, surface OK.  A faire  : supprimer le log.
+raycast toujours KO. tenter Tests géométiques 4 => 7 ?
+
+inspect_ray_cast : calculateFaceDepths pour gérer les zooms/pan : c'est trop lourd. => rempalcé
+
+check_sort_repair modifé : utilise le centroide. IL faut quand même lancer pluseiurs fois la fonctin pour avoir une modele correct... Très lent !!!
+
+Problème du centroide : la croix et loin du poly d'intersection : l'affichage du polygone d'intersection montre clairement que l'algo est KO.
+
+
+Utilisation de QD II : ça marche, mais l'intersection calculée par QD SectRgn n'est pas bonne (Y = Y max de face 1). Recalculé par programme avec les "run" de chaque région. (à creuser...)
+prochaine étape, utiliser le centre la bbox QD pour le raycast. 
+Si no overlp : fin
+Sinon bbox QD. si probleme : fallback instersection des bbox. 
+
+QD doit remplacer Sutherland–Hodgman (fixed) .
+IL faut donc mettre à niveau tous les appels à compute_intersection_centroid_ordered_fixed, ou réimplémneter compute_intersection_centroid_ordered_fixed. Mais le nouveau compute_intersection_centroid_ordered_fixed plante le GS. compute_intersection_centroid_ordered_fixed a été réécris. Ca ne plante plus. Mais il faut afficher le poly d'intersection et les doonées pour vérifier si la fonciton est ok.
+NB :  check_sort_repair produit des faces mal ordonnées. 
+
+
+ON A UN Sutherland–Hodgman  qui marche !!! 
+cf. touche 'M' pour inspection. 
+reste le problème des face de profil Ex : 3 vs 45. Le problème est traité dnas inspect_intersection_fixed_ui, mais il aut que cela soit traité que niveau plus général : compute_intersection_centroid_ordered_fixed
+
+En cours : show_graphical_inspect et inspect_ray_cast snot trop compliqué. LE fait de devoir passer en mode graphique pour faire le test avec les régions QD pose problème. Il faudrait un fonciton globale de comparaison de face : par Z min et max, pas les bbox, par les face planes (géométrie 3D), par le centriod + ray cast,, par le centriod par les région QD. J'oublie peut etre d'autres tests. Puis afficher les résultats en mode texte et ensuite seulement afficher graphiquement
+
+mystere : > 12 43 => points alignés (variable globale ?)
+Overlap probleme : 12 et 43 overlap.
+

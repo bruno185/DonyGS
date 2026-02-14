@@ -109,6 +109,7 @@ static long long debug_clip_raw_area2 = 0;
 static double debug_clip_area = 0.0;
 static int debug_clip_centroid_x = 0;
 static int debug_clip_centroid_y = 0;
+
 /* Fixed-result snapshot diagnostics (before float fallback) */
 static double debug_clip_fixed_area = 0.0;
 static int debug_clip_fixed_vcount = 0;
@@ -2344,11 +2345,10 @@ int check_sort(Model3D* model, int face_count) {
             if (faces->display_flag[f2] == 0) { ++skipped_by_cull; continue; }
             if (cull_back_faces && faces->plane_d[f2] <= 0) { ++skipped_by_cull; continue; }
 
-            int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
-            int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-            // Quick reject: no bbox overlap
-            if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
-            
+            /* Quick AABB reject using existing helper */
+            int _ix0, _iy0, _ix1, _iy1;
+            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
+
             // Use full projected polygon overlap test (touching-only treated as non-overlap)
             if (!projected_polygons_overlap(model, f1, f2)) continue;
 
@@ -2406,10 +2406,9 @@ int check_sort_repair(Model3D* model, int face_count) {
             if (faces->display_flag[f2] == 0) continue;
             if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
 
-            int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
-            int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-            // Quick reject: no bbox overlap
-            if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
+            /* Quick AABB reject using existing helper */
+            int _ix0, _iy0, _ix1, _iy1;
+            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
 
             // If projected polygons do not overlap (touching considered non-overlap), skip
             if (!projected_polygons_overlap(model, f1, f2)) continue;
@@ -2465,10 +2464,7 @@ int check_sort_repair(Model3D* model, int face_count) {
 
             /* Last resort: bbox center */
             if (rc == 0) {
-                int ix0 = (minx1 > minx2) ? minx1 : minx2;
-                int ix1 = (maxx1 < maxx2) ? maxx1 : maxx2;
-                int iy0 = (miny1 > miny2) ? miny1 : miny2;
-                int iy1 = (maxy1 < maxy2) ? maxy1 : maxy2;
+                int ix0 = _ix0; int ix1 = _ix1; int iy0 = _iy0; int iy1 = _iy1;
                 cx = (ix0 + ix1) / 2; cy = (iy0 + iy1) / 2; point_source = 3;
                 {
                     float _tf1 = 0.0f, _tf2 = 0.0f;
@@ -2503,9 +2499,15 @@ int check_sort_repair(Model3D* model, int face_count) {
                         faces->sorted_face_indices[pother] = tmp;
                         for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
                         ++repairs;
-                        printf("check_sort_repair: moved face %d FORWARD BY ONE (pos %d -> %d)\n", closer, pclos, pclos+1);
-                    } else {
-                        /* pclos == pother should not happen for distinct faces; ignore. */
+                        //printf("check_sort_repair: moved face %d FORWARD BY ONE (pos %d -> %d)\n", closer, pclos, pclos+1);
+
+                        /* Display both faces involved for visual inspection */
+                        {
+                            char msg[128];
+                            snprintf(msg, sizeof(msg), "Face %d moved after face %d", closer, other);
+                            int _k = show_inspect_faces_with_message(model, closer, other, msg);
+                            if (_k == 27) { /* ESC */ free(pos_of_face); return repairs; }
+                        }
                     }
                 } else {
                     /* Already after `other` (pclos > pother): no change needed. */
@@ -3294,7 +3296,7 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
     /* Optional detailed debug dump for failing cases (writes centroidlog.txt) */
     FILE* dlog = NULL;
     if ((debug_overlap_subj == subj && debug_overlap_clip == clip) || (subj == 12 && clip == 50)) {
-        dlog = fopen("centroidlog.txt", "w");
+        //dlog = fopen("centroidlog.txt", "w");
         if (dlog) {
             fprintf(dlog, "--- compute_intersection_centroid_ordered_fixed debug (subj=%d clip=%d) ---\n", subj, clip);
             fprintf(dlog, "input subj verts (count=%d):\n", sn);
@@ -3447,6 +3449,77 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
 
     free(sx); free(sy); free(cx); free(cy);
     free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
+    return 1;
+}
+
+/* Try both clipping orders: call compute_intersection_centroid_ordered_fixed(subj,clip)
+ * and if it produces fewer than 3 output vertices, try compute_intersection_centroid_ordered_fixed(clip,subj).
+ * This keeps existing callers intact and provides a single-call fallback for UI/diagnostic use.
+ */
+static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2, int* out_fallback) {
+    if (!model || out_area2 == NULL) return 0;
+    if (out_fallback) *out_fallback = 0;
+
+    /* Try primary order first */
+    int res = compute_intersection_centroid_ordered_fixed(model, subj, clip, outx, outy, out_area2);
+    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; return res; }
+
+    /* Try reversed order */
+    int res2 = compute_intersection_centroid_ordered_fixed(model, clip, subj, outx, outy, out_area2);
+    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; return res2; }
+
+    /* No drawable clipped polygon found in either order — perform bbox/sample fallback
+     * (mirror the inspector behavior): find a sample point inside the integer
+     * intersection bbox that lies inside both polygons; otherwise use bbox center.
+     * Report fallback via out_fallback (nullable).
+     */
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+    int ix0=0, iy0=0, ix1=0, iy1=0;
+    int found = 0;
+
+    if (compute_bbox_intersection(model, subj, clip, &ix0, &iy0, &ix1, &iy1)) {
+        int cx0 = (ix0 + ix1) / 2; int cy0 = (iy0 + iy1) / 2;
+        if (point_in_poly_int(cx0, cy0, faces, vtx, subj, faces->vertex_count[subj]) && point_in_poly_int(cx0, cy0, faces, vtx, clip, faces->vertex_count[clip])) {
+            if (outx) *outx = cx0; if (outy) *outy = cy0; found = 1;
+        } else {
+            int W = ix1 - ix0; int H = iy1 - iy0;
+            for (int gx = 0; gx < 3 && !found; ++gx) for (int gy = 0; gy < 3 && !found; ++gy) {
+                int tx = ix0 + (((2*gx + 1) * W + 3) / 6);
+                int ty = iy0 + (((2*gy + 1) * H + 3) / 6);
+                if (point_in_poly_int(tx, ty, faces, vtx, subj, faces->vertex_count[subj]) && point_in_poly_int(tx, ty, faces, vtx, clip, faces->vertex_count[clip])) { if (outx) *outx = tx; if (outy) *outy = ty; found = 1; break; }
+            }
+        }
+    } else {
+        /* Fallback to intersecting per-face bboxes if compute_bbox_intersection failed */
+        ix0 = faces->minx[subj] > faces->minx[clip] ? faces->minx[subj] : faces->minx[clip];
+        ix1 = faces->maxx[subj] < faces->maxx[clip] ? faces->maxx[subj] : faces->maxx[clip];
+        iy0 = faces->miny[subj] > faces->miny[clip] ? faces->miny[subj] : faces->miny[clip];
+        iy1 = faces->maxy[subj] < faces->maxy[clip] ? faces->maxy[subj] : faces->maxy[clip];
+        int cx0 = (ix0 + ix1) / 2; int cy0 = (iy0 + iy1) / 2;
+        if (point_in_poly_int(cx0, cy0, faces, vtx, subj, faces->vertex_count[subj]) && point_in_poly_int(cx0, cy0, faces, vtx, clip, faces->vertex_count[clip])) {
+            if (outx) *outx = cx0; if (outy) *outy = cy0; found = 1;
+        } else {
+            int W = ix1 - ix0; int H = iy1 - iy0;
+            for (int gx = 0; gx < 3 && !found; ++gx) for (int gy = 0; gy < 3 && !found; ++gy) {
+                int tx = ix0 + (((2*gx + 1) * W + 3) / 6);
+                int ty = iy0 + (((2*gy + 1) * H + 3) / 6);
+                if (point_in_poly_int(tx, ty, faces, vtx, subj, faces->vertex_count[subj]) && point_in_poly_int(tx, ty, faces, vtx, clip, faces->vertex_count[clip])) { if (outx) *outx = tx; if (outy) *outy = ty; found = 1; break; }
+            }
+        }
+    }
+
+    if (!found) { /* final fallback: center of the intersection bbox */
+        if (outx) *outx = (ix0 + ix1) / 2;
+        if (outy) *outy = (iy0 + iy1) / 2;
+    }
+
+    /* Report fallback and clear clipped-polygon diagnostics */
+    if (out_fallback) *out_fallback = 1;
+    debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0;
+    debug_clip_centroid_x = outx ? *outx : 0; debug_clip_centroid_y = outy ? *outy : 0;
+    if (out_area2) *out_area2 = 0; /* no polygon area */
     return 1;
 }
 
@@ -4045,15 +4118,8 @@ static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
  */
 static int compute_bbox_intersection_center(Model3D* model, int f1, int f2, int *outx, int *outy) {
     if (!model || !outx || !outy) return 0;
-    FaceArrays3D* faces = &model->faces;
-    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
-    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
-    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-    int ix0 = (minx1 > minx2) ? minx1 : minx2;
-    int ix1 = (maxx1 < maxx2) ? maxx1 : maxx2;
-    int iy0 = (miny1 > miny2) ? miny1 : miny2;
-    int iy1 = (maxy1 < maxy2) ? maxy1 : maxy2;
-    if (ix0 > ix1 || iy0 > iy1) return 0; /* no intersection */
+    int ix0, iy0, ix1, iy1;
+    if (!compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1)) return 0;
     *outx = (ix0 + ix1) / 2;
     *outy = (iy0 + iy1) / 2;
     return 1;
@@ -4107,7 +4173,7 @@ static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const
  * - Renders the model in wireframe, highlights `f1`/`f2`, performs MoveTo(3,198) then prints `msg`,
  *   waits for a key, and restores rendering state. Kept minimal and non-invasive.
  */
-static void show_inspect_faces_with_message(Model3D* model, int f1, int f2, const char* msg) {
+static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const char* msg) {
     if (!model) return;
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -4130,12 +4196,24 @@ static void show_inspect_faces_with_message(Model3D* model, int f1, int f2, cons
 
     MoveTo(3,198);
     printf("%s", msg);
-    keypress();
+    // Wait for key
+    int key = 0;
+    asm {
+        sep #0x20
+    waitkey:
+        lda >0xC000
+        bpl waitkey
+        and #0x007f
+        sta >0xC010
+        sta key
+        rep #0x30
+    }
 
     framePolyOnly = old_frame;
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
     endgraph(); DoText();
+    return key;
 }
 
 /* Interactive helper: prompt for two face IDs, compute fixed-point intersection polygon
@@ -4177,8 +4255,9 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
     /* Clear previous debug polygon and compute fixed clipping (try both orders) */
     debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0;
     int cx = 0, cy = 0; long long a2 = 0;
-    compute_intersection_centroid_ordered_fixed(model, f1, f2, &cx, &cy, &a2);
-    if (debug_clip_fixed_vcount < 3) compute_intersection_centroid_ordered_fixed(model, f2, f1, &cx, &cy, &a2);
+    /* Try primary order then fallback internally if needed (receive fallback flag) */
+    int centroid_fallback = 0;
+    compute_intersection_centroid_ordered_fixed_tryboth(model, f1, f2, &cx, &cy, &a2, &centroid_fallback);
 
     /* Export debug file with 2D points for face1, face2 and computed intersection polygon */
     {
@@ -4300,31 +4379,9 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
             }
         }
     } else {
-        /* No clipped polygon produced. Check whether projected_polygons_overlap considers this a (degenerate) overlap. */
-        if (projected_polygons_overlap(model, f1, f2)) {
-            /* Try to find a representative interior sample inside the integer intersection bbox (center then 3x3 grid).
-             * If found, draw a small marker and run ray_cast_distances at that point; otherwise fall back to bbox center. */
-            int ix0=0,iy0=0,ix1=0,iy1=0;
-            int sx = 0, sy = 0; int found = 0;
-            if (compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1)) {
-                int cx0 = (ix0 + ix1) / 2; int cy0 = (iy0 + iy1) / 2;
-                if (point_in_poly_int(cx0, cy0, faces, vtx, f1, faces->vertex_count[f1]) && point_in_poly_int(cx0, cy0, faces, vtx, f2, faces->vertex_count[f2])) { sx = cx0; sy = cy0; found = 1; }
-                else {
-                    int W = ix1 - ix0; int H = iy1 - iy0;
-                    for (int gx = 0; gx < 3 && !found; ++gx) for (int gy = 0; gy < 3 && !found; ++gy) {
-                        int tx = ix0 + (((2*gx + 1) * W + 3) / 6);
-                        int ty = iy0 + (((2*gy + 1) * H + 3) / 6);
-                        if (point_in_poly_int(tx, ty, faces, vtx, f1, faces->vertex_count[f1]) && point_in_poly_int(tx, ty, faces, vtx, f2, faces->vertex_count[f2])) { sx = tx; sy = ty; found = 1; break; }
-                    }
-                }
-            }
-            if (!found) { /* fallback to bbox center of polygons */
-                int bx0 = faces->minx[f1] > faces->minx[f2] ? faces->minx[f1] : faces->minx[f2];
-                int bx1 = faces->maxx[f1] < faces->maxx[f2] ? faces->maxx[f1] : faces->maxx[f2];
-                int by0 = faces->miny[f1] > faces->miny[f2] ? faces->miny[f1] : faces->miny[f2];
-                int by1 = faces->maxy[f1] < faces->maxy[f2] ? faces->maxy[f1] : faces->maxy[f2];
-                sx = (bx0 + bx1) / 2; sy = (by0 + by1) / 2;
-            }
+        /* No clipped polygon produced — use wrapper's bbox/sample fallback when available. */
+        if (centroid_fallback) {
+            int sx = cx; int sy = cy;
 
             /* Draw small marker at sample point */
             SetSolidPenPat(3);
@@ -4368,6 +4425,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
                                   int saved_ix0, int saved_iy0, int saved_ix1, int saved_iy1,
                                   int has_bbox, int cx, int cy, int point_source, int cmp)
 {
+    /* Vérifications initiales et variables locales */
     if (!model) return;
     FaceArrays3D* faces = &model->faces;
     /* Local copies / locals that were previously in inspect_ray_cast */
@@ -4378,18 +4436,22 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
     long long qd_area2 = 0;                      /* QD-area return value */
     int centroid_ok = 0;
 
+    /* Sauvegarde des flags d'affichage et préparation du rendu graphique */
     unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
     if (backup_flags == NULL) { printf("Memory allocation failed\n"); DoText(); return; }
     for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
     int old_frame = framePolyOnly;
 
+    /* Initialisation du contexte graphique (QuickDraw) */
     startgraph(mode);
 
+    /* Dessin du fond : mode wireframe pour tout le modèle */
     framePolyOnly = 1; // wireframe
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
     if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
     else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
 
+    /* Mettre en évidence les deux faces inspectées (filled + outline) */
     unsigned char saved_f1 = faces->display_flag[f1];
     unsigned char saved_f2 = faces->display_flag[f2];
     faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
@@ -4407,6 +4469,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
         framePolyOnly = _old_frame;
     }
 
+    /* Si une bbox AABB d'intersection projetée est disponible, la tracer */
     if (has_bbox) {
         Rect r;
         int screenScale = mode / 320;
@@ -4460,6 +4523,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
     }
 
     int screenScale = mode / 320;
+    /* Calculs supplémentaires et affichage spécifique quand les projections se recouvrent */
     if (!no_overlap) {
         int tx0, ty0, tx1, ty1; long long tarea = 0;
         int region_ok = compute_intersection_region_bbox(model, f1, f2, &tx0, &ty0, &tx1, &ty1, &tarea);
@@ -4480,6 +4544,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
             Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
             Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
 
+            /* Essayer de calculer le centroïde via QuickDraw-runs (meilleur point d'échantillonnage) */
             int centroid_ok = 0;
             long long qd_area2 = 0;
             int qd_ok = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &ccx, &ccy, &qd_area2);
@@ -4496,9 +4561,24 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
                 centroid_ok = 1; cx = ccx; cy = ccy; point_source = 1;
             } else {
                 MoveTo(1,10); printf("QD centroid: KO\n");
-                if (has_bbox) { cx = crx; cy = cry; point_source = 2; }
+                if (has_bbox) {
+                    cx = crx; cy = cry; point_source = 2;
+                } else if (point_source == 0) {
+                    /* Use region bbox center as deterministic fallback so visual and text match. */
+                    cx = (tx0 + tx1) / 2;
+                    cy = (ty0 + ty1) / 2;
+                    point_source = 2;
+                    float d1=0.0f,d2=0.0f;
+                    if (ray_cast_distances(model, f1, f2, cx, cy, &d1, &d2)) {
+                        if (d1 < d2) cmp = -1; else if (d1 > d2) cmp = 1; else cmp = 0;
+                    } else {
+                        cmp = ray_cast_at(model, f1, f2, cx, cy);
+                    }
+                    MoveTo(1,10); printf("Using region-bbox center as fallback: x=%d y=%d\n", cx, cy);
+                }
             }
         } else {
+            /* region_ok == false : si AABB d'intersection connue, afficher le rectangle ; sinon message */
             if (has_bbox) {
                 int sc_ix0 = screenScale * (saved_ix0 + pan_dx);
                 int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
@@ -4520,6 +4600,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
         }
     }
 
+    /* Affichage texte récapitulatif (selon la source du point de test) */
     MoveTo(3, 195);
     if (no_overlap) {
         printf("Face %d and face %d do not overlap\n", f1, f2);
@@ -4536,11 +4617,282 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
     }
     keypress();
 
+    /* Restauration de l'état et nettoyage */
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
     framePolyOnly = old_frame;
     endgraph();
     DoText();
+}
+
+/* Helper: geometric painter-based order wrapper
+ * ------------------------------------------------
+ * Returns: -1 if f1 is before f2, 1 if f1 is after f2, 0 if undetermined
+ * Behavior: runs pair_plane_before/after and, if inconclusive, retries with faces swapped.
+ */
+static int geo_face_order(Model3D* model, int f1, int f2) {
+    if (!model) return 0;
+    int r = 0;
+    if (pair_plane_before(model, f1, f2)) return -1;
+    if (pair_plane_after(model, f1, f2)) return 1;
+    /* retry with inverted order as fallback */
+    if (pair_plane_before(model, f2, f1)) return 1;  /* f2 before f1 => f1 after f2 */
+    if (pair_plane_after(model, f2, f1)) return -1;   /* f2 after f1 => f1 before f2 */
+    return r;
+}
+
+/* Diagnostic result container for face-pair comparison */
+typedef struct {
+    int z_verdict;           /* 0=undetermined, 1=f1 in front, 2=f2 in front */
+    int bbox_ok;             /* 0/1 */
+    int bbox_ix0, bbox_iy0, bbox_ix1, bbox_iy1;
+    int poly_overlap;        /* 0/1 */
+    int geo_verdict;         /* same encoding as z_verdict */
+    int sh_centroid_ok;      /* Sutherland–Hodgman centroid */
+    int sh_cx, sh_cy; long long sh_area2;
+    int qd_centroid_ok;      /* QuickDraw-region centroid */
+    int qd_cx, qd_cy; long long qd_area2;
+    int bbox_raycast;        /* 0=undetermined, 1=f1 front, 2=f2 front */
+    int sh_raycast;
+    int qd_raycast;
+    char results_text[16][128];
+    int results_count;
+} CompareFacesResult;
+
+/* Helper: run ray-cast comparison at a point, return 1 if f1 in front, 2 if f2 in front, 0 undetermined */
+static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py) {
+    float d1 = 0.0f, d2 = 0.0f;
+    if (ray_cast_distances(model, f1, f2, px, py, &d1, &d2)) {
+        if (d1 < d2) return 1; else if (d1 > d2) return 2; else return 0;
+    }
+    int r = ray_cast_at(model, f1, f2, px, py);
+    if (r == -1) return 1;     /* f1 closer */
+    if (r == 1) return 2;      /* f2 closer */
+    return 0;
+}
+
+/* Core diagnostic: performs the ordered suite of tests (text-mode safe unless use_qd=1)
+ * Tests executed in the order requested by the UI design and records textual lines.
+ */
+static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out) {
+    if (!model || !out) return;
+    FaceArrays3D* faces = &model->faces;
+    memset(out, 0, sizeof(*out));
+
+    /* 1) Z-range test */
+    if (faces->z_max[f2] <= faces->z_min[f1]) { out->z_verdict = 1; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d", f1, f2); }
+    else if (faces->z_max[f1] <= faces->z_min[f2]) { out->z_verdict = 2; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d", f2, f1); }
+    else { out->z_verdict = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: Undetermined"); }
+
+    /* 2) bbox overlap */
+    int ix0=0, iy0=0, ix1=0, iy1=0;
+    if (compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1)) {
+        out->bbox_ok = 1; out->bbox_ix0 = ix0; out->bbox_iy0 = iy0; out->bbox_ix1 = ix1; out->bbox_iy1 = iy1;
+        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: yes (rect=%d,%d - %d,%d)", ix0, iy0, ix1, iy1);
+    } else {
+        out->bbox_ok = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: no");
+    }
+
+    /* 3) polygon overlap (only if bbox overlap) */
+    if (out->bbox_ok) {
+        if (projected_polygons_overlap(model, f1, f2)) { out->poly_overlap = 1; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap"); }
+        else { out->poly_overlap = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons do not overlap"); }
+    } else {
+        out->poly_overlap = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons: skipped (bbox non-overlap)");
+    }
+
+    /* 4) 3D geometry (painter tests via plane relations) */
+    int geo = geo_face_order(model, f1, f2);
+    if (geo == -1) { out->geo_verdict = 1; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d", f1, f2); }
+    else if (geo == 1) { out->geo_verdict = 2; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d", f2, f1); }
+    else { out->geo_verdict = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: Undetermined"); }
+
+    /* If polygons do not overlap, mark tests 5..9 as non-applicable (N/A) */
+    if (!out->poly_overlap) {
+        out->sh_centroid_ok = 0; out->sh_area2 = 0;
+        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: N/A (no polygon overlap)");
+
+        out->qd_centroid_ok = 0; out->qd_area2 = 0;
+        if (use_qd) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: N/A (no polygon overlap)");
+        else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: skipped (QD disabled)");
+
+        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: N/A (no polygon overlap)");
+        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: N/A (no polygon overlap)");
+        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: N/A (no polygon overlap)");
+    } else {
+        /* 5) Centroid via Sutherland–Hodgman (integer) */
+        long long area2 = 0; int sh_ok = compute_intersection_centroid_ordered_fixed(model, f1, f2, &out->sh_cx, &out->sh_cy, &area2) && (area2 != 0);
+        out->sh_centroid_ok = sh_ok ? 1 : 0; out->sh_area2 = area2;
+        if (out->sh_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: %d/%d (area2=%lld)", out->sh_cx, out->sh_cy, (long long)area2);
+        else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: undetermined");
+
+        /* 6) Centroid via QuickDraw region (only if use_qd==1 and region available) */
+        out->qd_centroid_ok = 0;
+        if (use_qd) {
+            long long qd_a2 = 0; int qd_ok = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &out->qd_cx, &out->qd_cy, &qd_a2);
+            out->qd_centroid_ok = qd_ok ? 1 : 0; out->qd_area2 = qd_a2;
+            if (out->qd_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: %d/%d (area2=%lld)", out->qd_cx, out->qd_cy, (long long)qd_a2);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: undetermined");
+        } else {
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: skipped (QD disabled)");
+        }
+
+        /* 7) Ray cast at bbox center */
+        if (out->bbox_ok) {
+            int bcx = (out->bbox_ix0 + out->bbox_ix1) / 2; int bcy = (out->bbox_iy0 + out->bbox_iy1) / 2;
+            out->bbox_raycast = run_raycast_test(model, f1, f2, bcx, bcy);
+            if (out->bbox_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d", f1, f2);
+            else if (out->bbox_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d", f2, f1);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: undetermined");
+        } else {
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: skipped (no bbox)");
+        }
+
+        /* 8) Ray cast at SH centroid */
+        if (out->sh_centroid_ok) {
+            out->sh_raycast = run_raycast_test(model, f1, f2, out->sh_cx, out->sh_cy);
+            if (out->sh_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d", f1, f2);
+            else if (out->sh_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d", f2, f1);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: undetermined");
+        } else {
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: skipped (no SH centroid)");
+        }
+
+        /* 9) Ray cast at QD centroid */
+        if (use_qd && out->qd_centroid_ok) {
+            out->qd_raycast = run_raycast_test(model, f1, f2, out->qd_cx, out->qd_cy);
+            if (out->qd_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d", f1, f2);
+            else if (out->qd_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d", f2, f1);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: undetermined");
+        } else {
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: skipped (QD unavailable)");
+        }
+    }
+}
+
+/* Interactive inspector: single UI to run the full diagnostic battery on a face pair.
+ * - Displays model in wireframe and highlights f1 (green) and f2 (orange) with face numbers.
+ * - Runs all tests (uses QuickDraw-only tests while in graphical mode).
+ * - Stores textual results in memory and only prints them when user presses SPACE.
+ * - Keyboard: ESC=return, Left/Right/Up/Down navigation (custom wrap rules), SPACE=show text.
+ */
+static void inspect_face_pair_ui(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+    if (face_count <= 0) { printf("No faces in model\n"); return; }
+
+    /* Step 1: prompt and validate face IDs */
+    printf("Enter face id 1 (0..%d): ", face_count - 1);
+    int f1 = -1;
+    if (scanf("%d", &f1) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
+    { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
+    if (f1 < 0 || f1 >= face_count) { printf("Invalid face id 1\n"); return; }
+
+    printf("Enter face id 2 (0..%d): ", face_count - 1);
+    int f2 = -1;
+    if (scanf("%d", &f2) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
+    { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
+    if (f2 < 0 || f2 >= face_count) { printf("Invalid face id 2\n"); return; }
+
+    /* Interactive graphical loop */
+    while (1) {
+        /* Run diagnostics while QuickDraw is active (use_qd = 1) */
+        CompareFacesResult r; memset(&r, 0, sizeof(r));
+
+        /* Prepare and draw model/wireframe */
+        unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+        if (!backup_flags) { printf("Memory allocation failed\n"); return; }
+        for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+        int old_frame = framePolyOnly;
+
+        startgraph(mode);
+        framePolyOnly = 1; for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
+        if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+        else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+
+        /* Highlight faces and show indices */
+        unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
+        faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
+        drawFace(model, f1, 10, 1); drawFace(model, f2, 6, 1);
+
+        /* Compute diagnostics (we are in graphical mode so allow QD tests) */
+        compare_faces_diagnostic(model, f1, f2, 1, &r);
+
+        /* Graphical overlays per specification */
+        int screenScale = mode / 320;
+        if (r.bbox_ok) {
+            Rect rr; SetSolidPenPat(15);
+            int sc_ix0 = screenScale * (r.bbox_ix0 + pan_dx);
+            int sc_ix1 = screenScale * (r.bbox_ix1 + pan_dx);
+            int sc_iy0 = (r.bbox_iy0 + pan_dy);
+            int sc_iy1 = (r.bbox_iy1 + pan_dy);
+            SetRect(&rr, sc_ix0, sc_iy0, sc_ix1, sc_iy1); FrameRect(&rr);
+            /* draw center cross */
+            int fcx = (r.bbox_ix0 + r.bbox_ix1) / 2; int fcy = (r.bbox_iy0 + r.bbox_iy1) / 2;
+            int sc_cx = screenScale * (fcx + pan_dx); int sc_cy = (fcy + pan_dy);
+            int d = 4 * screenScale; int th = screenScale > 0 ? screenScale : 1;
+            Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
+            Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
+        }
+
+        /* Polygons overlap indicator at bottom (graphical only) */
+        MoveTo(3, 190);
+        if (r.poly_overlap) printf("f%d overlaps f%d", f1, f2); else printf("f%d do not overlap f%d", f1, f2);
+
+
+        /* Wait for key (same inline read used elsewhere) */
+        int key = 0;
+        asm {
+            sep #0x20
+        waitkey2:
+            lda >0xC000
+            bpl waitkey2
+            and #0x007f
+            sta >0xC010
+            sta key
+            rep #0x30
+        }
+
+        /* Handle keys (simplified): ←/→ change face2 only, ↑/↓ change face1 only */
+        if (key == 27) { /* ESC: exit inspector */
+            framePolyOnly = old_frame;
+            for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+            free(backup_flags);
+            endgraph(); DoText(); return;
+        } else if (key == 8) { /* Left arrow: decrement face2 */
+            f2 = (f2 - 1 + face_count) % face_count;
+            /* Avoid comparing face with itself: skip to next if equal */
+            if (face_count > 1 && f2 == f1) f2 = (f2 + 1) % face_count;
+        } else if (key == 21) { /* Right arrow: increment face2 */
+            f2 = (f2 + 1) % face_count;
+            if (face_count > 1 && f2 == f1) f2 = (f2 + 1) % face_count;
+        } else if (key == 11) { /* Up arrow: increment face1 */
+            f1 = (f1 + 1) % face_count;
+            if (face_count > 1 && f1 == f2) f1 = (f1 + 1) % face_count;
+        } else if (key == 10) { /* Down arrow: decrement face1 */
+            f1 = (f1 - 1 + face_count) % face_count;
+            if (face_count > 1 && f1 == f2) f1 = (f1 - 1 + face_count) % face_count;
+        } else if (key == 32) { /* SPACE -> show textual results */
+            /* restore QuickDraw and print saved textual results */
+            framePolyOnly = old_frame;
+            for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+            free(backup_flags);
+            endgraph(); DoText();
+
+            printf("\n=== Face pair diagnostic: f%d vs f%d ===\n", f1, f2);
+            for (int i = 0; i < r.results_count; ++i) printf("%s\n", r.results_text[i]);
+            printf("\nPress any key to return to graphical inspector...\n");
+            keypress();
+            continue; /* redraw graphical inspector */
+        }
+
+        /* restore and loop to redraw with updated IDs */
+        framePolyOnly = old_frame;
+        for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+        free(backup_flags);
+        endgraph(); DoText();
+    }
 }
 
 /*
@@ -8854,6 +9206,12 @@ case 98:  // 'b'
             case 62: // '>' - interactive ray_cast inspector
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 inspect_ray_cast(model);
+                goto loopReDraw;
+
+            case 81: // 'Q' - interactive face-pair inspector (new)
+            case 113: // 'q'
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                inspect_face_pair_ui(model);
                 goto loopReDraw;
 
             case 44: // ',' - interactive test of all bbox-intersecting face pairs
