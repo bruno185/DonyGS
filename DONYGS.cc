@@ -4469,8 +4469,8 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
         framePolyOnly = _old_frame;
     }
 
-    /* Si une bbox AABB d'intersection projetée est disponible, la tracer */
-    if (has_bbox) {
+    /* Si une bbox AABB d'intersection projetée est disponible, la tracer (skip si pas d'overlap) */
+    if (has_bbox && !no_overlap) {
         Rect r;
         int screenScale = mode / 320;
         int sc_ix0 = screenScale * (saved_ix0 + pan_dx);
@@ -4559,6 +4559,24 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
                     cmp = ray_cast_at(model, f1, f2, ccx, ccy);
                 }
                 centroid_ok = 1; cx = ccx; cy = ccy; point_source = 1;
+
+                /* If QD centroid succeeded and we have an intersection bbox, draw that AABB + center cross in yellow
+                 * to visually highlight that the QD-run centroid is available. This overlays the default white rectangle. */
+                if (has_bbox) {
+                    Rect br; SetSolidPenPat(14); /* yellow */
+                    int sc_ix0 = screenScale * (saved_ix0 + pan_dx);
+                    int sc_ix1 = screenScale * (saved_ix1 + pan_dx);
+                    int sc_iy0 = (saved_iy0 + pan_dy);
+                    int sc_iy1 = (saved_iy1 + pan_dy);
+                    SetRect(&br, sc_ix0, sc_iy0, sc_ix1, sc_iy1); FrameRect(&br);
+                    int fcx = (saved_ix0 + saved_ix1) / 2; int fcy = (saved_iy0 + saved_iy1) / 2;
+                    int sc_cx2 = screenScale * (fcx + pan_dx);
+                    int sc_cy2 = (fcy + pan_dy);
+                    int d2 = 4 * screenScale; int th2 = screenScale > 0 ? screenScale : 1;
+                    Rect hr2; SetRect(&hr2, sc_cx2 - d2, sc_cy2 - (th2/2), sc_cx2 + d2, sc_cy2 + (th2/2) + 1); FrameRect(&hr2);
+                    Rect vr2; SetRect(&vr2, sc_cx2 - (th2/2), sc_cy2 - d2, sc_cx2 + (th2/2) + 1, sc_cy2 + d2); FrameRect(&vr2);
+                }
+
             } else {
                 MoveTo(1,10); printf("QD centroid: KO\n");
                 if (has_bbox) {
@@ -4679,33 +4697,61 @@ static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd,
     FaceArrays3D* faces = &model->faces;
     memset(out, 0, sizeof(*out));
 
-    /* 1) Z-range test */
-    if (faces->z_max[f2] <= faces->z_min[f1]) { out->z_verdict = 1; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d", f1, f2); }
-    else if (faces->z_max[f1] <= faces->z_min[f2]) { out->z_verdict = 2; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d", f2, f1); }
-    else { out->z_verdict = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: Undetermined"); }
-
-    /* 2) bbox overlap */
-    int ix0=0, iy0=0, ix1=0, iy1=0;
-    if (compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1)) {
-        out->bbox_ok = 1; out->bbox_ix0 = ix0; out->bbox_iy0 = iy0; out->bbox_ix1 = ix1; out->bbox_iy1 = iy1;
-        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: yes (rect=%d,%d - %d,%d)", ix0, iy0, ix1, iy1);
-    } else {
-        out->bbox_ok = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: no");
+    /* 1) Z-range test (timed) */
+    {
+        long t_z_start = GetTick();
+        if (faces->z_max[f2] <= faces->z_min[f1]) {
+            out->z_verdict = 1; long t_z_end = GetTick();
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d (%ld ticks)", f1, f2, t_z_end - t_z_start);
+        } else if (faces->z_max[f1] <= faces->z_min[f2]) {
+            out->z_verdict = 2; long t_z_end = GetTick();
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d (%ld ticks)", f2, f1, t_z_end - t_z_start);
+        } else {
+            out->z_verdict = 0; long t_z_end = GetTick();
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: Undetermined (%ld ticks)", t_z_end - t_z_start);
+        }
     }
 
-    /* 3) polygon overlap (only if bbox overlap) */
+    /* 2) bbox overlap (timed) */
+    int ix0=0, iy0=0, ix1=0, iy1=0;
+    {
+        long t_bbox_start = GetTick();
+        int bbox_res = compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1);
+        long t_bbox_end = GetTick();
+        if (bbox_res) {
+            out->bbox_ok = 1; out->bbox_ix0 = ix0; out->bbox_iy0 = iy0; out->bbox_ix1 = ix1; out->bbox_iy1 = iy1;
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: yes (rect=%d,%d - %d,%d) (%ld ticks)", ix0, iy0, ix1, iy1, t_bbox_end - t_bbox_start);
+        } else {
+            out->bbox_ok = 0;
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: no (%ld ticks)", t_bbox_end - t_bbox_start);
+        }
+    }
+
+    /* 3) polygon overlap (only if bbox overlap, timed) */
     if (out->bbox_ok) {
-        if (projected_polygons_overlap(model, f1, f2)) { out->poly_overlap = 1; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap"); }
-        else { out->poly_overlap = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons do not overlap"); }
+        long t_poly_start = GetTick();
+        int p_overlap = projected_polygons_overlap(model, f1, f2);
+        long t_poly_end = GetTick();
+        if (p_overlap) {
+            out->poly_overlap = 1;
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap (%ld ticks)", t_poly_end - t_poly_start);
+        } else {
+            out->poly_overlap = 0;
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons do not overlap (%ld ticks)", t_poly_end - t_poly_start);
+        }
     } else {
         out->poly_overlap = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons: skipped (bbox non-overlap)");
     }
 
-    /* 4) 3D geometry (painter tests via plane relations) */
-    int geo = geo_face_order(model, f1, f2);
-    if (geo == -1) { out->geo_verdict = 1; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d", f1, f2); }
-    else if (geo == 1) { out->geo_verdict = 2; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d", f2, f1); }
-    else { out->geo_verdict = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: Undetermined"); }
+    /* 4) 3D geometry (painter tests via plane relations, timed) */
+    {
+        long t_geo_start = GetTick();
+        int geo = geo_face_order(model, f1, f2);
+        long t_geo_end = GetTick();
+        if (geo == -1) { out->geo_verdict = 1; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d (%ld ticks)", f1, f2, t_geo_end - t_geo_start); }
+        else if (geo == 1) { out->geo_verdict = 2; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d (%ld ticks)", f2, f1, t_geo_end - t_geo_start); }
+        else { out->geo_verdict = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: Undetermined (%ld ticks)", t_geo_end - t_geo_start); }
+    }
 
     /* If polygons do not overlap, mark tests 5..9 as non-applicable (N/A) */
     if (!out->poly_overlap) {
@@ -4721,18 +4767,24 @@ static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd,
         snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: N/A (no polygon overlap)");
     } else {
         /* 5) Centroid via Sutherland–Hodgman (integer) */
-        long long area2 = 0; int sh_ok = compute_intersection_centroid_ordered_fixed(model, f1, f2, &out->sh_cx, &out->sh_cy, &area2) && (area2 != 0);
+        long long area2 = 0;
+        long t_sh_start = GetTick();
+        int sh_ok = compute_intersection_centroid_ordered_fixed(model, f1, f2, &out->sh_cx, &out->sh_cy, &area2) && (area2 != 0);
+        long t_sh_end = GetTick();
         out->sh_centroid_ok = sh_ok ? 1 : 0; out->sh_area2 = area2;
-        if (out->sh_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: %d/%d (area2=%lld)", out->sh_cx, out->sh_cy, (long long)area2);
-        else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: undetermined");
+        if (out->sh_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: %d/%d (area2=%lld) (%ld ticks)", out->sh_cx, out->sh_cy, (long long)area2, t_sh_end - t_sh_start);
+        else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: undetermined (%ld ticks)", t_sh_end - t_sh_start);
 
         /* 6) Centroid via QuickDraw region (only if use_qd==1 and region available) */
         out->qd_centroid_ok = 0;
         if (use_qd) {
-            long long qd_a2 = 0; int qd_ok = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &out->qd_cx, &out->qd_cy, &qd_a2);
+            long long qd_a2 = 0;
+            long t_qd_start = GetTick();
+            int qd_ok = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &out->qd_cx, &out->qd_cy, &qd_a2);
+            long t_qd_end = GetTick();
             out->qd_centroid_ok = qd_ok ? 1 : 0; out->qd_area2 = qd_a2;
-            if (out->qd_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: %d/%d (area2=%lld)", out->qd_cx, out->qd_cy, (long long)qd_a2);
-            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: undetermined");
+            if (out->qd_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: %d/%d (area2=%lld) (%ld ticks)", out->qd_cx, out->qd_cy, (long long)qd_a2, t_qd_end - t_qd_start);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: undetermined (%ld ticks)", t_qd_end - t_qd_start);
         } else {
             snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: skipped (QD disabled)");
         }
@@ -4740,30 +4792,36 @@ static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd,
         /* 7) Ray cast at bbox center */
         if (out->bbox_ok) {
             int bcx = (out->bbox_ix0 + out->bbox_ix1) / 2; int bcy = (out->bbox_iy0 + out->bbox_iy1) / 2;
+            long t_bbox_rc_start = GetTick();
             out->bbox_raycast = run_raycast_test(model, f1, f2, bcx, bcy);
-            if (out->bbox_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d", f1, f2);
-            else if (out->bbox_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d", f2, f1);
-            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: undetermined");
+            long t_bbox_rc_end = GetTick();
+            if (out->bbox_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d (%ld ticks)", f1, f2, t_bbox_rc_end - t_bbox_rc_start);
+            else if (out->bbox_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d (%ld ticks)", f2, f1, t_bbox_rc_end - t_bbox_rc_start);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: undetermined (%ld ticks)", t_bbox_rc_end - t_bbox_rc_start);
         } else {
             snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: skipped (no bbox)");
         }
 
         /* 8) Ray cast at SH centroid */
         if (out->sh_centroid_ok) {
+            long t_shrc_start = GetTick();
             out->sh_raycast = run_raycast_test(model, f1, f2, out->sh_cx, out->sh_cy);
-            if (out->sh_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d", f1, f2);
-            else if (out->sh_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d", f2, f1);
-            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: undetermined");
+            long t_shrc_end = GetTick();
+            if (out->sh_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d (%ld ticks)", f1, f2, t_shrc_end - t_shrc_start);
+            else if (out->sh_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d (%ld ticks)", f2, f1, t_shrc_end - t_shrc_start);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: undetermined (%ld ticks)", t_shrc_end - t_shrc_start);
         } else {
             snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: skipped (no SH centroid)");
         }
 
         /* 9) Ray cast at QD centroid */
         if (use_qd && out->qd_centroid_ok) {
+            long t_qdrc_start = GetTick();
             out->qd_raycast = run_raycast_test(model, f1, f2, out->qd_cx, out->qd_cy);
-            if (out->qd_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d", f1, f2);
-            else if (out->qd_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d", f2, f1);
-            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: undetermined");
+            long t_qdrc_end = GetTick();
+            if (out->qd_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d (%ld ticks)", f1, f2, t_qdrc_end - t_qdrc_start);
+            else if (out->qd_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d (%ld ticks)", f2, f1, t_qdrc_end - t_qdrc_start);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: undetermined (%ld ticks)", t_qdrc_end - t_qdrc_start);
         } else {
             snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: skipped (QD unavailable)");
         }
@@ -4821,8 +4879,11 @@ static void inspect_face_pair_ui(Model3D* model) {
 
         /* Graphical overlays per specification */
         int screenScale = mode / 320;
-        if (r.bbox_ok) {
-            Rect rr; SetSolidPenPat(15);
+        /* Draw AABB + center cross only when there is actual polygon overlap.
+         * If QD centroid is available, use yellow to highlight the AABB/center. */
+        if (r.bbox_ok && r.poly_overlap) {
+            Rect rr;
+            SetSolidPenPat(r.qd_centroid_ok ? 14 : 15); /* yellow if QD centroid OK, otherwise white */
             int sc_ix0 = screenScale * (r.bbox_ix0 + pan_dx);
             int sc_ix1 = screenScale * (r.bbox_ix1 + pan_dx);
             int sc_iy0 = (r.bbox_iy0 + pan_dy);
