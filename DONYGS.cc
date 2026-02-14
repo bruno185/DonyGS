@@ -4899,7 +4899,16 @@ static void inspect_face_pair_ui(Model3D* model) {
 
         /* Polygons overlap indicator at bottom (graphical only) */
         MoveTo(3, 190);
-        if (r.poly_overlap) printf("f%d overlaps f%d", f1, f2); else printf("f%d do not overlap f%d", f1, f2);
+        if (r.poly_overlap) {
+            printf("f%d overlaps f%d", f1, f2);
+            /* prefer centroid raycast; fallback to bbox raycast */
+            if (r.sh_raycast == 1) printf("  f%d in front", f1);
+            else if (r.sh_raycast == 2) printf("  f%d in front", f2);
+            else if (r.bbox_raycast == 1) printf("  f%d in front", f1);
+            else if (r.bbox_raycast == 2) printf("  f%d in front", f2);
+        } else {
+            printf("f%d do not overlap f%d", f1, f2);
+        }
 
 
         /* Wait for key (same inline read used elsewhere) */
