@@ -3199,7 +3199,8 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     if (use_fixed_clipping) {
         /* compute fixed-area intersection (uses same internal buffers; sets debug_clip_raw_area2) */
         int tx=0, ty=0; long long a2 = 0; debug_overlap_subj = f1; debug_overlap_clip = f2; ok1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &tx, &ty, &a2); debug_overlap_subj = -1; debug_overlap_clip = -1; area2_1 = (unsigned long long)(a2 >= 0 ? a2 : -a2);
-        debug_clip_fixed_area = (double)area2_1 * 0.5 / ((double)FIXED_SCALE * (double)FIXED_SCALE);
+        /* area2_1 is now in pixel^2 (raw area); convert to double area for debug */
+        debug_clip_fixed_area = (double)area2_1 * 0.5;
         int tx2=0, ty2=0; long long a22 = 0; debug_overlap_subj = f2; debug_overlap_clip = f1; ok2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &tx2, &ty2, &a22); debug_overlap_subj = -1; debug_overlap_clip = -1; area2_2 = (unsigned long long)(a22 >= 0 ? a22 : -a22);
         /* Also compute double areas for diagnostic parity */
         int dtx=0,dty=0; long long _tmpa2_1 = 0; /* diagnostic parity via QD bbox */
@@ -3283,7 +3284,8 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
      * - Produces integer output vertices (rounded), computes signed raw area2
      *   (shoelace: 2 * pixel-area) and centroid (integer-rounded).
      * - Returns 1 if a clipped polygon (>=3 verts) was produced; 0 otherwise.
-     * - Writes *out_area2 in FIXED units (raw_area2 * FIXED_SCALE^2).
+     * - Writes *out_area2 in **pixel^2** units (raw_area2).  This matches
+     *   compute_intersection_centroid_ordered_qd_fixed and simplifies callers.
      */
     if (!model || out_area2 == NULL) return 0;
     FaceArrays3D* faces = &model->faces;
@@ -3453,19 +3455,18 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
     debug_clip_fixed_area = fabs((double)raw_area2_signed) * 0.5;
 
     /* Centroid formula: C = (1/(6*A)) * sum((xi+xj)*cross), with raw_area2_signed == 2*A
-     * => Cx = (2 * cx_num) / (3 * raw_area2_signed)
+     * => Cx = cx_num / (3 * raw_area2_signed)
      */
-    long long numer_x = 2 * cx_num;
-    long long numer_y = 2 * cy_num;
+    long long numer_x = cx_num;
+    long long numer_y = cy_num;
     long long denom = 3 * raw_area2_signed;
     if (denom < 0) { denom = -denom; numer_x = -numer_x; numer_y = -numer_y; }
     long long cx_i = (numer_x >= 0) ? (numer_x + denom/2) / denom : -(( -numer_x + denom/2) / denom);
     long long cy_i = (numer_y >= 0) ? (numer_y + denom/2) / denom : -(( -numer_y + denom/2) / denom);
     if (outx) *outx = (int)cx_i; if (outy) *outy = (int)cy_i;
 
-    /* Return fixed-scaled raw area2 */
-    unsigned long long a2_fixed = (unsigned long long)abs_raw * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
-    *out_area2 = (long long)a2_fixed;
+    /* Return raw area2 in pixel^2 (absolute value of signed raw_area2). */
+    if (out_area2) *out_area2 = (long long)abs_raw;
 
 
     free(sx); free(sy); free(cx); free(cy);
@@ -4795,7 +4796,12 @@ static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd,
         long t_sh_end = GetTick();
         out->sh_centroid_ok = sh_ok ? 1 : 0; out->sh_area2 = area2;
         if (out->sh_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: %d/%d (area2=%lld) (%ld ticks)", out->sh_cx, out->sh_cy, (long long)area2, t_sh_end - t_sh_start);
-        else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: undetermined (%ld ticks)", t_sh_end - t_sh_start);
+        else {
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: undetermined (%ld ticks)", t_sh_end - t_sh_start);
+            /* Explicitly clear SH debug polygon to avoid stale visuals elsewhere */
+            debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0;
+            debug_clip_centroid_x = 0; debug_clip_centroid_y = 0;
+        }
 
         /* 6) Centroid via QuickDraw region (only if use_qd==1 and region available) */
         out->qd_centroid_ok = 0;
@@ -4919,13 +4925,72 @@ static void inspect_face_pair_ui(Model3D* model) {
             Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
         }
 
+        /* Draw Sutherland–Hodgman intersection polygon **only if SH succeeded** (avoid stale globals).
+         * Require both r.sh_centroid_ok and a non-empty debug polygon buffer. */
+        if (r.sh_centroid_ok && debug_clip_fixed_vcount >= 3) {
+            SetSolidPenPat(COL_FRAME);
+            int first_sx = screenScale * (debug_clip_fixed_vx[0] + pan_dx);
+            int first_sy = screenScale * (debug_clip_fixed_vy[0] + pan_dy);
+            MoveTo(first_sx, first_sy);
+            for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
+                int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
+                int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
+                LineTo(sx, sy);
+            }
+            LineTo(first_sx, first_sy);
+
+            SetSolidPenPat(COL_WHITE);
+            for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
+                int sx = screenScale * (debug_clip_fixed_vx[ii] + pan_dx);
+                int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
+                Rect vr2; SetRect(&vr2, sx-1, sy-1, sx+1, sy+1); FrameRect(&vr2);
+            }
+
+            /* Draw centroid cross computed from rounded polygon verts (robust) */
+            {
+                double s_cross = 0.0, cx_sum = 0.0, cy_sum = 0.0;
+                for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
+                    int jj = (ii + 1) % debug_clip_fixed_vcount;
+                    double xi = (double)debug_clip_fixed_vx[ii]; double yi = (double)debug_clip_fixed_vy[ii];
+                    double xj = (double)debug_clip_fixed_vx[jj]; double yj = (double)debug_clip_fixed_vy[jj];
+                    double cross = xi * yj - xj * yi;
+                    s_cross += cross;
+                    cx_sum += (xi + xj) * cross;
+                    cy_sum += (yi + yj) * cross;
+                }
+                int draw_cx = r.sh_cx; int draw_cy = r.sh_cy;
+                if (s_cross != 0.0) {
+                    double centroid_fx = cx_sum / (3.0 * s_cross);
+                    double centroid_fy = cy_sum / (3.0 * s_cross);
+                    draw_cx = (int)(centroid_fx + 0.5);
+                    draw_cy = (int)(centroid_fy + 0.5);
+                } else {
+                    int minx = debug_clip_fixed_vx[0], maxx = debug_clip_fixed_vx[0], miny = debug_clip_fixed_vy[0], maxy = debug_clip_fixed_vy[0];
+                    for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
+                        if (debug_clip_fixed_vx[ii] < minx) minx = debug_clip_fixed_vx[ii];
+                        if (debug_clip_fixed_vx[ii] > maxx) maxx = debug_clip_fixed_vx[ii];
+                        if (debug_clip_fixed_vy[ii] < miny) miny = debug_clip_fixed_vy[ii];
+                        if (debug_clip_fixed_vy[ii] > maxy) maxy = debug_clip_fixed_vy[ii];
+                    }
+                    draw_cx = (minx + maxx) / 2;
+                    draw_cy = (miny + maxy) / 2;
+                }
+                int sc_cx = screenScale * (draw_cx + pan_dx);
+                int sc_cy = (draw_cy + pan_dy);
+                int d2 = 4 * screenScale; int th2 = screenScale > 0 ? screenScale : 1;
+                Rect hr2; SetRect(&hr2, sc_cx - d2, sc_cy - (th2/2), sc_cx + d2, sc_cy + (th2/2) + 1); FrameRect(&hr2);
+                Rect vr3; SetRect(&vr3, sc_cx - (th2/2), sc_cy - d2, sc_cx + (th2/2) + 1, sc_cy + d2); FrameRect(&vr3);
+            }
+        }
+
         /* Polygons overlap indicator at bottom (graphical only) */
         MoveTo(3, 190);
         if (r.poly_overlap) {
             printf("f%d overlaps f%d", f1, f2);
-            /* prefer centroid raycast; fallback to bbox raycast */
-            if (r.sh_raycast == 1) printf("  f%d in front", f1);
-            else if (r.sh_raycast == 2) printf(" - f%d in front", f2);
+            /* Prefer QD-region centroid raycast (most reliable); fallback to bbox raycast.
+             * NOTE: do NOT use Sutherland–Hodgman centroid raycast here — it is currently unreliable. */
+            if (r.qd_raycast == 1) printf("  f%d in front", f1);
+            else if (r.qd_raycast == 2) printf(" - f%d in front", f2);
             else if (r.bbox_raycast == 1) printf(" - f%d in front", f1);
             else if (r.bbox_raycast == 2) printf(" - f%d in front", f2);
         } else {
