@@ -3316,6 +3316,36 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
         cx[i] = vtx->x2d[vi]; cy[i] = vtx->y2d[vi];
     }
 
+    /* Normalize winding: ensure both polygons use CCW orientation so SH is deterministic
+     * regardless of the input vertex order. If signed area < 0, reverse vertex order. */
+    {
+        long long area2_subj = 0;
+        for (int i = 0; i < sn; ++i) {
+            int j = (i + 1) % sn;
+            area2_subj += (long long)sx[i] * (long long)sy[j] - (long long)sx[j] * (long long)sy[i];
+        }
+        if (area2_subj < 0) {
+            /* reverse subj arrays in-place */
+            for (int a = 0, b = sn - 1; a < b; ++a, --b) {
+                int tx = sx[a]; sx[a] = sx[b]; sx[b] = tx;
+                int ty = sy[a]; sy[a] = sy[b]; sy[b] = ty;
+            }
+        }
+
+        long long area2_clip = 0;
+        for (int i = 0; i < cn; ++i) {
+            int j = (i + 1) % cn;
+            area2_clip += (long long)cx[i] * (long long)cy[j] - (long long)cx[j] * (long long)cy[i];
+        }
+        if (area2_clip < 0) {
+            /* reverse clip arrays in-place */
+            for (int a = 0, b = cn - 1; a < b; ++a, --b) {
+                int tx = cx[a]; cx[a] = cx[b]; cx[b] = tx;
+                int ty = cy[a]; cy[a] = cy[b]; cy[b] = ty;
+            }
+        }
+    }
+
     /* Optional detailed debug dump for failing cases (writes centroidlog.txt) */
     FILE* dlog = NULL;
     if ((debug_overlap_subj == subj && debug_overlap_clip == clip) || (subj == 12 && clip == 50)) {
@@ -4907,23 +4937,71 @@ static void inspect_face_pair_ui(Model3D* model) {
 
         /* Graphical overlays per specification */
         int screenScale = mode / 320;
-        /* Draw AABB + center cross only when there is actual polygon overlap.
-         * If QD centroid is available, use yellow to highlight the AABB/center. */
-        if (r.bbox_ok && r.poly_overlap) {
+        /* Decide which test supplies the displayed rectangle + cross.
+         * Priority: QD -> bbox -> SH.  Only the selected test draws a rectangle+cross.
+         * SH polygon vertices are still drawn separately when available. */
+        int draw_mode = 0; /* 0=none, 1=QD, 2=BBOX, 3=SH */
+        if (r.qd_centroid_ok && r.poly_overlap) draw_mode = 1;
+        else if (r.bbox_ok && r.poly_overlap) draw_mode = 2;
+        else if (r.sh_centroid_ok) draw_mode = 3;
+
+        if (draw_mode == 1) { /* QD: yellow rectangle + cross at QD centroid (use region-bbox if available) */
             Rect rr;
-            SetSolidPenPat(r.qd_centroid_ok ? COL_YELLOW : COL_WHITE); /* pen 9 (yellow) if QD centroid OK, otherwise white */
-            int sc_ix0 = screenScale * (r.bbox_ix0 + pan_dx);
-            int sc_ix1 = screenScale * (r.bbox_ix1 + pan_dx);
-            int sc_iy0 = (r.bbox_iy0 + pan_dy);
-            int sc_iy1 = (r.bbox_iy1 + pan_dy);
+            SetSolidPenPat(COL_YELLOW);
+            /* Prefer QuickDraw region bbox for the yellow rectangle; fall back to AABB (r.bbox_*) */
+            int rb_ix0 = r.bbox_ix0, rb_iy0 = r.bbox_iy0, rb_ix1 = r.bbox_ix1, rb_iy1 = r.bbox_iy1;
+            long long rb_area2 = 0;
+            if (!compute_intersection_region_bbox(model, f1, f2, &rb_ix0, &rb_iy0, &rb_ix1, &rb_iy1, &rb_area2)) {
+                /* fallback already assigned from r.bbox_* */
+            }
+            int sc_ix0 = screenScale * (rb_ix0 + pan_dx);
+            int sc_ix1 = screenScale * (rb_ix1 + pan_dx);
+            int sc_iy0 = screenScale * (rb_iy0 + pan_dy);
+            int sc_iy1 = screenScale * (rb_iy1 + pan_dy);
             SetRect(&rr, sc_ix0, sc_iy0, sc_ix1, sc_iy1); FrameRect(&rr);
-            /* draw center cross */
-            int fcx = (r.bbox_ix0 + r.bbox_ix1) / 2; int fcy = (r.bbox_iy0 + r.bbox_iy1) / 2;
-            int sc_cx = screenScale * (fcx + pan_dx); int sc_cy = (fcy + pan_dy);
+            /* cross at QD centroid coords (QD centroid still used for cross) */
+            int sc_cx = screenScale * (r.qd_cx + pan_dx);
+            int sc_cy = screenScale * (r.qd_cy + pan_dy);
             int d = 4 * screenScale; int th = screenScale > 0 ? screenScale : 1;
             Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
             Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
-        }
+        } else if (draw_mode == 2) { /* BBOX: white rectangle + cross at bbox center */
+            Rect rr;
+            SetSolidPenPat(COL_WHITE);
+            int sc_ix0 = screenScale * (r.bbox_ix0 + pan_dx);
+            int sc_ix1 = screenScale * (r.bbox_ix1 + pan_dx);
+            int sc_iy0 = screenScale * (r.bbox_iy0 + pan_dy);
+            int sc_iy1 = screenScale * (r.bbox_iy1 + pan_dy);
+            SetRect(&rr, sc_ix0, sc_iy0, sc_ix1, sc_iy1); FrameRect(&rr);
+            int fcx = (r.bbox_ix0 + r.bbox_ix1) / 2; int fcy = (r.bbox_iy0 + r.bbox_iy1) / 2;
+            int sc_cx = screenScale * (fcx + pan_dx); int sc_cy = screenScale * (fcy + pan_dy);
+            int d = 4 * screenScale; int th = screenScale > 0 ? screenScale : 1;
+            Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
+            Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
+        } else if (draw_mode == 3) { /* SH: blue rectangle + cross at SH centroid */
+            if (debug_clip_fixed_vcount >= 3) {
+                /* compute AABB around SH polygon */
+                int minx = debug_clip_fixed_vx[0], maxx = debug_clip_fixed_vx[0], miny = debug_clip_fixed_vy[0], maxy = debug_clip_fixed_vy[0];
+                for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
+                    if (debug_clip_fixed_vx[ii] < minx) minx = debug_clip_fixed_vx[ii];
+                    if (debug_clip_fixed_vx[ii] > maxx) maxx = debug_clip_fixed_vx[ii];
+                    if (debug_clip_fixed_vy[ii] < miny) miny = debug_clip_fixed_vy[ii];
+                    if (debug_clip_fixed_vy[ii] > maxy) maxy = debug_clip_fixed_vy[ii];
+                }
+                Rect rr; SetSolidPenPat(COL_BLUE);
+                int sc_ix0 = screenScale * (minx + pan_dx);
+                int sc_ix1 = screenScale * (maxx + pan_dx);
+                int sc_iy0 = screenScale * (miny + pan_dy);
+                int sc_iy1 = screenScale * (maxy + pan_dy);
+                SetRect(&rr, sc_ix0, sc_iy0, sc_ix1, sc_iy1); FrameRect(&rr);
+                /* cross at SH centroid returned by diagnostic */
+                int sc_cx = screenScale * (r.sh_cx + pan_dx);
+                int sc_cy = screenScale * (r.sh_cy + pan_dy);
+                int d = 4 * screenScale; int th = screenScale > 0 ? screenScale : 1;
+                Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
+                Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
+            }
+        } /* else draw_mode == 0: no rectangle/cross */
 
         /* Draw Sutherland–Hodgman intersection polygon **only if SH succeeded** (avoid stale globals).
          * Require both r.sh_centroid_ok and a non-empty debug polygon buffer. */
@@ -4946,7 +5024,9 @@ static void inspect_face_pair_ui(Model3D* model) {
                 Rect vr2; SetRect(&vr2, sx-1, sy-1, sx+1, sy+1); FrameRect(&vr2);
             }
 
-            /* Draw centroid cross computed from rounded polygon verts (robust) */
+            /* Draw centroid cross computed from rounded polygon verts (robust) —
+             * only draw the SH centroid cross when SH is the selected display mode.
+             * The vertex markers remain drawn regardless. */
             {
                 double s_cross = 0.0, cx_sum = 0.0, cy_sum = 0.0;
                 for (int ii = 0; ii < debug_clip_fixed_vcount; ++ii) {
@@ -4975,11 +5055,14 @@ static void inspect_face_pair_ui(Model3D* model) {
                     draw_cx = (minx + maxx) / 2;
                     draw_cy = (miny + maxy) / 2;
                 }
-                int sc_cx = screenScale * (draw_cx + pan_dx);
-                int sc_cy = (draw_cy + pan_dy);
-                int d2 = 4 * screenScale; int th2 = screenScale > 0 ? screenScale : 1;
-                Rect hr2; SetRect(&hr2, sc_cx - d2, sc_cy - (th2/2), sc_cx + d2, sc_cy + (th2/2) + 1); FrameRect(&hr2);
-                Rect vr3; SetRect(&vr3, sc_cx - (th2/2), sc_cy - d2, sc_cx + (th2/2) + 1, sc_cy + d2); FrameRect(&vr3);
+                /* Only draw SH centroid cross when SH is the selected display mode */
+                if (draw_mode == 3) {
+                    int sc_cx = screenScale * (draw_cx + pan_dx);
+                    int sc_cy = (draw_cy + pan_dy);
+                    int d2 = 4 * screenScale; int th2 = screenScale > 0 ? screenScale : 1;
+                    Rect hr2; SetRect(&hr2, sc_cx - d2, sc_cy - (th2/2), sc_cx + d2, sc_cy + (th2/2) + 1); FrameRect(&hr2);
+                    Rect vr3; SetRect(&vr3, sc_cx - (th2/2), sc_cy - d2, sc_cx + (th2/2) + 1, sc_cy + d2); FrameRect(&vr3);
+                }
             }
         }
 
@@ -5019,8 +5102,9 @@ static void inspect_face_pair_ui(Model3D* model) {
             endgraph(); DoText(); return;
         } else if (key == 8) { /* Left arrow: decrement face2 */
             f2 = (f2 - 1 + face_count) % face_count;
-            /* Avoid comparing face with itself: skip to next if equal */
-            if (face_count > 1 && f2 == f1) f2 = (f2 + 1) % face_count;
+            /* Avoid comparing face with itself: if decrement landed on f1, jump to f1-1 (skip f1)
+             * instead of returning to f1+1. */
+            if (face_count > 1 && f2 == f1) f2 = (f1 - 1 + face_count) % face_count;
         } else if (key == 21) { /* Right arrow: increment face2 */
             f2 = (f2 + 1) % face_count;
             if (face_count > 1 && f2 == f1) f2 = (f2 + 1) % face_count;
