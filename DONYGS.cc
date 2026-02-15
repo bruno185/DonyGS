@@ -2528,6 +2528,8 @@ int check_sort_repair(Model3D* model, int face_count) {
                             snprintf(msg, sizeof(msg), "Face %d moved after face %d", closer, other);
                             int _k = show_inspect_faces_with_message(model, closer, other, msg);
                             if (_k == 27) { /* ESC */ free(pos_of_face); return repairs; }
+                            /* Inform user that the batch test is still running (prevents blank-screen confusion) */
+                            printf("Test running...\n"); fflush(stdout);
                         }
                     }
                 } else {
@@ -4278,6 +4280,9 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
     int face_count = faces->face_count;
     if (face_count <= 0) { printf("No faces in model\n"); return; }
 
+    /* Title / welcome line (text-mode) */
+    printf("Inspector: fixed intersection (Sutherland-Hodgman)\nComputes clipped polygon & centroid\n\n");
+
     printf("Enter face id 1 (0..%d): ", face_count - 1);
     int f1 = -1;
     if (scanf("%d", &f1) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
@@ -4898,6 +4903,9 @@ static void inspect_face_pair_ui(Model3D* model) {
     int face_count = faces->face_count;
     if (face_count <= 0) { printf("No faces in model\n"); return; }
 
+    /* Title / welcome (text-mode) */
+    printf("Inspector: face-pair full diagnostic (Q) (use arrows to navigate)\n\n");
+
     /* Step 1: prompt and validate face IDs */
     printf("Enter face id 1 (0..%d): ", face_count - 1);
     int f1 = -1;
@@ -5144,7 +5152,7 @@ void inspect_ray_cast(Model3D* model) {
     FaceArrays3D* faces = &model->faces;
     int face_count = faces->face_count;
     if (face_count <= 0) { printf("No faces in model\n"); return; }
-    printf("Inspector: ray_cast between two faces. Computes intersection center and plane tests.\n");
+    printf("Inspector: ray_cast between two faces.\nComputes intersection center and plane tests.\n\n");
     printf("Enter face id 1 (0..%d): ", face_count - 1);
     int f1 = -1;
 
@@ -5654,6 +5662,9 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     int face_count = faces->face_count;
     if (face_count <= 0) { printf("No faces in model\n"); return; }
 
+    /* Title / welcome (text-mode) */
+    printf("Inspector: inspect faces placed BEFORE a selected face (diagnostics)\n\n");
+
     // Ensure back-face culling on and recompute depths & ordering
     // helper: enable culling and run painter sort; returns previous culling state
     int old_cull = cull_back_faces;
@@ -5933,6 +5944,9 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
 
     int old_cull = cull_back_faces;
     cull_back_faces = 1;
+
+    /* Title / welcome (text-mode) */
+    printf("Inspector: inspect faces placed AFTER a selected face (diagnostics)\n\n");
 
     printf("Enter face id (0..%d) to inspect AFTER-list: ", face_count - 1);
     int sel = -1;
