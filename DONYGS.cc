@@ -3323,11 +3323,9 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
         debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; return 0;
     }
 
-    /* Watchdog to catch freezes during clipping (no file-backed logs) */
+    /* Watchdog and iteration-cap disabled for repro testing (temporary). */
     long local_start = GetTick();
-    const long CLIP_WATCHDOG_MS = 1000; /* bail-out after 1s */
-    const int SH_STEP_CAP = 100000; /* processed-segment cap to avoid pathological hangs */
-    int sh_steps = 0; /* incremented on every inner SH step */
+    int sh_steps = 0; /* kept for diagnostics but cap removed */
 
     /* Gather integer input polygons (screen coords) */
     int *sx = (int*)malloc(sizeof(int) * sn);
@@ -3430,21 +3428,7 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
 
     /* Sutherland–Hodgman: clip against each edge of `clip` */
     for (int ci = 0; ci < cn && cur_n > 0; ++ci) {
-        /* watchdog inside SH loop */
-        if (GetTick() - local_start > CLIP_WATCHDOG_MS) {
-            /* record watchdog bailout for diagnostics */
-            clip_watchdog_bailouts++;
-            clip_last_bailout_subj = subj; clip_last_bailout_clip = clip;
-
-            /* persist bailout info to disk for offline analysis */
-            /* watchdog bailout trace removed (counters retained) */
-
-            debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0;
-            free(sx); free(sy); free(cx); free(cy);
-            if (buf_x1) free(buf_x1); if (buf_y1) free(buf_y1); if (buf_x2) free(buf_x2); if (buf_y2) free(buf_y2);
-            if (out_px) free(out_px); if (out_py) free(out_py);
-            return 0;
-        }
+        /* watchdog disabled for repro testing — do not bail out here. */
         /* SH outer-loop entry trace for repro pair */
         /* SH outer trace removed */
         int ci2 = (ci + 1) % cn;
@@ -3452,21 +3436,8 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
         double cx2d = (double)cx[ci2], cy2d = (double)cy[ci2];
         int out_n_tmp = 0;
         for (int si = 0; si < cur_n; ++si) {
-            /* iteration cap to avoid pathological infinite clipping */
-            if (++sh_steps > SH_STEP_CAP) {
-                /* record iteration-cap bailout for diagnostics */
-                clip_iter_bailouts++;
-                clip_last_bailout_subj = subj; clip_last_bailout_clip = clip;
-
-                /* persist bailout info to disk for offline analysis */
-                /* iter-cap bailout trace removed (counters retained) */
-
-                /* bail out silently like the watchdog */
-                debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0;
-                free(sx); free(sy); free(cx); free(cy);
-                free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
-                return 0;
-            }
+            /* iteration cap disabled for repro testing */
+            ++sh_steps;
             int sj = (si + 1) % cur_n;
             double sx1d = buf_x1[si], sy1d = buf_y1[si];
             double sx2d = buf_x1[sj], sy2d = buf_y1[sj];
@@ -4923,9 +4894,9 @@ static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd,
         {
             long long area2 = 0;
             long t_sh_start = GetTick();
-            int sh_ok = compute_intersection_centroid_ordered_fixed(model, f1, f2, &out->sh_cx, &out->sh_cy, &area2) && (area2 != 0);
+            int sh_fallback = 0;
+            int sh_ok = compute_intersection_centroid_ordered_fixed_tryboth(model, f1, f2, &out->sh_cx, &out->sh_cy, &area2, &sh_fallback) && (area2 != 0);
             long t_sh_end = GetTick();
-            /* compare: SH result trace removed */
             out->sh_centroid_ok = sh_ok ? 1 : 0; out->sh_area2 = area2;
             if (out->sh_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: %d/%d (area2=%lld) (%ld ticks)", out->sh_cx, out->sh_cy, (long long)area2, t_sh_end - t_sh_start);
             else {
@@ -5062,19 +5033,9 @@ static void inspect_face_pair_ui(Model3D* model) {
 
             /* pre-compare debug trace removed */
 
-            /* Basic validation to avoid dereferencing invalid memory (prevents crash) */
-            int bad = 0;
-            if (faces->vertex_count[f1] <= 0 || faces->vertex_count[f2] <= 0) bad = 1;
-            if (faces->vertex_indices_ptr[f1] < 0 || faces->vertex_indices_ptr[f2] < 0) bad = 1;
-            if (faces->vertex_indices_ptr[f1] + faces->vertex_count[f1] > vertex_indices_buffer_limit) bad = 1;
-            if (faces->vertex_indices_ptr[f2] + faces->vertex_count[f2] > vertex_indices_buffer_limit) bad = 1;
+            /* Run full diagnostic — compare_faces_diagnostic contains its own guards. */
+            compare_faces_diagnostic(model, f1, f2, 1, &r);
 
-            if (bad) {
-                /* invalid face data detected — skip diagnostics */
-                r.poly_overlap = 0;
-            } else {
-                compare_faces_diagnostic(model, f1, f2, 1, &r);
-            }
         }
 
         /* Graphical overlays per specification */
