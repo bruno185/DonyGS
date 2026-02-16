@@ -5133,6 +5133,23 @@ static void inspect_face_pair_ui(Model3D* model) {
 
             /* Compact summary designed to fit 80x24 */
             printf("\n=== Face pair: f%d vs f%d ===\n", f1, f2);
+
+            /* Second line: report which face is in front according to sorted list */
+            {
+                int pos1 = -1, pos2 = -1;
+                for (int ii = 0; ii < faces->face_count; ++ii) {
+                    int fid = faces->sorted_face_indices[ii];
+                    if (fid == f1) pos1 = ii;
+                    if (fid == f2) pos2 = ii;
+                    if (pos1 >= 0 && pos2 >= 0) break;
+                }
+                if (pos1 >= 0 && pos2 >= 0) {
+                    if (pos1 > pos2) printf("Sorted-list: face %d is in front (pos %d vs %d)\n", f1, pos1, pos2);
+                    else if (pos2 > pos1) printf("Sorted-list: face %d is in front (pos %d vs %d)\n", f2, pos2, pos1);
+                    else printf("Sorted-list: undetermined (same pos=%d)\n", pos1);
+                } else printf("Sorted-list: unavailable\n");
+            }
+
             printf("Overlap: %s\n\n", r.poly_overlap ? "yes" : "no");
 
             /* 1) Bbox (single line) - now shows rect + OK/KO */
@@ -5141,13 +5158,13 @@ static void inspect_face_pair_ui(Model3D* model) {
                 int bcy = (r.bbox_iy0 + r.bbox_iy1) / 2;
                 float bf1 = 0.0f, bf2 = 0.0f;
                 if (ray_cast_distances(model, f1, f2, bcx, bcy, &bf1, &bf2)) {
-                    printf("1) BBOX OK rect=%d,%d-%d,%d center=%d/%d dist:%d=%.4f %d=%.4f", r.bbox_ix0, r.bbox_iy0, r.bbox_ix1, r.bbox_iy1, bcx, bcy, f1, bf1, f2, bf2);
+                    printf("1) BBOX OK rect=%d,%d-%d,%d center=%d,%d dist:%d=%.4f %d=%.4f", r.bbox_ix0, r.bbox_iy0, r.bbox_ix1, r.bbox_iy1, bcx, bcy, f1, bf1, f2, bf2);
                 } else {
-                    printf("1) BBOX OK rect=%d,%d-%d,%d center=%d/%d dist:N/A", r.bbox_ix0, r.bbox_iy0, r.bbox_ix1, r.bbox_iy1, bcx, bcy);
+                    printf("1) BBOX OK rect=%d,%d-%d,%d center=%d,%d dist:N/A", r.bbox_ix0, r.bbox_iy0, r.bbox_ix1, r.bbox_iy1, bcx, bcy);
                 }
                 /* verdict (one-line break before verdict) */
-                if (r.bbox_raycast == 1) printf("\n  -> face %d is in front\n", f1);
-                else if (r.bbox_raycast == 2) printf("\n  -> face %d is in front\n", f2);
+                if (r.bbox_raycast == 1) printf("\n   => face %d is in front\n", f1);
+                else if (r.bbox_raycast == 2) printf("\n   => face %d is in front\n", f2);
                 else printf("\n  -> undetermined\n");
             } else printf("1) BBOX KO rect=none center=none\n");
 
@@ -5163,29 +5180,29 @@ static void inspect_face_pair_ui(Model3D* model) {
                 }
                 float sf1 = 0.0f, sf2 = 0.0f;
                 if (ray_cast_distances(model, f1, f2, r.sh_cx, r.sh_cy, &sf1, &sf2)) {
-                    printf("2) SH OK rect=%d,%d-%d,%d c=%d,%d dist:%d=%.4f %d=%.4f", sminx, sminy, smaxx, smaxy, r.sh_cx, r.sh_cy, f1, sf1, f2, sf2);
+                    printf("\n2) SH OK rect=%d,%d-%d,%d center=%d,%d dist:%d=%.4f %d=%.4f", sminx, sminy, smaxx, smaxy, r.sh_cx, r.sh_cy, f1, sf1, f2, sf2);
                 } else {
-                    printf("2) SH OK rect=%d,%d-%d,%d c=%d,%d dist:N/A", sminx, sminy, smaxx, smaxy, r.sh_cx, r.sh_cy);
+                    printf("\n2) SH OK rect=%d,%d-%d,%d c=%d,%d dist:N/A", sminx, sminy, smaxx, smaxy, r.sh_cx, r.sh_cy);
                 }
-                if (r.sh_raycast == 1) printf("\n  -> face %d is in front\n", f1);
-                else if (r.sh_raycast == 2) printf("\n  -> face %d is in front\n", f2);
+                if (r.sh_raycast == 1) printf("\n   => face %d is in front\n", f1);
+                else if (r.sh_raycast == 2) printf("\n   => face %d is in front\n", f2);
                 else printf("\n  -> undetermined\n");
-            } else printf("2) SH KO rect=none\n");
+            } else printf("\n2) SH KO rect=none\n");
 
             /* 3) Centroid QD (single line) - use region bbox when available; fallback to AABB; prefix OK/KO */
             if (r.qd_centroid_ok) {
                 int qx0=0,qy0=0,qx1=0,qy1=0; long long qarea2=0; float qf1=0.0f, qf2=0.0f;
                 int have_qd_rect = compute_intersection_region_bbox(model, f1, f2, &qx0, &qy0, &qx1, &qy1, &qarea2);
                 if (!have_qd_rect && r.bbox_ok) { qx0 = r.bbox_ix0; qy0 = r.bbox_iy0; qx1 = r.bbox_ix1; qy1 = r.bbox_iy1; have_qd_rect = 1; }
-                if (have_qd_rect) printf("3) QD OK rect=%d,%d-%d,%d c=%d,%d  ", qx0, qy0, qx1, qy1, r.qd_cx, r.qd_cy);
-                else printf("3) QD KO rect=none c=%d,%d  ", r.qd_cx, r.qd_cy);
+                if (have_qd_rect) printf("\n3) QD OK rect=%d,%d-%d,%d center=%d,%d  ", qx0, qy0, qx1, qy1, r.qd_cx, r.qd_cy);
+                else printf("\n3) QD KO rect=none center=%d,%d  ", r.qd_cx, r.qd_cy);
                 if (ray_cast_distances(model, f1, f2, r.qd_cx, r.qd_cy, &qf1, &qf2)) {
                     printf("dist:%d=%.4f %d=%.4f", f1, qf1, f2, qf2);
-                    if (r.qd_raycast == 1) printf("\n  -> face %d is in front\n", f1);
-                    else if (r.qd_raycast == 2) printf("\n  -> face %d is in front\n", f2);
-                    else printf("\n  -> undetermined\n");
+                    if (r.qd_raycast == 1) printf("\n   => face %d is in front\n", f1);
+                    else if (r.qd_raycast == 2) printf("\n   => face %d is in front\n", f2);
+                    else printf("\n   -> undetermined\n");
                 } else printf("dist:N/A  -> undetermined\n");
-            } else printf("3) QD KO rect=none\n");
+            } else printf("\n3) QD KO rect=none\n");
 
             /* Compact face centroid lines (one line per face) */
             {
