@@ -5219,7 +5219,23 @@ static void inspect_face_pair_ui(Model3D* model) {
                     fx2/=fn2; fy2/=fn2; fz2/=fn2; ox2/=fn2; oy2/=fn2; oz2/=fn2; pcx2/=fn2; pcy2/=fn2;
                 }
                 printf("\nF%d file=(%.3f,%.3f,%.3f) obs=(%.3f,%.3f,%.3f) 2D=(%d,%d)\n", f1, fx1, fy1, fz1, ox1, oy1, oz1, pcx1, pcy1);
-                printf("F%d file=(%.3f,%.3f,%.3f) obs=(%.3f,%.3f,%.3f) 2D=(%d,%d)\n", f2, fx2, fy2, fz2, ox2, oy2, oz2, pcx2, pcy2);
+                {
+                    float a1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
+                    float b1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
+                    float c1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
+                    float d1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
+                    printf("Plane equation: a=%f b=%f c=%f d=%f\n", a1, b1, c1, d1);
+                    printf("Z min: %.6f   ;   Z mean: %.6f   ;   Z max: %.6f\n", FIXED_TO_FLOAT(faces->z_min[f1]), FIXED_TO_FLOAT(faces->z_mean[f1]), FIXED_TO_FLOAT(faces->z_max[f1]));
+                }
+                printf("\nF%d file=(%.3f,%.3f,%.3f) obs=(%.3f,%.3f,%.3f) 2D=(%d,%d)\n", f2, fx2, fy2, fz2, ox2, oy2, oz2, pcx2, pcy2);
+                {
+                    float a2 = (float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
+                    float b2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
+                    float c2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
+                    float d2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
+                    printf("Plane equation: a=%f b=%f c=%f d=%f\n", a2, b2, c2, d2);
+                    printf("Z min: %.6f   ;   Z mean: %.6f   ;   Z max: %.6f\n", FIXED_TO_FLOAT(faces->z_min[f2]), FIXED_TO_FLOAT(faces->z_mean[f2]), FIXED_TO_FLOAT(faces->z_max[f2]));
+                }
             }
 
             /* Press any key to return to graphical inspector (verbose option removed) */
