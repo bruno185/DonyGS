@@ -4706,6 +4706,7 @@ static void show_graphical_inspect(Model3D* model, int f1, int f2, int no_overla
  * Returns: -1 if f1 is before f2, 1 if f1 is after f2, 0 if undetermined
  * Behavior: runs pair_plane_before/after and, if inconclusive, retries with faces swapped.
  */
+
 static int geo_face_order(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     int r = 0;
@@ -4750,6 +4751,7 @@ static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py) {
 /* Core diagnostic: performs the ordered suite of tests (text-mode safe unless use_qd=1)
  * Tests executed in the order requested by the UI design and records textual lines.
  */
+segment "compare_faces_diagnostic";
 static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out) {
     if (!model || !out) return;
     FaceArrays3D* faces = &model->faces;
@@ -4792,10 +4794,10 @@ static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd,
         long t_poly_end = GetTick();
         if (p_overlap) {
             out->poly_overlap = 1;
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap (%ld ticks)", t_poly_end - t_poly_start);
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap: yes");
         } else {
             out->poly_overlap = 0;
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons do not overlap (%ld ticks)", t_poly_end - t_poly_start);
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap: no");
         }
     } else {
         out->poly_overlap = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons: skipped (bbox non-overlap)");
@@ -5122,15 +5124,88 @@ static void inspect_face_pair_ui(Model3D* model) {
         } else if (key == 10) { /* Down arrow: decrement face1 */
             f1 = (f1 - 1 + face_count) % face_count;
             if (face_count > 1 && f1 == f2) f1 = (f1 - 1 + face_count) % face_count;
-        } else if (key == 32) { /* SPACE -> show textual results */
-            /* restore QuickDraw and print saved textual results */
+        } else if (key == 32) { /* SPACE -> compact textual summary (80x24) + optional verbose */
+            /* restore QuickDraw and enter text-mode */
             framePolyOnly = old_frame;
             for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
             free(backup_flags);
             endgraph(); DoText();
 
-            printf("\n=== Face pair diagnostic: f%d vs f%d ===\n", f1, f2);
-            for (int i = 0; i < r.results_count; ++i) printf("%s\n", r.results_text[i]);
+            /* Compact summary designed to fit 80x24 */
+            printf("\n=== Face pair: f%d vs f%d ===\n", f1, f2);
+            printf("Overlap: %s\n\n", r.poly_overlap ? "yes" : "no");
+
+            /* 1) Bbox (single line) - now shows rect + OK/KO */
+            if (r.bbox_ok) {
+                int bcx = (r.bbox_ix0 + r.bbox_ix1) / 2;
+                int bcy = (r.bbox_iy0 + r.bbox_iy1) / 2;
+                float bf1 = 0.0f, bf2 = 0.0f;
+                if (ray_cast_distances(model, f1, f2, bcx, bcy, &bf1, &bf2)) {
+                    printf("1) BBOX OK rect=%d,%d-%d,%d center=%d/%d dist:%d=%.4f %d=%.4f", r.bbox_ix0, r.bbox_iy0, r.bbox_ix1, r.bbox_iy1, bcx, bcy, f1, bf1, f2, bf2);
+                } else {
+                    printf("1) BBOX OK rect=%d,%d-%d,%d center=%d/%d dist:N/A", r.bbox_ix0, r.bbox_iy0, r.bbox_ix1, r.bbox_iy1, bcx, bcy);
+                }
+                /* verdict (one-line break before verdict) */
+                if (r.bbox_raycast == 1) printf("\n  -> face %d is in front\n", f1);
+                else if (r.bbox_raycast == 2) printf("\n  -> face %d is in front\n", f2);
+                else printf("\n  -> undetermined\n");
+            } else printf("1) BBOX KO rect=none center=none\n");
+
+            /* 2) Centroid SH (single line) - prefix OK/KO */
+            if (r.sh_centroid_ok && debug_clip_fixed_vcount >= 3) {
+                int sminx = debug_clip_fixed_vx[0], smaxx = debug_clip_fixed_vx[0];
+                int sminy = debug_clip_fixed_vy[0], smaxy = debug_clip_fixed_vy[0];
+                for (int ii = 1; ii < debug_clip_fixed_vcount; ++ii) {
+                    if (debug_clip_fixed_vx[ii] < sminx) sminx = debug_clip_fixed_vx[ii];
+                    if (debug_clip_fixed_vx[ii] > smaxx) smaxx = debug_clip_fixed_vx[ii];
+                    if (debug_clip_fixed_vy[ii] < sminy) sminy = debug_clip_fixed_vy[ii];
+                    if (debug_clip_fixed_vy[ii] > smaxy) smaxy = debug_clip_fixed_vy[ii];
+                }
+                float sf1 = 0.0f, sf2 = 0.0f;
+                if (ray_cast_distances(model, f1, f2, r.sh_cx, r.sh_cy, &sf1, &sf2)) {
+                    printf("2) SH OK rect=%d,%d-%d,%d c=%d,%d dist:%d=%.4f %d=%.4f", sminx, sminy, smaxx, smaxy, r.sh_cx, r.sh_cy, f1, sf1, f2, sf2);
+                } else {
+                    printf("2) SH OK rect=%d,%d-%d,%d c=%d,%d dist:N/A", sminx, sminy, smaxx, smaxy, r.sh_cx, r.sh_cy);
+                }
+                if (r.sh_raycast == 1) printf("\n  -> face %d is in front\n", f1);
+                else if (r.sh_raycast == 2) printf("\n  -> face %d is in front\n", f2);
+                else printf("\n  -> undetermined\n");
+            } else printf("2) SH KO rect=none\n");
+
+            /* 3) Centroid QD (single line) - use region bbox when available; fallback to AABB; prefix OK/KO */
+            if (r.qd_centroid_ok) {
+                int qx0=0,qy0=0,qx1=0,qy1=0; long long qarea2=0; float qf1=0.0f, qf2=0.0f;
+                int have_qd_rect = compute_intersection_region_bbox(model, f1, f2, &qx0, &qy0, &qx1, &qy1, &qarea2);
+                if (!have_qd_rect && r.bbox_ok) { qx0 = r.bbox_ix0; qy0 = r.bbox_iy0; qx1 = r.bbox_ix1; qy1 = r.bbox_iy1; have_qd_rect = 1; }
+                if (have_qd_rect) printf("3) QD OK rect=%d,%d-%d,%d c=%d,%d  ", qx0, qy0, qx1, qy1, r.qd_cx, r.qd_cy);
+                else printf("3) QD KO rect=none c=%d,%d  ", r.qd_cx, r.qd_cy);
+                if (ray_cast_distances(model, f1, f2, r.qd_cx, r.qd_cy, &qf1, &qf2)) {
+                    printf("dist:%d=%.4f %d=%.4f", f1, qf1, f2, qf2);
+                    if (r.qd_raycast == 1) printf("\n  -> face %d is in front\n", f1);
+                    else if (r.qd_raycast == 2) printf("\n  -> face %d is in front\n", f2);
+                    else printf("\n  -> undetermined\n");
+                } else printf("dist:N/A  -> undetermined\n");
+            } else printf("3) QD KO rect=none\n");
+
+            /* Compact face centroid lines (one line per face) */
+            {
+                int fn1 = faces->vertex_count[f1];
+                double fx1=0.0, fy1=0.0, fz1=0.0, ox1=0.0, oy1=0.0, oz1=0.0; int pcx1=0, pcy1=0;
+                if (fn1>0) {
+                    for (int i=0;i<fn1;++i) { int vid = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1]+i]-1; fx1 += FIXED_TO_FLOAT(model->vertices.x[vid]); fy1 += FIXED_TO_FLOAT(model->vertices.y[vid]); fz1 += FIXED_TO_FLOAT(model->vertices.z[vid]); ox1 += FIXED_TO_FLOAT(model->vertices.xo[vid]); oy1 += FIXED_TO_FLOAT(model->vertices.yo[vid]); oz1 += FIXED_TO_FLOAT(model->vertices.zo[vid]); pcx1 += model->vertices.x2d[vid]; pcy1 += model->vertices.y2d[vid]; }
+                    fx1/=fn1; fy1/=fn1; fz1/=fn1; ox1/=fn1; oy1/=fn1; oz1/=fn1; pcx1/=fn1; pcy1/=fn1;
+                }
+                int fn2 = faces->vertex_count[f2];
+                double fx2=0.0, fy2=0.0, fz2=0.0, ox2=0.0, oy2=0.0, oz2=0.0; int pcx2=0, pcy2=0;
+                if (fn2>0) {
+                    for (int i=0;i<fn2;++i) { int vid = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f2]+i]-1; fx2 += FIXED_TO_FLOAT(model->vertices.x[vid]); fy2 += FIXED_TO_FLOAT(model->vertices.y[vid]); fz2 += FIXED_TO_FLOAT(model->vertices.z[vid]); ox2 += FIXED_TO_FLOAT(model->vertices.xo[vid]); oy2 += FIXED_TO_FLOAT(model->vertices.yo[vid]); oz2 += FIXED_TO_FLOAT(model->vertices.zo[vid]); pcx2 += model->vertices.x2d[vid]; pcy2 += model->vertices.y2d[vid]; }
+                    fx2/=fn2; fy2/=fn2; fz2/=fn2; ox2/=fn2; oy2/=fn2; oz2/=fn2; pcx2/=fn2; pcy2/=fn2;
+                }
+                printf("\nF%d file=(%.3f,%.3f,%.3f) obs=(%.3f,%.3f,%.3f) 2D=(%d,%d)\n", f1, fx1, fy1, fz1, ox1, oy1, oz1, pcx1, pcy1);
+                printf("F%d file=(%.3f,%.3f,%.3f) obs=(%.3f,%.3f,%.3f) 2D=(%d,%d)\n", f2, fx2, fy2, fz2, ox2, oy2, oz2, pcx2, pcy2);
+            }
+
+            /* Press any key to return to graphical inspector (verbose option removed) */
             printf("\nPress any key to return to graphical inspector...\n");
             keypress();
             continue; /* redraw graphical inspector */

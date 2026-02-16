@@ -147,3 +147,38 @@ En cours : show_graphical_inspect et inspect_ray_cast snot trop compliqué. LE f
 mystere : > 12 43 => points alignés (variable globale ?)
 Overlap probleme : 12 et 43 overlap.
 
+inspect_intersection_fixed_ui touche Q : OK. 
+Petit probleme : face 3 vs 9 : la QD box est aplatie. A débuguer.
+Les tests géométriques sont faux.
+
+En concurrence avec inspect_ray_cast : mais inspect_ray_cast doit être complété et débuggée.
+si on veux unifier inspect_ray_cast et inspect_face_pair_ui, il faudrait ajouter des informations de debug dans inspect_face_pair_ui. C'est bien ça ? 
+OUI ! Cahier des charges à faire.
+
+
+Pour compléter inspect_face_pair_ui, il faut ajouter à l'afficahge actuel en mode texte :
+Bbox overlap : coordonnées x et y du centre.
+Centroid SH : coordonnées du rectangle (si SH ok)
+Centroid QD : coordonnées du rectangle (si QD ok)
+Bbox raycast : distance à face 1 et à face 2
+Centroide raycast : distance à face 1 et à face 2
+QD cendroide raycast : distance à face 1 et à face 2
+
+Il faut aussi ajouter :
+coordonnées 3D et 2D de face 1 et 2
+
+De plus :
+En mode texte : on doit pouvoir appuyer sur la touche F (ou f) pour enregistrer l'ensemble de ces données. LE ficher s'appelera : diag.XX.YY.txt, où XX et YY sont les ID des faces.
+
+En mode graphique : 
+touche F : idem. 
+entrée : affichage des faces seules, sans le modèle, sans les numéros des faces, avec :
+le rectangle + croix en blanc si bbox ok
+le rectangle + croix en jaune si QD ok
+le rectangle + croix en bleu si sh ok
+L'idéal serait que l'ensemble soit zoomé à 80% de la taille de l'écran, sans déformation. 
+Retour à l'affichage graphique normal par n'importe quelle touche.
+==> mais ça plante !
+A refaire, plus progressivement.
+
+
