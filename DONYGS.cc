@@ -3695,123 +3695,53 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
         return 0;
     }
 
-    /* Build region for subj */
-    OpenRgn();
-    off1 = faces->vertex_indices_ptr[subj];
-    int v0 = faces->vertex_indices_buffer[off1] - 1;
-    MoveTo(vtx->x2d[v0], vtx->y2d[v0]);
-    for (int i = 1; i < n1; ++i) {
-        int vi = faces->vertex_indices_buffer[off1 + i] - 1;
-        LineTo(vtx->x2d[vi], vtx->y2d[vi]);
+    /* Build region for subj — construct polygon then FramePoly into r1 */
+    {
+        Handle subj_poly = OpenPoly();
+        off1 = faces->vertex_indices_ptr[subj];
+        int v0 = faces->vertex_indices_buffer[off1] - 1;
+        MoveTo(vtx->x2d[v0], vtx->y2d[v0]);
+        for (int i = 1; i < n1; ++i) {
+            int vi = faces->vertex_indices_buffer[off1 + i] - 1;
+            LineTo(vtx->x2d[vi], vtx->y2d[vi]);
+        }
+        ClosePoly();
+        PenState ps_subj; GetPenState(&ps_subj); 
+        OpenRgn(); FramePoly(subj_poly); CloseRgn(r1);
+        SetPenState(&ps_subj);
+        KillPoly(subj_poly);
     }
-    CloseRgn(r1);
 
-    /* r1 debug dump removed */
-
-    /* Build region for clip */
-    OpenRgn();
-    off2 = faces->vertex_indices_ptr[clip];
-    int w0 = faces->vertex_indices_buffer[off2] - 1;
-    MoveTo(vtx->x2d[w0], vtx->y2d[w0]);
-    for (int i = 1; i < n2; ++i) {
-        int wi = faces->vertex_indices_buffer[off2 + i] - 1;
-        LineTo(vtx->x2d[wi], vtx->y2d[wi]);
+    /* Build region for clip — construct polygon then FramePoly into r2 */
+    {
+        Handle clip_poly = OpenPoly();
+        off2 = faces->vertex_indices_ptr[clip];
+        int w0 = faces->vertex_indices_buffer[off2] - 1;
+        MoveTo(vtx->x2d[w0], vtx->y2d[w0]);
+        for (int i = 1; i < n2; ++i) {
+            int wi = faces->vertex_indices_buffer[off2 + i] - 1;
+            LineTo(vtx->x2d[wi], vtx->y2d[wi]);
+        }
+        ClosePoly();
+        PenState ps_clip; GetPenState(&ps_clip); 
+        OpenRgn(); FramePoly(clip_poly); CloseRgn(r2);
+        SetPenState(&ps_clip);
+        KillPoly(clip_poly);
     }
-    CloseRgn(r2);
 
-    /* r2 debug dump removed */
 
     /* Intersection */
     SectRgn(r1, r2, r3);
 
-    /* debug Region drawing disabled */
-
-    int r1_succ = 0;
-    /* Compute runs-based intersection from r1 and r2 (avoid relying on r3 header) */
-    {
-        /* Parse r1 runs */
-        int r1_succ = 0;
-        HLock((Handle)r1);
-        short* sp1 = (short*)(*r1);
-        int s1 = (int)sp1[0]; int n1short = (s1>0)?(s1/2):0;
-        int idx1 = 5;
-        int cap1 = (n1short>8)?n1short:8; int cnt1 = 0;
-        int (*run1)[3] = (int(*)[3])malloc(sizeof(int[3]) * cap1);
-        while (idx1 < n1short) {
-            int y = (int)sp1[idx1++]; if ((unsigned short)y == 0x3FFF) continue;
-            while (idx1 < n1short && (unsigned short)sp1[idx1] != 0x3FFF) {
-                int xs = (int)sp1[idx1++]; if (idx1 >= n1short) break; int xe = (int)sp1[idx1++];
-                if (cnt1 >= cap1) { cap1 *= 2; run1 = (int(*)[3])realloc(run1, sizeof(int[3]) * cap1); }
-                run1[cnt1][0] = y; run1[cnt1][1] = xs; run1[cnt1][2] = xe; cnt1++;
-            }
-            if (idx1 < n1short && (unsigned short)sp1[idx1] == 0x3FFF) idx1++;
-        }
-        HUnlock((Handle)r1);
-
-        /* Parse r2 runs */
-        HLock((Handle)r2);
-        short* sp2 = (short*)(*r2);
-        int s2 = (int)sp2[0]; int n2short = (s2>0)?(s2/2):0;
-        int idx2 = 5;
-        int cap2 = (n2short>8)?n2short:8; int cnt2 = 0;
-        int (*run2)[3] = (int(*)[3])malloc(sizeof(int[3]) * cap2);
-        while (idx2 < n2short) {
-            int y = (int)sp2[idx2++]; if ((unsigned short)y == 0x3FFF) continue;
-            while (idx2 < n2short && (unsigned short)sp2[idx2] != 0x3FFF) {
-                int xs = (int)sp2[idx2++]; if (idx2 >= n2short) break; int xe = (int)sp2[idx2++];
-                if (cnt2 >= cap2) { cap2 *= 2; run2 = (int(*)[3])realloc(run2, sizeof(int[3]) * cap2); }
-                run2[cnt2][0] = y; run2[cnt2][1] = xs; run2[cnt2][2] = xe; cnt2++;
-            }
-            if (idx2 < n2short && (unsigned short)sp2[idx2] == 0x3FFF) idx2++;
-        }
-        HUnlock((Handle)r2);
-
-        /* Two-pointer pass to compute overlaps by matching y values */
-        int i = 0, j = 0;
-        int runs_minx = 32767, runs_maxx = -32768, runs_miny = 32767, runs_maxy = -32768;
-        while (i < cnt1 && j < cnt2) {
-            int y1 = run1[i][0]; int y2v = run2[j][0];
-            if (y1 < y2v) { i++; continue; }
-            if (y1 > y2v) { j++; continue; }
-            int i2 = i; while (i2 < cnt1 && run1[i2][0] == y1) i2++;
-            int j2 = j; while (j2 < cnt2 && run2[j2][0] == y1) j2++;
-            for (int a = i; a < i2; ++a) {
-                for (int b = j; b < j2; ++b) {
-                    int lo = (run1[a][1] > run2[b][1]) ? run1[a][1] : run2[b][1];
-                    int hi = (run1[a][2] < run2[b][2]) ? run1[a][2] : run2[b][2];
-                    if (lo <= hi) {
-                        if (lo < runs_minx) runs_minx = lo;
-                        if (hi > runs_maxx) runs_maxx = hi;
-                        if (y1 < runs_miny) runs_miny = y1;
-                        if (y1 > runs_maxy) runs_maxy = y1;
-                    }
-                }
-            }
-            i = i2; j = j2;
-        }
-
-        if (runs_minx <= runs_maxx && runs_miny <= runs_maxy) {
-            *ix0 = runs_minx; *iy0 = runs_miny; *ix1 = runs_maxx; *iy1 = runs_maxy;
-            r1_succ = 1;
-        } else {
-            r1_succ = 0;
-        }
-
-        free(run1); free(run2);
-    }
+    /* runs-based parsing removed — QuickDraw region header bbox (r3->rgnBBox) is authoritative */
 
     int has = 0;
     if (!EmptyRgn(r3)) {
 
+        /* Read region header (size + bbox words) from r3 */
         HLock((Handle)r3);
         short* sp = (short*)(*r3);
         int w0 = (int)sp[0];
-
-
-        /* On classic QuickDraw the region record starts with a size (bytes) in sp[0],
-         * followed by the bbox words [top,left,bottom,right] in sp[1..4]. Use that
-         * convention when possible; otherwise fall back to the previous heuristic.
-         */
         int raw_top, raw_left, raw_bottom, raw_right;
         if (w0 >= 10 && (w0/2) >= 5) {
             raw_top = (int)sp[1]; raw_left = (int)sp[2]; raw_bottom = (int)sp[3]; raw_right = (int)sp[4];
@@ -3825,73 +3755,23 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
         int h_left = (raw_left < raw_right) ? raw_left : raw_right;
         int h_right = (raw_left < raw_right) ? raw_right : raw_left;
 
-
-        /* Parse the runs in the region record to compute a bbox based on actual runs.
-         * Format after the 5 header words is a sequence of scanline descriptions:
-         *   y, x1, x2, x3, x4, ..., 0x3FFF  (end of that scanline runs)
-         * repeated. We'll walk the words and extract min/max X/Y seen in runs.
-         */
-        int nshorts = (w0 > 0) ? (w0 / 2) : 0;
-        int idx = 5; /* start after size and header (sp[0..4]) */
-        int runs_minx = 32767, runs_maxx = -32768, runs_miny = 32767, runs_maxy = -32768;
-        while (idx < nshorts) {
-            int y = (int)sp[idx++];
-            if (y == 0x3FFF) continue; /* robustness */
-            runs_miny = (y < runs_miny) ? y : runs_miny;
-            runs_maxy = (y > runs_maxy) ? y : runs_maxy;
-            /* Read until 0x3FFF sentinel */
-            while (idx < nshorts && (unsigned short)sp[idx] != 0x3FFF) {
-                int xs = (int)sp[idx++]; if (idx >= nshorts) break;
-                int xe = (int)sp[idx++];
-                if (xs < runs_minx) runs_minx = xs;
-                if (xe > runs_maxx) runs_maxx = xe;
-            }
-            /* consume sentinel if present */
-            if (idx < nshorts && (unsigned short)sp[idx] == 0x3FFF) idx++;
-        }
-        if (runs_minx <= runs_maxx && runs_miny <= runs_maxy) {
-    
-            /* Prefer runs bbox as authoritative, but do not override runs-based result if present */
-            if (!r1_succ) {
-                *ix0 = runs_minx; *iy0 = runs_miny; *ix1 = runs_maxx; *iy1 = runs_maxy;
-            } else {
-    
-            }
-        } else {
-            /* Fall back to header bbox if runs parsing failed */
-
-            if (!r1_succ) {
-                *ix0 = h_left; *iy0 = h_top; *ix1 = h_right; *iy1 = h_bottom;
-            } else {
-
-            }
-        }
-
-        /* Clamp region bbox to intersection of face bboxes to avoid overshoot */
-        int ibx0 = (minx1 > minx2) ? minx1 : minx2;
-        int ibx1 = (maxx1 < maxx2) ? maxx1 : maxx2;
-        int iby0 = (miny1 > miny2) ? miny1 : miny2;
-        int iby1 = (maxy1 < maxy2) ? maxy1 : maxy2;
-
-        if (*ix0 < ibx0) *ix0 = ibx0;
-        if (*iy0 < iby0) *iy0 = iby0;
-        if (*ix1 > ibx1) *ix1 = ibx1;
-        if (*iy1 > iby1) *iy1 = iby1;
+        /* runs parsing removed — use region header bbox (r3->rgnBBox) directly */
+        /* Use the region header bbox (r3->rgnBBox) as authoritative for the QD region rectangle.
+         * Keep runs parsing only for diagnostics (do not override the region header bbox). */
+        *ix0 = h_left; *iy0 = h_top; *ix1 = h_right; *iy1 = h_bottom;
 
         if (*ix0 <= *ix1 && *iy0 <= *iy1) {
             if (out_area2) *out_area2 = (long long)((*ix1 - *ix0) * (*iy1 - *iy0));
-            has = 1;
-
-        } else {
-
+            /* Paint region for visual confirmation */
+            PenState ps_dbg; GetPenState(&ps_dbg); SetSolidPenPat(COL_YELLOW); PaintRgn(r3); SetPenState(&ps_dbg);
+            HUnlock((Handle)r3);
+            DisposeRgn(r1); DisposeRgn(r2); DisposeRgn(r3);
+            return 1;
         }
         HUnlock((Handle)r3);
-    } else {
-
     }
 
     DisposeRgn(r1); DisposeRgn(r2); DisposeRgn(r3);
-
     return has;
 }
 
@@ -5066,8 +4946,12 @@ static void inspect_face_pair_ui(Model3D* model) {
             int sc_cx = screenScale * (r.qd_cx + pan_dx);
             int sc_cy = screenScale * (r.qd_cy + pan_dy);
             int d = 4 * screenScale; int th = screenScale > 0 ? screenScale : 1;
+            /* Draw centroid cross in black so it's visible on yellow region */
+            PenState ps_cross; GetPenState(&ps_cross);
+            SetSolidPenPat(COL_BLACK);
             Rect hr; SetRect(&hr, sc_cx - d, sc_cy - (th/2), sc_cx + d, sc_cy + (th/2) + 1); FrameRect(&hr);
             Rect vr; SetRect(&vr, sc_cx - (th/2), sc_cy - d, sc_cx + (th/2) + 1, sc_cy + d); FrameRect(&vr);
+            SetPenState(&ps_cross);
         } else if (draw_mode == 2) { /* BBOX: white rectangle + cross at bbox center */
             Rect rr;
             SetSolidPenPat(COL_WHITE);
