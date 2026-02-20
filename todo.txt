@@ -182,3 +182,5 @@ Retour à l'affichage graphique normal par n'importe quelle touche.
 A refaire, plus progressivement.
 
 
+Plantage sir 1 vs 46
+
