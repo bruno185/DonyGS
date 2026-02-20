@@ -162,7 +162,7 @@ static int random_colors_capacity = 0;
 
 #define PAINTER_MODE_FAST 0
 #define PAINTER_MODE_FIXED 1
-#define PAINTER_MODE_FLOAT 2
+// #define PAINTER_MODE_FLOAT 2
 #define PAINTER_MODE_CORRECT 3
 #define PAINTER_MODE_CORRECTV2 4
 #define PAINTER_MODE_NEWELL_SANCHAV2 5
@@ -3762,8 +3762,13 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
 
         if (*ix0 <= *ix1 && *iy0 <= *iy1) {
             if (out_area2) *out_area2 = (long long)((*ix1 - *ix0) * (*iy1 - *iy0));
-            /* Paint region for visual confirmation */
-            PenState ps_dbg; GetPenState(&ps_dbg); SetSolidPenPat(COL_YELLOW); PaintRgn(r3); SetPenState(&ps_dbg);
+            /* Paint region for visual confirmation (apply current pan so visual matches overlays) */
+            PenState ps_dbg; GetPenState(&ps_dbg); SetSolidPenPat(COL_YELLOW);
+            /* shift the QuickDraw region by the global pan so PaintRgn draws at the
+               same position as the other overlays which apply `pan_dx/pan_dy` at
+               render time */
+            OffsetRgn(r3, pan_dx, pan_dy);
+            PaintRgn(r3); SetPenState(&ps_dbg);
             HUnlock((Handle)r3);
             DisposeRgn(r1); DisposeRgn(r2); DisposeRgn(r3);
             return 1;
@@ -7507,30 +7512,20 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
         }
     }
     long t_loop_end = GetTick();
-    // if (!PERFORMANCE_MODE) {
-    //     long elapsed_loop = t_loop_end - t_loop_start;
-    //     double ms_loop = ((double)elapsed_loop * 1000.0) / 60.0; // 60 ticks per second
-    //     printf("[TIMING] transform+project loop: %ld ticks (%.2f ms)\n", elapsed_loop, ms_loop);
-    // }
 
     // Face sorting after transformation
     long t_start, t_end;
     t_start = GetTick();
     calculateFaceDepths(model, NULL, model->faces.face_count);
     t_end = GetTick();
-    // if (!PERFORMANCE_MODE)
-    // {
-    //     long elapsed = t_end - t_start;
-    //     double ms = ((double)elapsed * 1000.0) / 60.0; // 60 ticks per second
-    //     printf("[TIMING] calculateFaceDepths: %ld ticks (%.2f ms)\n", elapsed, ms);
-    // }
+
 
     if (framePolyOnly) goto skip_calc; // Skip face calculations for framed polygons only display
 
     // CRITICAL: Reset sorted_face_indices before each sort to prevent corruption
-    for (i = 0; i < model->faces.face_count; i++) {
-        model->faces.sorted_face_indices[i] = i;
-    }
+    // for (i = 0; i < model->faces.face_count; i++) {
+    //     model->faces.sorted_face_indices[i] = i;
+    // }
     // painter_newell_sancha 
     t_start = GetTick();
     if (painter_mode == PAINTER_MODE_FAST) {
@@ -7549,10 +7544,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     } else if (painter_mode == PAINTER_MODE_NEWELL_SANCHAV2) {
         /* painter_newell_sanchaV2: conservative pass-2 inspired local reordering */
         painter_newell_sanchaV2(model, model->faces.face_count);
-    } else {
-        // PAINTER_MODE_FLOAT
-        //painter_newell_sancha_float(model, model->faces.face_count);
-    }
+    } 
     t_end = GetTick();
 
     skip_calc:;
@@ -8797,6 +8789,42 @@ void frameInconclusivePairs(Model3D* model) {
     // Keep handle locked (consistent with drawing code)
 }
 
+// Helper: recompute per-face 2D bounding boxes from the current `x2d/y2d` arrays
+// This is much cheaper than `calculateFaceDepths()` and is sufficient when only
+// the screen projection (scale/rotation/pan) changes.
+static void updateFace2DBounds(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int face_count = faces->face_count;
+
+    for (int fi = 0; fi < face_count; ++fi) {
+        int n = faces->vertex_count[fi];
+        if (n <= 0) {
+            faces->minx[fi] = faces->miny[fi] = 0;
+            faces->maxx[fi] = faces->maxy[fi] = 0;
+            continue;
+        }
+        int off = faces->vertex_indices_ptr[fi];
+        int minx = 9999, maxx = -9999, miny = 9999, maxy = -9999;
+        for (int k = 0; k < n; ++k) {
+            int vid = faces->vertex_indices_buffer[off + k] - 1;
+            if (vid < 0 || vid >= vtx->vertex_count) continue;
+            int x = vtx->x2d[vid];
+            int y = vtx->y2d[vid];
+            if (x < minx) minx = x;
+            if (x > maxx) maxx = x;
+            if (y < miny) miny = y;
+            if (y > maxy) maxy = y;
+        }
+        if (maxx == -9999) { minx = maxx = miny = maxy = 0; }
+        faces->minx[fi] = minx;
+        faces->maxx[fi] = maxx;
+        faces->miny[fi] = miny;
+        faces->maxy[fi] = maxy;
+    }
+}
+
 // Simple helper: compute 2D projected coordinates from observer-space coords and a projection scale
 segment "code19";
 // Minimal version taking only Model3D* and angle_w (uses global projection scale)
@@ -8828,6 +8856,10 @@ void compute2DFromObserver(Model3D* model, int angle_w) {
         x2d_out[i] = FIXED_ROUND_TO_INT(rx);
         y2d_out[i] = FIXED_ROUND_TO_INT(ry);
     }
+
+    /* Keep per-face 2D bounding boxes in sync with the newly computed x2d/y2d.
+     * This avoids stale bbox-based quick-rejects after interactive zoom/pan. */
+    updateFace2DBounds(model);
 }
 
 segment "code20";
@@ -9011,15 +9043,6 @@ segment "code22";
         // Initialize inconclusive pairs counter
         inconclusive_pairs_count = 0; // clear inconclusive pairs
 
-
-        /* Optional: enable float painter to reproduce Windows numeric behaviour exactly via env var USE_FLOAT_PAINTER=1 */
-        // {
-        //     const char* tmp = getenv("USE_FLOAT_PAINTER");
-        //     if (tmp && atoi(tmp) != 0) {
-        //         use_float_painter = 1;
-        //         painter_mode = PAINTER_MODE_FLOAT;
-        //     }
-        // }
 
         // Ask for filename (loop until a non-empty filename is entered and the model loads)
         while (1) {
@@ -9386,12 +9409,6 @@ segment "code22";
                 printf("Painter mode: CORRECT V2 (painter_correctV2)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 85: // 'U' - set FLOAT painter (moved from '3')
-            case 117: // 'u'
-                painter_mode = PAINTER_MODE_FLOAT;
-                printf("Painter mode: FLOAT (float-based painter)\n");
-                inconclusive_pairs_count = 0; // clear inconclusive pairs in float mode
-                if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
             case 55: // '7' - choose fill color
                 {
                     printf("\n=== Fill color selection ===\n");
