@@ -4317,35 +4317,35 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
     compute_intersection_centroid_ordered_fixed_tryboth(model, f1, f2, &cx, &cy, &a2, &centroid_fallback);
 
     /* Export debug file with 2D points for face1, face2 and computed intersection polygon */
-    {
-        FILE* wf = fopen("centroid.txt", "w");
-        if (wf) {
-            VertexArrays3D* vtx = &model->vertices;
-            FaceArrays3D* faces = &model->faces;
+    // {
+    //     FILE* wf = fopen("centroid.txt", "w");
+    //     if (wf) {
+    //         VertexArrays3D* vtx = &model->vertices;
+    //         FaceArrays3D* faces = &model->faces;
 
-            fprintf(wf, "# face1 id=%d\n", f1);
-            int fn1 = faces->vertex_count[f1];
-            for (int i = 0; i < fn1; ++i) {
-                int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + i] - 1;
-                fprintf(wf, "%d %d\n", vtx->x2d[vi], vtx->y2d[vi]);
-            }
+    //         fprintf(wf, "# face1 id=%d\n", f1);
+    //         int fn1 = faces->vertex_count[f1];
+    //         for (int i = 0; i < fn1; ++i) {
+    //             int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + i] - 1;
+    //             fprintf(wf, "%d %d\n", vtx->x2d[vi], vtx->y2d[vi]);
+    //         }
 
-            fprintf(wf, "# face2 id=%d\n", f2);
-            int fn2 = faces->vertex_count[f2];
-            for (int i = 0; i < fn2; ++i) {
-                int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f2] + i] - 1;
-                fprintf(wf, "%d %d\n", vtx->x2d[vi], vtx->y2d[vi]);
-            }
+    //         fprintf(wf, "# face2 id=%d\n", f2);
+    //         int fn2 = faces->vertex_count[f2];
+    //         for (int i = 0; i < fn2; ++i) {
+    //             int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f2] + i] - 1;
+    //             fprintf(wf, "%d %d\n", vtx->x2d[vi], vtx->y2d[vi]);
+    //         }
 
-            fprintf(wf, "# intersection_polygon count=%d area_fixed=%lld centroid=(%d,%d)\n", debug_clip_fixed_vcount, a2, cx, cy);
-            for (int i = 0; i < debug_clip_fixed_vcount; ++i) fprintf(wf, "%d %d\n", debug_clip_fixed_vx[i], debug_clip_fixed_vy[i]);
+    //         fprintf(wf, "# intersection_polygon count=%d area_fixed=%lld centroid=(%d,%d)\n", debug_clip_fixed_vcount, a2, cx, cy);
+    //         for (int i = 0; i < debug_clip_fixed_vcount; ++i) fprintf(wf, "%d %d\n", debug_clip_fixed_vx[i], debug_clip_fixed_vy[i]);
 
-            fclose(wf);
-            printf("Wrote debug file: centroid.txt (face1=%d face2=%d vertices=%d)\n", f1, f2, debug_clip_fixed_vcount);
-        } else {
-            printf("Failed to open centroid.txt for writing\n");
-        }
-    }
+    //         fclose(wf);
+    //         printf("Wrote debug file: centroid.txt (face1=%d face2=%d vertices=%d)\n", f1, f2, debug_clip_fixed_vcount);
+    //     } else {
+    //         printf("Failed to open centroid.txt for writing\n");
+    //     }
+    // }
 
     /* Preserve original display flags so we can restore them after the graphical inspection */
     unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
@@ -4752,6 +4752,25 @@ static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py) {
  * Tests executed in the order requested by the UI design and records textual lines.
  */
 segment "compare_faces_diagnostic";
+/* Helper: dump diagnostic results into a text file (appends).
+ * The filename uses the convention f<id1>VSf<id2>.txt so each pair gets
+ * its own file.  A header line and all saved result_text entries are
+ * written before closing the file.
+ */
+static void dump_compare_results_to_file(const CompareFacesResult *out, int f1, int f2) {
+    if (!out) return;
+    char fname[64];
+    sprintf(fname, "f%dVSf%d.txt", f1, f2);
+    FILE *f = fopen(fname, "a");
+    if (!f) return;
+    fprintf(f, "=== Face pair: f%d vs f%d ===\n", f1, f2);
+    for (int i = 0; i < out->results_count; ++i) {
+        fprintf(f, "%s\n", out->results_text[i]);
+    }
+    fprintf(f, "\n");
+    fclose(f);
+}
+
 static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out) {
     if (!model || !out) return;
     FaceArrays3D* faces = &model->faces;
@@ -5159,6 +5178,8 @@ static void inspect_face_pair_ui(Model3D* model) {
         } else if (key == 10) { /* Down arrow: decrement face1 */
             f1 = (f1 - 1 + face_count) % face_count;
             if (face_count > 1 && f1 == f2) f1 = (f1 - 1 + face_count) % face_count;
+        } else if (key == 'F' || key == 'f') { /* dump current diagnostic to file */
+            dump_compare_results_to_file(&r, f1, f2);
         } else if (key == 32) { /* SPACE -> compact textual summary (80x24) + optional verbose */
             /* restore QuickDraw and enter text-mode */
             framePolyOnly = old_frame;
