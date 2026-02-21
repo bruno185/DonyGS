@@ -2083,11 +2083,39 @@ void painter_newell_sanchaV3(Model3D* model, int face_count) {
             if (faces->maxy[target] <= faces->miny[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
             if (!projected_polygons_overlap(model, f, target)) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
             if (iidx < pos) {
-                if (pair_plane_after(model, f, target)) { best_move = iidx; move_before = 1; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break; }
+                /* Geometric plane test: does `f` belong after `target`? */
+                if (pair_plane_after(model, f, target)) {
+                    best_move = iidx; move_before = 1; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break;
+                }
+                /* Fallback: plane tests inconclusive -> use hierarchical ray-cast (QD→SH→BBOX) to break tie */
+                {
+                    int rc = ray_cast_hierarchical(model, f, target);
+                    if (rc == -1) { /* `f` is closer than `target` => `f` should be after `target` */
+                        best_move = iidx; move_before = 1; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break;
+                    } else if (rc == 1) {
+                        /* ray confirms current ordering (f before target) */
+                        if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue;
+                    }
+                    /* rc == 0 -> undetermined, fall through to mark pair_done below */
+                }
             } else {
-                if (pair_plane_before(model, f, target)) { best_move = iidx; move_before = 0; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break; }
+                /* Geometric plane test: does `f` belong before `target`? */
+                if (pair_plane_before(model, f, target)) {
+                    best_move = iidx; move_before = 0; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break;
+                }
+                /* Fallback: plane tests inconclusive -> use hierarchical ray-cast (QD→SH→BBOX) to break tie */
+                {
+                    int rc = ray_cast_hierarchical(model, f, target);
+                    if (rc == 1) { /* `f` is farther than `target` => `f` should be before `target` */
+                        best_move = iidx; move_before = 0; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break;
+                    } else if (rc == -1) {
+                        /* ray confirms current ordering (f after target) */
+                        if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue;
+                    }
+                    /* rc == 0 -> undetermined, fall through to mark pair_done below */
+                }
             }
-            if (pair_done) pair_done[idx1] = pair_done[idx2] = 1;
+            if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; 
         }
         if (best_move != -1) {
             int insert_idx;
@@ -4113,6 +4141,32 @@ static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
     else return 0;
 }
 
+/* Hierarchical ray-cast: prefer QD centroid, then SH centroid, then bbox center */
+static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
+    if (!model) return 0;
+    int cx = 0, cy = 0; long long area2 = 0; int rc = 0; int fallback = 0;
+
+    /* 1) Prefer QuickDraw region centroid (most representative for complex overlaps) */
+    if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &cx, &cy, &area2) && area2 != 0) {
+        rc = ray_cast_at(model, f1, f2, cx, cy);
+        if (rc != 0) return rc;
+    }
+
+    /* 2) Try Sutherland–Hodgman centroid */
+    area2 = 0; fallback = 0;
+    if (compute_intersection_centroid_ordered_fixed_tryboth(model, f1, f2, &cx, &cy, &area2, &fallback) && area2 != 0) {
+        rc = ray_cast_at(model, f1, f2, cx, cy);
+        if (rc != 0) return rc;
+    }
+
+    /* 3) Fallback to bbox center */
+    if (compute_bbox_intersection_center(model, f1, f2, &cx, &cy)) {
+        return ray_cast_at(model, f1, f2, cx, cy);
+    }
+
+    return 0;
+}
+
 /* Compute center of intersection of two faces' projected axis-aligned bboxes.
  * Returns 1 and writes (*outx,*outy) on success, 0 if no intersection or invalid ids.
  */
@@ -4702,8 +4756,6 @@ static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd,
     if (!model || !out) return;
     FaceArrays3D* faces = &model->faces;
     memset(out, 0, sizeof(*out));
-    /* log start of comparison */
-    { /* compare_faces_diagnostic start trace removed */ }
 
     /* 1) Z-range test (timed) */
     {
@@ -5115,26 +5167,59 @@ static void inspect_face_pair_ui(Model3D* model) {
             endgraph(); DoText();
 
             /* Compact summary designed to fit 80x24 */
-            printf("\n=== Face pair: f%d vs f%d ===\n", f1, f2);
+            printf("\n=== Face pair: f%d vs f%d ===\n\n", f1, f2);
 
-            /* Second line: report which face is in front according to sorted list */
+            /* sorted list position */
             {
-                int pos1 = -1, pos2 = -1;
-                for (int ii = 0; ii < faces->face_count; ++ii) {
-                    int fid = faces->sorted_face_indices[ii];
-                    if (fid == f1) pos1 = ii;
-                    if (fid == f2) pos2 = ii;
-                    if (pos1 >= 0 && pos2 >= 0) break;
+                int pos1=-1,pos2=-1;
+                for(int ii=0;ii<faces->face_count;++ii){
+                    int fid=faces->sorted_face_indices[ii];
+                    if(fid==f1) pos1=ii;
+                    if(fid==f2) pos2=ii;
+                    if(pos1>=0 && pos2>=0) break;
                 }
-                if (pos1 >= 0 && pos2 >= 0) {
-                    if (pos1 > pos2) printf("Sorted-list: face %d is in front (pos %d vs %d)\n", f1, pos1, pos2);
-                    else if (pos2 > pos1) printf("Sorted-list: face %d is in front (pos %d vs %d)\n", f2, pos2, pos1);
-                    else printf("Sorted-list: undetermined (same pos=%d)\n", pos1);
+                if(pos1>=0 && pos2>=0){
+                    if(pos1>pos2) printf("Sorted-list: f%d front (pos %d>%d)\n",f1,pos1,pos2);
+                    else if(pos2>pos1) printf("Sorted-list: f%d front (pos %d>%d)\n",f2,pos2,pos1);
+                    else printf("Sorted-list: tie (pos=%d)\n",pos1);
                 } else printf("Sorted-list: unavailable\n");
             }
 
-            printf("Overlap: %s\n\n", r.poly_overlap ? "yes" : "no");
+            /* combine key tests in one line */
+            // printf("\n"); /* blank line before BBOX info */
+            printf("Tests: Z-range = %s ; Bbox = %s ; 3D = %s ; Poly = %s\n",
+                   (r.z_verdict==1?"f1<f2":(r.z_verdict==2?"f2<f1":"?") ),
+                   (r.bbox_ok?"yes":"no"),
+                   (r.geo_verdict==1?"f1":(r.geo_verdict==2?"f2":"?")),
+                   (r.poly_overlap?"yes":"no"));
 
+            printf("Ray offsets: bbox = %d ; sh = %d ; qd = %d\n", r.bbox_raycast,r.sh_raycast,r.qd_raycast);
+            printf("\n"); /* blank line before detailed info */
+
+            /* face equations and Z stats on one line each */
+            {
+                float a1=(float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
+                float b1=(float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
+                float c1=(float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
+                float d1=(float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
+                printf("F%d plane: a = %.2f ; b = %.2f ; c = %.2f ; d = %.2f\n",
+                       f1,a1,b1,c1,d1);
+                printf("Zmin=%.2f ; Zmean=%.2f ; Zmax=%.2f\n",
+                       FIXED_TO_FLOAT(faces->z_min[f1]),FIXED_TO_FLOAT(faces->z_mean[f1]),FIXED_TO_FLOAT(faces->z_max[f1]));
+            }
+            printf("\n"); // blank line between faces
+            {
+                float a2=(float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
+                float b2=(float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
+                float c2=(float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
+                float d2=(float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
+                printf("F%d plane: a = %.2f ; b = %.2f ; c = %.2f ; d = %.2f\n",
+                       f2,a2,b2,c2,d2);
+                printf("Zmin=%.2f ; Zmean=%.2f ; Zmax=%.2f\n",
+                       FIXED_TO_FLOAT(faces->z_min[f2]),FIXED_TO_FLOAT(faces->z_mean[f2]),FIXED_TO_FLOAT(faces->z_max[f2]));
+            }
+
+            printf("\n"); /* blank line before BBOX info */
             /* 1) Bbox (single line) - now shows rect + OK/KO */
             if (r.bbox_ok) {
                 int bcx = (r.bbox_ix0 + r.bbox_ix1) / 2;
@@ -5186,40 +5271,6 @@ static void inspect_face_pair_ui(Model3D* model) {
                     else printf("\n   -> undetermined\n");
                 } else printf("dist:N/A  -> undetermined\n");
             } else printf("\n3) QD KO rect=none\n");
-
-            /* Compact face centroid lines (one line per face) */
-            {
-                int fn1 = faces->vertex_count[f1];
-                double fx1=0.0, fy1=0.0, fz1=0.0, ox1=0.0, oy1=0.0, oz1=0.0; int pcx1=0, pcy1=0;
-                if (fn1>0) {
-                    for (int i=0;i<fn1;++i) { int vid = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1]+i]-1; fx1 += FIXED_TO_FLOAT(model->vertices.x[vid]); fy1 += FIXED_TO_FLOAT(model->vertices.y[vid]); fz1 += FIXED_TO_FLOAT(model->vertices.z[vid]); ox1 += FIXED_TO_FLOAT(model->vertices.xo[vid]); oy1 += FIXED_TO_FLOAT(model->vertices.yo[vid]); oz1 += FIXED_TO_FLOAT(model->vertices.zo[vid]); pcx1 += model->vertices.x2d[vid]; pcy1 += model->vertices.y2d[vid]; }
-                    fx1/=fn1; fy1/=fn1; fz1/=fn1; ox1/=fn1; oy1/=fn1; oz1/=fn1; pcx1/=fn1; pcy1/=fn1;
-                }
-                int fn2 = faces->vertex_count[f2];
-                double fx2=0.0, fy2=0.0, fz2=0.0, ox2=0.0, oy2=0.0, oz2=0.0; int pcx2=0, pcy2=0;
-                if (fn2>0) {
-                    for (int i=0;i<fn2;++i) { int vid = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f2]+i]-1; fx2 += FIXED_TO_FLOAT(model->vertices.x[vid]); fy2 += FIXED_TO_FLOAT(model->vertices.y[vid]); fz2 += FIXED_TO_FLOAT(model->vertices.z[vid]); ox2 += FIXED_TO_FLOAT(model->vertices.xo[vid]); oy2 += FIXED_TO_FLOAT(model->vertices.yo[vid]); oz2 += FIXED_TO_FLOAT(model->vertices.zo[vid]); pcx2 += model->vertices.x2d[vid]; pcy2 += model->vertices.y2d[vid]; }
-                    fx2/=fn2; fy2/=fn2; fz2/=fn2; ox2/=fn2; oy2/=fn2; oz2/=fn2; pcx2/=fn2; pcy2/=fn2;
-                }
-                printf("\nF%d file=(%.3f,%.3f,%.3f) obs=(%.3f,%.3f,%.3f) 2D=(%d,%d)\n", f1, fx1, fy1, fz1, ox1, oy1, oz1, pcx1, pcy1);
-                {
-                    float a1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
-                    float b1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
-                    float c1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
-                    float d1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
-                    printf("Plane equation: a=%f b=%f c=%f d=%f\n", a1, b1, c1, d1);
-                    printf("Z min: %.6f   ;   Z mean: %.6f   ;   Z max: %.6f\n", FIXED_TO_FLOAT(faces->z_min[f1]), FIXED_TO_FLOAT(faces->z_mean[f1]), FIXED_TO_FLOAT(faces->z_max[f1]));
-                }
-                printf("\nF%d file=(%.3f,%.3f,%.3f) obs=(%.3f,%.3f,%.3f) 2D=(%d,%d)\n", f2, fx2, fy2, fz2, ox2, oy2, oz2, pcx2, pcy2);
-                {
-                    float a2 = (float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
-                    float b2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
-                    float c2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
-                    float d2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
-                    printf("Plane equation: a=%f b=%f c=%f d=%f\n", a2, b2, c2, d2);
-                    printf("Z min: %.6f   ;   Z mean: %.6f   ;   Z max: %.6f\n", FIXED_TO_FLOAT(faces->z_min[f2]), FIXED_TO_FLOAT(faces->z_mean[f2]), FIXED_TO_FLOAT(faces->z_max[f2]));
-                }
-            }
 
             /* Press any key to return to graphical inspector (verbose option removed) */
             printf("\nPress any key to return to graphical inspector...\n");
