@@ -7270,7 +7270,7 @@ int loadModel3D(Model3D* model, const char* filename) {
     } else {
         model->faces.face_count = fcount;
         /* compute 3D bounding boxes for all faces */
-        compute_face_bboxes3D(model);
+        
         check_intersect(model);  // Check for face overlaps in 3D and report
     }
     return 0;  // Success: model loaded (with or without faces)
@@ -8228,6 +8228,7 @@ static int face_edge_traverses_plane(Model3D* model, int fi, int fj) {
  */
 static void check_intersect(Model3D* model) {
     if (!model) return;
+    compute_face_bboxes3D(model);
     FaceArrays3D* faces = &model->faces;
     int fc = faces->face_count;
     /* no logging in check_intersect per request */
@@ -8236,6 +8237,9 @@ static void check_intersect(Model3D* model) {
         keypress();
         return;
     }
+
+    /* let user know the process may take some time */
+    printf("check_intersect: scanning %d faces, please wait...\n", fc);
 
     /* tolerance in fixed-point (16.16) */
     const Fixed32 eps = FLOAT_TO_FIXED(0.02f);
