@@ -10146,11 +10146,12 @@ segment "code22";
                 continue;
             }
             // Successfully loaded; ask the user about the overlap scan
-            printf("\nPerform 3D face overlap check? (y/N) ");
+            printf("\nPerform 3D face intersection check? (y/N) ");
             fflush(stdout);
             int cc = getchar();
+            int reply = cc; /* remember first character */
             while (cc != '\n' && cc != EOF) cc = getchar();
-            if (cc == 'y' || cc == 'Y') {
+            if (reply == 'y' || reply == 'Y') {
                 check_intersect(model);
             }
             break;
