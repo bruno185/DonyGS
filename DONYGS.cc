@@ -8232,7 +8232,7 @@ static void check_intersect(Model3D* model) {
     int fc = faces->face_count;
     /* no logging in check_intersect per request */
     if (fc <= 1) {
-        printf("check_intersect: not enough faces (%d)\n", fc);
+        /* no output when insufficient faces */
         keypress();
         return;
     }
@@ -8288,10 +8288,10 @@ static void check_intersect(Model3D* model) {
                      */
                     if (dx >= 0.0f && dy >= 0.0f) {
 
-                        printf("faces %d and %d overlap (dx=%.3f dy=%.3f dz=%.3f)\n", i, j, dx, dy, dz);
+                        /* overlap detected; previously printed details */
                         ++count;
                         if (faces_share_vertex_or_edge(faces, i, j)) {
-                            printf("   -> faces %d and %d share vertex/edge, skipping\n", i, j);
+                            /* share info suppressed */
 
                         } else {
                             double a1,b1,c1,d1, a2,b2,c2,d2;
@@ -8311,7 +8311,7 @@ static void check_intersect(Model3D* model) {
                                 }
                             }
                             if (coplanar) {
-                                printf("   -> faces %d and %d are coplanar, skipping\n", i, j);
+                                /* coplanar skip message suppressed */
 
                             }
                             if (!coplanar) {
@@ -8337,20 +8337,14 @@ static void check_intersect(Model3D* model) {
                                of j cross i, we want to split face i by plane j instead
                                of the usual orientation. */
                             if (cross_i_j == 2 && cross_j_i == 0) {
-                                printf("   -> two edges of face %d cross face %d; splitting face %d by plane %d\n",
-                                       i, j, i, j);
-
+                                /* two-edge reverse case, no output */
                                 if (split_face_by_plane(model, i, j, NULL, NULL, NULL, 0, 0)) {
-
                                     changed = 1;
                                     break;
                                 }
                             } else if (cross_j_i == 2 && cross_i_j == 0) {
-                                printf("   -> two edges of face %d cross face %d; splitting face %d by plane %d\n",
-                                       j, i, j, i);
-
+                                /* two-edge normal case, no output */
                                 if (split_face_by_plane(model, j, i, NULL, NULL, NULL, 0, 0)) {
-
                                     changed = 1;
                                     break;
                                 }
@@ -8358,22 +8352,14 @@ static void check_intersect(Model3D* model) {
                                 /* fall back to standard behaviour */
                                 if (cross_i_j > 0) {
                                     int force = (cross_i_j == 1);
-                                    printf("   -> edge of face %d cuts face %d (crosscount=%d); splitting face %d by plane %d\n",
-                                           i, j, cross_i_j, j, i);
-
                                     if (split_face_by_plane(model, j, i, NULL, NULL, NULL, 0, force)) {
-
                                         changed = 1;
                                         break;
                                     }
                                 }
                                 if (!changed && cross_j_i > 0) {
                                     int force = (cross_j_i == 1);
-                                    printf("   -> edge of face %d cuts face %d (crosscount=%d); splitting face %d by plane %d\n",
-                                           j, i, cross_j_i, i, j);
-
                                     if (split_face_by_plane(model, i, j, NULL, NULL, NULL, 0, force)) {
-
                                         changed = 1;
                                         break;
                                     }
@@ -8390,7 +8376,7 @@ static void check_intersect(Model3D* model) {
     /* summary suppressed per request (previously printed counts) */
     /* printf("Total overlapping pairs: %d\n", count); */
     /* printf("Total interpenetrating pairs: %d\n", ip_count); */
-    printf("Final face count: %d\n", faces->face_count);
+    /* final face count print removed */
 
 
     keypress();
