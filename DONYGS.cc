@@ -8387,8 +8387,9 @@ static void check_intersect(Model3D* model) {
             }
             if (changed) break;
     } while (changed);
-    printf("Total overlapping pairs: %d\n", count);
-    printf("Total interpenetrating pairs: %d\n", ip_count);
+    /* summary suppressed per request (previously printed counts) */
+    /* printf("Total overlapping pairs: %d\n", count); */
+    /* printf("Total interpenetrating pairs: %d\n", ip_count); */
     printf("Final face count: %d\n", faces->face_count);
 
 
