@@ -7270,8 +7270,7 @@ int loadModel3D(Model3D* model, const char* filename) {
     } else {
         model->faces.face_count = fcount;
         /* compute 3D bounding boxes for all faces */
-        
-        check_intersect(model);  // Check for face overlaps in 3D and report
+        /* overlap scan is controlled by caller */
     }
     return 0;  // Success: model loaded (with or without faces)
 }
@@ -10146,7 +10145,14 @@ segment "code22";
                 }
                 continue;
             }
-            // Successfully loaded
+            // Successfully loaded; ask the user about the overlap scan
+            printf("\nPerform 3D face overlap check? (y/N) ");
+            fflush(stdout);
+            int cc = getchar();
+            while (cc != '\n' && cc != EOF) cc = getchar();
+            if (cc == 'y' || cc == 'Y') {
+                check_intersect(model);
+            }
             break;
         }
 
