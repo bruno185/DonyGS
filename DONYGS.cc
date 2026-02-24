@@ -436,10 +436,18 @@ typedef struct {
     Fixed64 *plane_b;                     // per-face normalized normal Y (b) stored as Fixed64 (16.16)
     Fixed64 *plane_c;                     // per-face normalized normal Z (c) stored as Fixed64 (16.16)
     Fixed64 *plane_d;                     // per-face D term for plane equation stored as Fixed64 (16.16)
-    int *minx;                            // cached 2D bounding box (projected x/y)
+    /* 2D cached projected bbox (x/y) */
+    int *minx;
     int *maxx;
     int *miny;
     int *maxy;
+    /* 3D object-space bbox, coordinates stored as Fixed32 */
+    Fixed32 *minx3;
+    Fixed32 *maxx3;
+    Fixed32 *miny3;
+    Fixed32 *maxy3;
+    Fixed32 *minz3;
+    Fixed32 *maxz3;
     int *display_flag;
     int *sorted_face_indices;            // Points to: [face_id1, face_id2, ...] sorted by z_max
     int face_count;                      // Actual number of loaded faces
@@ -1708,7 +1716,8 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     // Partition faces: back-faces (plane_d <= 0) go to beginning, front-faces after
     // This mirrors painter_correct's partition so that passes 1/2 operate within
     // homogenous groups (back-only then front-only) which simplifies plane tests.
-    int *temp_indices = (int*)malloc(n * sizeof(int)); if (!temp_indices) { printf("Error: painter_correctV2 malloc temp_indices failed\n"); return 0; }
+    int *temp_indices = (int*)malloc(n * sizeof(int)); 
+    if (!temp_indices) { printf("Error: painter_correctV2 malloc temp_indices failed\n"); return 0; }
     int back_idx = 0, front_idx = 0;
     for (int i = 0; i < n; ++i) {
         int f = faces->sorted_face_indices[i];
@@ -6805,6 +6814,13 @@ Model3D* createModel3D(void) {
     model->orig_x = NULL;
     model->orig_y = NULL;
     model->orig_z = NULL;
+    /* initialize new 3D bbox pointers */
+    model->faces.minx3 = NULL;
+    model->faces.maxx3 = NULL;
+    model->faces.miny3 = NULL;
+    model->faces.maxy3 = NULL;
+    model->faces.minz3 = NULL;
+    model->faces.maxz3 = NULL;
 
     /* Auto-fit suggestion defaults */
     model->auto_suggested_distance = 0;
@@ -7133,6 +7149,12 @@ void destroyModel3D(Model3D* model) {
         if (model->faces.maxx) free(model->faces.maxx);
         if (model->faces.miny) free(model->faces.miny);
         if (model->faces.maxy) free(model->faces.maxy);
+        if (model->faces.minx3) free(model->faces.minx3);
+        if (model->faces.maxx3) free(model->faces.maxx3);
+        if (model->faces.miny3) free(model->faces.miny3);
+        if (model->faces.maxy3) free(model->faces.maxy3);
+        if (model->faces.minz3) free(model->faces.minz3);
+        if (model->faces.maxz3) free(model->faces.maxz3);
         if (model->faces.display_flag) free(model->faces.display_flag);
         if (model->faces.sorted_face_indices) free(model->faces.sorted_face_indices);
 
@@ -7166,6 +7188,62 @@ segment "code08";
  * - Face reading failure: warning but continue
  *   (vertices-only model remains usable)
  */
+
+/* Compute object-space axis-aligned bounding box for every face.  Allocates
+ * arrays inside faces->minx3 etc.  Must be called after vertices and faces are
+ * loaded; it does nothing if face_count is zero.
+ */
+static void compute_face_bboxes3D(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int fc = faces->face_count;
+    if (fc <= 0) return;
+    /* allocate arrays (free previous if any) */
+    if (faces->minx3) free(faces->minx3);
+    if (faces->maxx3) free(faces->maxx3);
+    if (faces->miny3) free(faces->miny3);
+    if (faces->maxy3) free(faces->maxy3);
+    if (faces->minz3) free(faces->minz3);
+    if (faces->maxz3) free(faces->maxz3);
+    faces->minx3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->maxx3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->miny3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->maxy3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->minz3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->maxz3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    if (!faces->minx3||!faces->maxx3||!faces->miny3||!faces->maxy3||!faces->minz3||!faces->maxz3) {
+        /* if allocation failed, free and clear */
+        free(faces->minx3); free(faces->maxx3); free(faces->miny3);
+        free(faces->maxy3); free(faces->minz3); free(faces->maxz3);
+        faces->minx3 = faces->maxx3 = faces->miny3 = faces->maxy3 = faces->minz3 = faces->maxz3 = NULL;
+        return;
+    }
+    for (int fi = 0; fi < fc; ++fi) {
+        int cnt = faces->vertex_count[fi];
+        int off = faces->vertex_indices_ptr[fi];
+        Fixed32 mnx=0,mxx=0,mny=0,mxy=0,mnz=0,mxz=0;
+        for (int k = 0; k < cnt; ++k) {
+            int vi = faces->vertex_indices_buffer[off + k] - 1;
+            Fixed32 x = vtx->x[vi];
+            Fixed32 y = vtx->y[vi];
+            Fixed32 z = vtx->z[vi];
+            if (k==0 || x < mnx) mnx = x;
+            if (k==0 || x > mxx) mxx = x;
+            if (k==0 || y < mny) mny = y;
+            if (k==0 || y > mxy) mxy = y;
+            if (k==0 || z < mnz) mnz = z;
+            if (k==0 || z > mxz) mxz = z;
+        }
+        faces->minx3[fi] = mnx;
+        faces->maxx3[fi] = mxx;
+        faces->miny3[fi] = mny;
+        faces->maxy3[fi] = mxy;
+        faces->minz3[fi] = mnz;
+        faces->maxz3[fi] = mxz;
+    }
+}
+
 int loadModel3D(Model3D* model, const char* filename) {
     // Input parameter validation
     if (model == NULL || filename == NULL) {
@@ -7191,8 +7269,1130 @@ int loadModel3D(Model3D* model, const char* filename) {
         model->faces.face_count = 0;  // No faces available
     } else {
         model->faces.face_count = fcount;
+        /* compute 3D bounding boxes for all faces */
+        compute_face_bboxes3D(model);
+        check_intersect(model);  // Check for face overlaps in 3D and report
     }
     return 0;  // Success: model loaded (with or without faces)
+}
+
+/*
+ * Helper: compute the plane equation (a x + b y + c z + d = 0) for a face.
+ * Uses the first three vertices of the face; if the face has <3 vertices the
+ * coefficients are zeroed.  The coordinates are taken from the original
+ * object-space arrays (fixed-point values cast to double).
+ */
+/* compute_plane_float: same as compute_face_plane but converts
+   fixed-point coordinates to floating values before computing coefficients.
+   The resulting plane is in the same units as FIXED_TO_FLOAT() and thus
+   compatible with distance calculations that also use FIXED_TO_FLOAT. */
+static void compute_face_plane_float(Model3D* model, int fidx,
+                                     double *a, double *b, double *c, double *d) {
+    if (!model || fidx < 0 || fidx >= model->faces.face_count) {
+        *a = *b = *c = *d = 0.0;
+        return;
+    }
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[fidx];
+    if (cnt < 3) {
+        *a = *b = *c = *d = 0.0;
+        return;
+    }
+    int off = faces->vertex_indices_ptr[fidx];
+    int vi0 = faces->vertex_indices_buffer[off] - 1;
+    int vi1 = faces->vertex_indices_buffer[off + 1] - 1;
+    int vi2 = faces->vertex_indices_buffer[off + 2] - 1;
+    double x0 = FIXED_TO_FLOAT(vtx->x[vi0]);
+    double y0 = FIXED_TO_FLOAT(vtx->y[vi0]);
+    double z0 = FIXED_TO_FLOAT(vtx->z[vi0]);
+    double x1 = FIXED_TO_FLOAT(vtx->x[vi1]);
+    double y1 = FIXED_TO_FLOAT(vtx->y[vi1]);
+    double z1 = FIXED_TO_FLOAT(vtx->z[vi1]);
+    double x2 = FIXED_TO_FLOAT(vtx->x[vi2]);
+    double y2 = FIXED_TO_FLOAT(vtx->y[vi2]);
+    double z2 = FIXED_TO_FLOAT(vtx->z[vi2]);
+    double ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
+    double vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
+    *a = uy * vz - uz * vy;
+    *b = uz * vx - ux * vz;
+    *c = ux * vy - uy * vx;
+    *d = -(*a * x0 + *b * y0 + *c * z0);
+}
+
+/* original compute_face_plane retained for callers that expect fixed-coord
+   planes; kept so that older routines (e.g. check_intersect) continue to
+   operate exactly as before. */
+static void compute_face_plane(Model3D* model, int fidx,
+                               double *a, double *b, double *c, double *d) {
+    if (!model || fidx < 0 || fidx >= model->faces.face_count) {
+        *a = *b = *c = *d = 0.0;
+        return;
+    }
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[fidx];
+    if (cnt < 3) {
+        *a = *b = *c = *d = 0.0;
+        return;
+    }
+    int off = faces->vertex_indices_ptr[fidx];
+    int vi0 = faces->vertex_indices_buffer[off] - 1;
+    int vi1 = faces->vertex_indices_buffer[off + 1] - 1;
+    int vi2 = faces->vertex_indices_buffer[off + 2] - 1;
+    double x0 = (double)vtx->x[vi0];
+    double y0 = (double)vtx->y[vi0];
+    double z0 = (double)vtx->z[vi0];
+    double x1 = (double)vtx->x[vi1];
+    double y1 = (double)vtx->y[vi1];
+    double z1 = (double)vtx->z[vi1];
+    double x2 = (double)vtx->x[vi2];
+    double y2 = (double)vtx->y[vi2];
+    double z2 = (double)vtx->z[vi2];
+    double ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
+    double vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
+    *a = uy * vz - uz * vy;
+    *b = uz * vx - ux * vz;
+    *c = ux * vy - uy * vx;
+    *d = -(*a * x0 + *b * y0 + *c * z0);
+}
+
+/*
+ * Return non-zero if any edge of face `fi` crosses the infinite plane of
+ * face `fj`.  Crossing is detected when the signed distance of an edge's
+ * endpoints to `fj`'s plane have opposite signs.  Zero distance is treated
+ * as touching and does not count as crossing.
+ */
+/*
+ * Return !0 if faces i and j share a vertex or an entire edge.
+ * Comparison is done on the original 1-based vertex indices stored in
+ * the face buffers.  Sharing just one vertex is sufficient to consider the
+ * pair "touching" for the purposes of the interpenetration test.
+ */
+static int faces_share_vertex_or_edge(FaceArrays3D* faces, int i, int j) {
+    int cnti = faces->vertex_count[i];
+    int offi = faces->vertex_indices_ptr[i];
+    int cntj = faces->vertex_count[j];
+    int offj = faces->vertex_indices_ptr[j];
+    for (int a = 0; a < cnti; ++a) {
+        int vi = faces->vertex_indices_buffer[offi + a];
+        for (int b = 0; b < cntj; ++b) {
+            if (vi == faces->vertex_indices_buffer[offj + b]) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * Return non-zero if any edge of face `ei` actually intersects the interior of
+ * face `fj`.  This refines the previous plane-crossing test by computing the
+ * intersection point and verifying it lies within the polygon of `fj`.
+ */
+
+
+/* Helper: return !0 if an edge of face `ei` crosses the interior of
+ * face `fj` **strictly** (intersection point lies in the polygon interior,
+ * not on a boundary).  This is used to decide whether a pair really
+ * interpenetrates for the purpose of counting, ignoring mere boundary
+ * contacts that do not represent true crossings.
+ */
+/* forward declaration of helper used by edge_crosses_interior */
+static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_local);
+
+static int edge_crosses_interior(Model3D* model, int ei, int fj) {
+    double a, b, c, d;
+    compute_face_plane(model, fj, &a, &b, &c, &d);
+    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
+
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[ei]; if (cnt < 2) return 0;
+
+    /* choose 2D projection plane */
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj = (abs_a >= abs_b && abs_a >= abs_c) ? 0
+            : (abs_b >= abs_a && abs_b >= abs_c) ? 1 : 2;
+
+    /* build polygon for fj */
+    int nfj = faces->vertex_count[fj];
+    int *vx = (int*)malloc(sizeof(int) * nfj);
+    int *vy = (int*)malloc(sizeof(int) * nfj);
+    for (int m = 0; m < nfj; ++m) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
+        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
+        int ix, iy;
+        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
+        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
+        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
+        vx[m] = ix; vy[m] = iy;
+    }
+
+    /* we'll call strict_inside below with the current polygon data; the
+       real definition lives after this function (see forward declaration
+       above). */
+
+    int result = 0;
+    for (int k = 0; k < cnt && !result; ++k) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
+        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k+1)%cnt)] - 1;
+        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
+        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
+        const double plane_eps = 0.02;
+        double sdA = a*Ax + b*Ay + c*Az + d;
+        double sdB = a*Bx + b*By + c*Bz + d;
+        if (fabs(sdA) < plane_eps) sdA = 0.0;
+        if (fabs(sdB) < plane_eps) sdB = 0.0;
+        if (sdA * sdB < 0.0) {
+            double t = -sdA / (sdB - sdA);
+            double Px = Ax + t*(Bx - Ax);
+            double Py = Ay + t*(By - Ay);
+            double Pz = Az + t*(Bz - Az);
+            int px, py;
+            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
+            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
+            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
+            if (strict_inside(px, py, nfj, vx, vy)) result = 1;
+        }
+    }
+    free(vx); free(vy);
+    return result;
+}
+
+/* Definition of strict_inside helper moved outside of any other function
+   to satisfy the compiler.  See the forward declaration at the top of this
+   section. */
+static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_local) {
+    int m;
+    /* inside or boundary? reuse existing test */
+    if (!point_in_poly_arrays_int(px, py, nfj_local, vx_local, vy_local))
+        return 0;
+    /* if point equals any vertex or lies on any edge, reject */
+    for (m = 0; m < nfj_local; ++m) {
+        int x1 = vx_local[m], y1 = vy_local[m];
+        if (px == x1 && py == y1) return 0;
+        {
+            int m2 = (m + 1) % nfj_local;
+            int x2 = vx_local[m2], y2 = vy_local[m2];
+            long long dx = (long long)x2 - x1, dy = (long long)y2 - y1;
+            long long dxp = (long long)px - x1, dyp = (long long)py - y1;
+            if (dx * dyp == dy * dxp) {
+                /* collinear, now check within segment bounds */
+                if ((px >= x1 && px <= x2) || (px >= x2 && px <= x1)) {
+                    if ((py >= y1 && py <= y2) || (py >= y2 && py <= y1))
+                        return 0;
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+/* existing count_edge_crossings follows here unchanged */
+static int count_edge_crossings(Model3D* model, int ei, int fj) {
+    int count = 0;
+    double a, b, c, d;
+    compute_face_plane(model, fj, &a, &b, &c, &d);
+    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[ei];
+    if (cnt < 2) return 0;
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj;
+    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
+    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
+    else proj = 2;
+    int nfj = faces->vertex_count[fj];
+    int *vx = (int*)malloc(sizeof(int) * nfj);
+    int *vy = (int*)malloc(sizeof(int) * nfj);
+    for (int m = 0; m < nfj; ++m) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
+        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
+        int ix, iy;
+        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
+        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
+        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
+        vx[m] = ix;
+        vy[m] = iy;
+    }
+    for (int k = 0; k < cnt; ++k) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
+        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k + 1) % cnt)] - 1;
+        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
+        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
+        const double plane_eps = 0.02;
+        double sdA = a*Ax + b*Ay + c*Az + d;
+        double sdB = a*Bx + b*By + c*Bz + d;
+        if (fabs(sdA) < plane_eps) sdA = 0.0;
+        if (fabs(sdB) < plane_eps) sdB = 0.0;
+        if (sdA == 0.0 && sdB == 0.0) {
+            int pax, pay, pbx, pby;
+            if (proj == 0) { pax = FIXED_TO_INT((Fixed32)Ay); pay = FIXED_TO_INT((Fixed32)Az);
+                             pbx = FIXED_TO_INT((Fixed32)By); pby = FIXED_TO_INT((Fixed32)Bz); }
+            else if (proj == 1) { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Az);
+                                  pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)Bz); }
+            else { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Ay);
+                   pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)By); }
+            if (point_in_poly_arrays_int(pax, pay, nfj, vx, vy) ||
+                point_in_poly_arrays_int(pbx, pby, nfj, vx, vy)) {
+                count++;
+            }
+            continue;
+        }
+        if (sdA * sdB < 0.0) {
+            double t = -sdA / (sdB - sdA);
+            double Px = Ax + t*(Bx - Ax);
+            double Py = Ay + t*(By - Ay);
+            double Pz = Az + t*(Bz - Az);
+            int px, py;
+            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
+            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
+            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
+            if (point_in_poly_arrays_int(px, py, nfj, vx, vy)) {
+                count++;
+            }
+        }
+    }
+    free(vx); free(vy);
+    return count;
+}
+
+static int edge_intersects_face(Model3D* model, int ei, int fj) {
+
+    double a, b, c, d;
+    compute_face_plane(model, fj, &a, &b, &c, &d);
+    if (a == 0.0 && b == 0.0 && c == 0.0) {
+        /* degenerate plane */
+        return 0;
+    }
+
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[ei];
+    if (cnt < 2) return 0;
+
+    /* choose projection plane by largest component of normal */
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj; // 0=drop x,1=drop y,2=drop z
+    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
+    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
+    else proj = 2;
+
+    /* build projected vertex arrays for face fj */
+    int nfj = faces->vertex_count[fj];
+    int *vx = (int*)malloc(sizeof(int) * nfj);
+    int *vy = (int*)malloc(sizeof(int) * nfj);
+    for (int m = 0; m < nfj; ++m) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
+        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
+        int ix, iy;
+        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
+        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
+        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
+        vx[m] = ix;
+        vy[m] = iy;
+    }
+
+    for (int k = 0; k < cnt; ++k) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
+        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k + 1) % cnt)] - 1;
+        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
+        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
+        const double plane_eps = 0.02; /* tolerance */
+        double sdA = a*Ax + b*Ay + c*Az + d;
+        double sdB = a*Bx + b*By + c*Bz + d;
+        if (fabs(sdA) < plane_eps) sdA = 0.0;
+        if (fabs(sdB) < plane_eps) sdB = 0.0;
+        /* if both endpoints lie on plane, we still need to check whether the
+           segment actually overlaps the interior of fj (coplanar case). */
+        if (sdA == 0.0 && sdB == 0.0) {
+            /* project A and B to 2D and test if either lies inside the
+               polygon (ignoring boundary).  This catches the t.obj case
+               where the entire vertical face sits in the horizontal plane. */
+            int pax, pay, pbx, pby;
+            if (proj == 0) { pax = FIXED_TO_INT((Fixed32)Ay); pay = FIXED_TO_INT((Fixed32)Az);
+                             pbx = FIXED_TO_INT((Fixed32)By); pby = FIXED_TO_INT((Fixed32)Bz); }
+            else if (proj == 1) { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Az);
+                                  pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)Bz); }
+            else { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Ay);
+                   pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)By); }
+            if (point_in_poly_arrays_int(pax, pay, nfj, vx, vy) ||
+                point_in_poly_arrays_int(pbx, pby, nfj, vx, vy)) {
+
+
+                free(vx); free(vy);
+                return 1;
+            }
+            /* otherwise continue to next edge */
+            continue;
+        }
+        if (sdA * sdB < 0.0) {
+            double t = -sdA / (sdB - sdA);
+            double Px = Ax + t*(Bx - Ax);
+            double Py = Ay + t*(By - Ay);
+            double Pz = Az + t*(Bz - Az);
+            int px, py;
+            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
+            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
+            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
+
+            if (point_in_poly_arrays_int(px, py, nfj, vx, vy)) {
+                free(vx); free(vy);
+                return 1;
+            } else {
+            }
+        }
+    }
+
+    free(vx); free(vy);
+    return 0;
+}
+
+/* utility: append a new vertex to the model's vertex arrays and return
+   0-based index, or -1 if capacity exceeded */
+static int add_vertex(Model3D* model, Fixed32 x, Fixed32 y, Fixed32 z) {
+    if (!model) return -1;
+    VertexArrays3D* vtx = &model->vertices;
+    if (vtx->vertex_count >= MAX_VERTICES) return -1;
+    int idx = vtx->vertex_count;
+    vtx->x[idx]  = x;
+    vtx->y[idx]  = y;
+    vtx->z[idx]  = z;
+    vtx->xo[idx] = 0;
+    vtx->yo[idx] = 0;
+    vtx->zo[idx] = 0;
+    vtx->x2d[idx] = 0;
+    vtx->y2d[idx] = 0;
+    vtx->vertex_count++;
+    return idx;
+}
+
+/* utility: remove consecutive duplicate indices from a polygon list; also
+   check wrap-around duplicates */
+static void cleanup_list(int *arr, int *n) {
+    if (*n <= 1) return;
+    int w = 0;
+    for (int i = 0; i < *n; ++i) {
+        if (i == 0 || arr[i] != arr[i-1]) {
+            arr[w++] = arr[i];
+        }
+    }
+    if (w > 1 && arr[0] == arr[w-1]) w--;
+    *n = w;
+}
+
+/* Remove any duplicate index appearing later in the list, preserving only
+   the first occurrence. This prevents repeated vertices from creating
+   self-intersections. */
+static void remove_duplicates(int *arr, int *n) {
+    int w = 0;
+    for (int i = 0; i < *n; ++i) {
+        int found = 0;
+        for (int j = 0; j < w; ++j) {
+            if (arr[i] == arr[j]) { found = 1; break; }
+        }
+        if (!found) arr[w++] = arr[i];
+    }
+    *n = w;
+}
+
+/* Clip the polygon of face `fidx` against the half-space defined by
+   plane `a*x + b*y + c*z + d >= 0` when `keepPositive` is true, otherwise
+   the complementary <=0 side is retained.  The resulting vertex indices are
+   written into `outbuf` with count returned via `*outcnt`.  Intersection
+   points are created with `add_vertex`. */
+static void clip_face_plane(Model3D* model, int fidx,
+                             double a, double b, double c, double d,
+                             int keepPositive, int *outbuf, int *outcnt) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[fidx];
+    *outcnt = 0;
+    if (cnt <= 0) return;
+    int off = faces->vertex_indices_ptr[fidx];
+    int prev_vi = faces->vertex_indices_buffer[off] - 1;
+    double x = (double)vtx->x[prev_vi];
+    double y = (double)vtx->y[prev_vi];
+    double z = (double)vtx->z[prev_vi];
+    double sd_prev = a*x + b*y + c*z + d;
+    for (int k = 0; k < cnt; ++k) {
+        int vi = faces->vertex_indices_buffer[off + k] - 1;
+        x = (double)vtx->x[vi];
+        y = (double)vtx->y[vi];
+        z = (double)vtx->z[vi];
+        double sd = a*x + b*y + c*z + d;
+        int in_prev = keepPositive ? (sd_prev >= 0) : (sd_prev <= 0);
+        int in_curr = keepPositive ? (sd >= 0) : (sd <= 0);
+        if (in_curr) {
+            outbuf[*outcnt] = vi;
+            (*outcnt)++;
+        }
+        if (in_prev ^ in_curr) {
+            /* compute intersection point */
+            double t = sd_prev / (sd_prev - sd);
+            double ix = (double)vtx->x[prev_vi] + t * ((double)vtx->x[vi] - (double)vtx->x[prev_vi]);
+            double iy = (double)vtx->y[prev_vi] + t * ((double)vtx->y[vi] - (double)vtx->y[prev_vi]);
+            double iz = (double)vtx->z[prev_vi] + t * ((double)vtx->z[vi] - (double)vtx->z[prev_vi]);
+            int newvi = add_vertex(model,
+                                   FLOAT_TO_FIXED((float)ix),
+                                   FLOAT_TO_FIXED((float)iy),
+                                   FLOAT_TO_FIXED((float)iz));
+            if (newvi >= 0) {
+                outbuf[*outcnt] = newvi;
+                (*outcnt)++;
+            }
+        }
+        prev_vi = vi;
+        sd_prev = sd;
+    }
+}
+
+/* compute signed area of a polygon (vertex list) projected onto a plane
+   defined by normal (a,b,c).  returns positive for CCW orientation. */
+static double poly_signed_area(Model3D* model, int *list, int n,
+                               double a, double b, double c) {
+    if (n < 3) return 0.0;
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj;
+    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
+    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
+    else proj = 2;
+    VertexArrays3D* vtx = &model->vertices;
+    double area = 0;
+    for (int i = 0; i < n; ++i) {
+        int vi = list[i];
+        int vj = list[(i + 1) % n];
+        double x1,y1,x2,y2;
+        if (proj == 0) {
+            x1 = FIXED_TO_FLOAT(vtx->y[vi]); y1 = FIXED_TO_FLOAT(vtx->z[vi]);
+            x2 = FIXED_TO_FLOAT(vtx->y[vj]); y2 = FIXED_TO_FLOAT(vtx->z[vj]);
+        } else if (proj == 1) {
+            x1 = FIXED_TO_FLOAT(vtx->x[vi]); y1 = FIXED_TO_FLOAT(vtx->z[vi]);
+            x2 = FIXED_TO_FLOAT(vtx->x[vj]); y2 = FIXED_TO_FLOAT(vtx->z[vj]);
+        } else {
+            x1 = FIXED_TO_FLOAT(vtx->x[vi]); y1 = FIXED_TO_FLOAT(vtx->y[vi]);
+            x2 = FIXED_TO_FLOAT(vtx->x[vj]); y2 = FIXED_TO_FLOAT(vtx->y[vj]);
+        }
+        area += (x1 * y2 - x2 * y1);
+    }
+    return area * 0.5;
+}
+
+/* Reorder `list` of vertex indices (length `*n`) so that they are sorted
+   counter‑clockwise around the centroid when projected onto the plane of
+   face `fidx`.  This ensures a simple, non‑self‑intersecting polygon. */
+static void reorder_poly(Model3D* model, int fidx, int *list, int *n) {
+    if (!model || *n < 3) return;
+    /* compute projection plane from face normal */
+    double a, b, c, d;
+    compute_face_plane(model, fidx, &a, &b, &c, &d);
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj;
+    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
+    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
+    else proj = 2;
+
+    /* gather 2D coordinates */
+    double *px = (double*)malloc(sizeof(double) * (*n));
+    double *py = (double*)malloc(sizeof(double) * (*n));
+    if (!px || !py) {
+        free(px); free(py);
+        return;
+    }
+    VertexArrays3D* vtx = &model->vertices;
+    for (int i = 0; i < *n; ++i) {
+        int vi = list[i];
+        double X = (double)vtx->x[vi];
+        double Y = (double)vtx->y[vi];
+        double Z = (double)vtx->z[vi];
+        if (proj == 0) { px[i] = Y; py[i] = Z; }
+        else if (proj == 1) { px[i] = X; py[i] = Z; }
+        else { px[i] = X; py[i] = Y; }
+    }
+    /* compute centroid */
+    double cx = 0, cy = 0;
+    for (int i = 0; i < *n; ++i) { cx += px[i]; cy += py[i]; }
+    cx /= *n; cy /= *n;
+    /* compute angles */
+    double *ang = (double*)malloc(sizeof(double) * (*n));
+    if (!ang) { free(px); free(py); return; }
+    for (int i = 0; i < *n; ++i) {
+        ang[i] = atan2(py[i] - cy, px[i] - cx);
+    }
+    /* simple insertion sort on angles (small n) */
+    for (int i = 1; i < *n; ++i) {
+        int idx = list[i];
+        double a0 = ang[i];
+        int j = i - 1;
+        while (j >= 0 && ang[j] > a0) {
+            ang[j+1] = ang[j];
+            list[j+1] = list[j];
+            j--;
+        }
+        ang[j+1] = a0;
+        list[j+1] = idx;
+    }
+    /* ensure orientation matches original sign (ccw positive) */
+    double area = 0;
+    for (int i = 0; i < *n; ++i) {
+        int k = (i + 1) % *n;
+        double x1 = px[i], y1 = py[i];
+        double x2 = px[k], y2 = py[k];
+        area += (x1 * y2 - x2 * y1);
+    }
+    if (area < 0) {
+        /* reverse order */
+        for (int i = 0; i < *n/2; ++i) {
+            int t = list[i]; list[i] = list[*n-1-i]; list[*n-1-i] = t;
+        }
+    }
+    free(px); free(py); free(ang);
+}
+
+/* Split face `f1` by the infinite plane defined by face `f2`.  The
+   behaviour is unchanged from the previous implementation except that the
+   caller may supply an output buffer to receive the indices of any new
+   vertices generated along the cutting line (these are the intersection
+   points inserted during clipping).  This allows the caller to reuse the
+   same points when splitting the other face, ensuring geometric consistency.
+
+   Additionally, the caller may provide an optional array of
+   `constraint_verts` lying along the intersection line.  When supplied the
+   routine projects each candidate intersection point onto the line and
+   ignores those outside the interval spanned by the constraint points.  This
+   prevents the opposite face from being split by the full plane when only a
+   finite segment of the line lies within the overlapping region.
+
+   If `out_newverts` is non-null, up to `*out_n` indices will be written and
+   `*out_n` updated.  The function returns 1 if a split occurred (bboxes are
+   recomputed), or 0 otherwise. */
+/*
+ * Split face `f1` by the infinite plane defined by face `f2`.
+ *
+ * New behaviour relative to earlier revisions:
+ *   - When `force_one_edge` is nonzero the routine will attempt the split
+ *     even if all vertices of `f1` lie on the same side of the cutter plane.
+ *     This supports the "one-edge crossing" rule requested by the user:
+ *     if exactly one edge of `f1` intersects the interior of `f2` the face
+ *     will still be subdivided.  (The opposite direction is still tested by
+ *     the caller when appropriate.)
+ *   - When forced, the routine will also bypass the usual vertex-count
+ *     check; the original face is retained even if the opposite fragment has
+ *     fewer than three vertices.  A degenerate fragment (count<3) is simply
+ *     discarded rather than causing failure.
+ *
+ * All other parameters behave as before.  The caller may still supply
+ * `out_newverts`/`out_n` and `constraint_verts`/`constraint_n` for clipping.
+ */
+/* build identifier printed in logs so user can verify they ran
+   the newly compiled binary.  Update this string each time the splitting logic
+   is modified. */
+#define SPLIT_BUILD_ID "split-rule-2026-02-24a"
+
+static int split_face_by_plane(Model3D* model, int f1, int f2,
+                               int *out_newverts, int *out_n,
+                               int *constraint_verts, int constraint_n,
+                               int force_one_edge) {
+
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[f1];
+
+    if (cnt < 3) return 0;
+
+
+    /* plane of cutting face (float units for distance calc) */
+    double a, b, c, d;
+    compute_face_plane_float(model, f2, &a, &b, &c, &d);
+
+    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
+
+    const double plane_eps = 0.02;
+
+    /* collect distances for each vertex of f1 */
+    double *dist = (double*)malloc(sizeof(double) * cnt);
+    int *orig = (int*)malloc(sizeof(int) * cnt);
+    if (!dist || !orig) {
+        free(dist);
+        free(orig);
+        return 0;
+    }
+    for (int i = 0; i < cnt; ++i) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + i] - 1;
+        orig[i] = vi;
+        double x = FIXED_TO_FLOAT(vtx->x[vi]);
+        double y = FIXED_TO_FLOAT(vtx->y[vi]);
+        double z = FIXED_TO_FLOAT(vtx->z[vi]);
+
+        double sd = a * x + b * y + c * z + d;  /* now consistent scaling */
+        if (fabs(sd) < plane_eps) sd = 0.0;
+        dist[i] = sd;
+
+    }
+
+    int hasPos = 0, hasNeg = 0;
+    for (int i = 0; i < cnt; ++i) {
+        if (dist[i] > 0.0) hasPos = 1;
+        if (dist[i] < 0.0) hasNeg = 1;
+    }
+    if (!hasPos || !hasNeg) {
+        if (!force_one_edge) {
+
+            free(dist);
+            free(orig);
+            return 0;
+        } else {
+            /* forced split: log that we're ignoring one-sided result */
+
+        }
+    }
+
+    int pos_list[MAX_FACE_VERTICES * 2];
+    int neg_list[MAX_FACE_VERTICES * 2];
+    int cop_list[MAX_FACE_VERTICES];
+    int pos_n = 0, neg_n = 0, cop_n = 0;
+
+    /* temporary buffer to record intersections if requested */
+    int newbuf[MAX_FACE_VERTICES];
+    int newcount = 0;
+
+    /* prepare constraint segment if provided */
+    double seg_min = 0, seg_max = 0;
+    int have_constraint = 0;
+    double dirx=0, diry=0, dirz=0;
+    if (constraint_verts && constraint_n >= 2) {
+        /* compute direction of intersection line from normals of both planes */
+        double a1,b1,c1,d1;
+        compute_face_plane(model, f1, &a1, &b1, &c1, &d1);
+        /* n1 = plane normal of f2 (a,b,c from above), n2 = normal of f1 */
+        dirx = b * c1 - c * b1;
+        diry = c * a1 - a * c1;
+        dirz = a * b1 - b * a1;
+        double len = sqrt(dirx*dirx + diry*diry + dirz*dirz);
+        if (len > 0) {
+            dirx /= len; diry /= len; dirz /= len;
+            /* compute projection of each constraint point onto this direction */
+            double p0x = FIXED_TO_FLOAT(model->vertices.x[constraint_verts[0]]);
+            double p0y = FIXED_TO_FLOAT(model->vertices.y[constraint_verts[0]]);
+            double p0z = FIXED_TO_FLOAT(model->vertices.z[constraint_verts[0]]);
+            seg_min = seg_max = 0.0;
+            for (int ci = 0; ci < constraint_n; ++ci) {
+                int vi = constraint_verts[ci];
+                double cx = FIXED_TO_FLOAT(model->vertices.x[vi]);
+                double cy = FIXED_TO_FLOAT(model->vertices.y[vi]);
+                double cz = FIXED_TO_FLOAT(model->vertices.z[vi]);
+                double t = ( (cx - p0x) * dirx + (cy - p0y) * diry + (cz - p0z) * dirz );
+                if (ci == 0 || t < seg_min) seg_min = t;
+                if (ci == 0 || t > seg_max) seg_max = t;
+            }
+            have_constraint = 1;
+            if (have_constraint) {
+
+            }
+        }
+    }
+
+    for (int i = 0; i < cnt; ++i) {
+        int j = (i + 1) % cnt;
+        double di = dist[i], dj = dist[j];
+        int vi = orig[i], vj = orig[j];
+
+        if (di == 0.0) cop_list[cop_n++] = vi;
+        if (di >= 0.0) pos_list[pos_n++] = vi;
+        if (di <= 0.0) neg_list[neg_n++] = vi;
+
+        if (di * dj < 0.0) {
+            double t = di / (di - dj);
+            double ix = FIXED_TO_FLOAT(vtx->x[vi]) + t * (FIXED_TO_FLOAT(vtx->x[vj]) - FIXED_TO_FLOAT(vtx->x[vi]));
+            double iy = FIXED_TO_FLOAT(vtx->y[vi]) + t * (FIXED_TO_FLOAT(vtx->y[vj]) - FIXED_TO_FLOAT(vtx->y[vi]));
+            double iz = FIXED_TO_FLOAT(vtx->z[vi]) + t * (FIXED_TO_FLOAT(vtx->z[vj]) - FIXED_TO_FLOAT(vtx->z[vi]));
+            /* if constraints provided, ensure intersection lies within segment */
+            if (have_constraint) {
+                int refvi = constraint_verts[0];
+                double rpx = FIXED_TO_FLOAT(model->vertices.x[refvi]);
+                double rpy = FIXED_TO_FLOAT(model->vertices.y[refvi]);
+                double rpz = FIXED_TO_FLOAT(model->vertices.z[refvi]);
+                double pt = ((ix - rpx) * dirx + (iy - rpy) * diry + (iz - rpz) * dirz);
+                if (pt < seg_min - 1e-6 || pt > seg_max + 1e-6) {
+
+                    continue;
+                }
+            }
+            int newvi = add_vertex(model, FLOAT_TO_FIXED((float)ix),
+                                           FLOAT_TO_FIXED((float)iy),
+                                           FLOAT_TO_FIXED((float)iz));
+            if (newvi >= 0) {
+                pos_list[pos_n++] = newvi;
+                neg_list[neg_n++] = newvi;
+                if (out_newverts && newcount < MAX_FACE_VERTICES) {
+                    newbuf[newcount++] = newvi;
+                }
+            }
+        }
+    }
+
+    if (out_newverts && out_n) {
+        *out_n = newcount;
+        for (int k = 0; k < newcount; ++k) out_newverts[k] = newbuf[k];
+    }
+
+    free(dist);
+    free(orig);
+
+    cleanup_list(pos_list, &pos_n);
+    cleanup_list(neg_list, &neg_n);
+    cleanup_list(cop_list, &cop_n);
+    remove_duplicates(pos_list, &pos_n);
+    remove_duplicates(neg_list, &neg_n);
+    if (cop_n >= 3) remove_duplicates(cop_list, &cop_n);
+
+
+    /* normally we require both sides to have at least three verts, but a
+       forced one-edge split bypasses this check. */
+    if (!force_one_edge && (pos_n < 3 || neg_n < 3)) return 0;
+
+    /* ensure polygon vertex order is sensible before measuring area */
+    reorder_poly(model, f1, pos_list, &pos_n);
+    reorder_poly(model, f1, neg_list, &neg_n);
+
+    /* calculate areas using the plane of the face being split (f1) rather
+       than the cutter plane.  This avoids the zero-area issue when the
+       two faces are perpendicular. */
+    double a1, b1, c1, d1;
+    compute_face_plane(model, f1, &a1, &b1, &c1, &d1);
+    double area_pos = poly_signed_area(model, pos_list, pos_n, a1, b1, c1);
+    double area_neg = poly_signed_area(model, neg_list, neg_n, a1, b1, c1);
+    if (fabs(area_pos) < 0.001 || fabs(area_neg) < 0.001) {
+        /* area seems small or zero; log for debugging but do not abort the
+           split.  numeric quantization sometimes makes a valid polygon appear
+           degenerate (see t.obj case). */
+
+        /* continue regardless */
+    }
+
+    reorder_poly(model, f1, pos_list, &pos_n);
+    reorder_poly(model, f1, neg_list, &neg_n);
+
+    int orig_cnt = faces->vertex_count[f1];
+    int orig_off = faces->vertex_indices_ptr[f1];
+    /* choose which side becomes the "kept" polygon.  if one side lacks
+       enough vertices we keep the other, unless both have >=3 in which case
+       keep the positive side by convention. */
+    int *keep_list = NULL, keep_n = 0;
+    int *other_list = NULL, other_n = 0;
+    if (pos_n >= 3 && (neg_n < 3 || !force_one_edge)) {
+        keep_list = pos_list; keep_n = pos_n;
+        other_list = neg_list; other_n = neg_n;
+    } else if (neg_n >= 3 && (pos_n < 3 || force_one_edge && pos_n < 3)) {
+        keep_list = neg_list; keep_n = neg_n;
+        other_list = pos_list; other_n = pos_n;
+    } else {
+        /* both valid or both too small; default to positive side */
+        keep_list = pos_list; keep_n = pos_n;
+        other_list = neg_list; other_n = neg_n;
+    }
+
+    if (keep_n <= orig_cnt) {
+        for (int k = 0; k < keep_n; ++k)
+            faces->vertex_indices_buffer[orig_off + k] = keep_list[k] + 1;
+        faces->vertex_count[f1] = keep_n;
+    } else {
+        int new_off = faces->total_indices;
+        for (int k = 0; k < keep_n; ++k)
+            faces->vertex_indices_buffer[new_off + k] = keep_list[k] + 1;
+        faces->vertex_indices_ptr[f1] = new_off;
+        faces->vertex_count[f1] = keep_n;
+        faces->total_indices += keep_n;
+    }
+    int orig_disp = faces->display_flag[f1];
+
+
+
+    /* create opposite fragment only if it has enough vertices */
+    if (other_n >= 3) {
+        int fneg = faces->face_count++;
+        faces->vertex_count[fneg] = other_n;
+        faces->vertex_indices_ptr[fneg] = faces->total_indices;
+        for (int k = 0; k < other_n; ++k)
+            faces->vertex_indices_buffer[faces->total_indices + k] = other_list[k] + 1;
+        faces->total_indices += other_n;
+        faces->sorted_face_indices[fneg] = fneg;
+        faces->display_flag[fneg] = orig_disp;
+    }
+
+    if (cop_n >= 3) {
+        int fcop = faces->face_count++;
+        faces->vertex_count[fcop] = cop_n;
+        faces->vertex_indices_ptr[fcop] = faces->total_indices;
+        for (int k = 0; k < cop_n; ++k)
+            faces->vertex_indices_buffer[faces->total_indices + k] = cop_list[k] + 1;
+        faces->total_indices += cop_n;
+        faces->sorted_face_indices[fcop] = fcop;
+        faces->display_flag[fcop] = orig_disp;
+    }
+
+    compute_face_bboxes3D(model);
+    return 1;
+}
+
+#if 0
+/* utility: ensure vertices in `verts` are present on face `fidx`.
+   This naively appends indices to the end of the face's index list; any
+   duplicates will later be cleaned by `cleanup_list`/`remove_duplicates` in
+   `split_face_by_plane`.  We only add if the vertex lies within the face's
+   bounding box to avoid polluting unrelated faces. */
+static void append_vertices_to_face(Model3D* model, int fidx, int *verts, int n) {
+    if (!model || fidx < 0) return;
+    FaceArrays3D* faces = &model->faces;
+    if (fidx >= faces->face_count) return;
+    int cnt = faces->vertex_count[fidx];
+    int off = faces->vertex_indices_ptr[fidx];
+    /* compute bbox of face for quick reject */
+    Fixed32 minx=INT32_MAX, maxx=INT32_MIN;
+    Fixed32 miny=INT32_MAX, maxy=INT32_MIN;
+    Fixed32 minz=INT32_MAX, maxz=INT32_MIN;
+    for (int k = 0; k < cnt; ++k) {
+        int vi = faces->vertex_indices_buffer[off + k] - 1;
+        Fixed32 x = model->vertices.x[vi];
+        Fixed32 y = model->vertices.y[vi];
+        Fixed32 z = model->vertices.z[vi];
+        if (x < minx) minx = x; if (x > maxx) maxx = x;
+        if (y < miny) miny = y; if (y > maxy) maxy = y;
+        if (z < minz) minz = z; if (z > maxz) maxz = z;
+    }
+    /* for each candidate vertex, add to face if within bbox */
+    for (int i = 0; i < n; ++i) {
+        int vi = verts[i];
+        if (vi < 0 || vi >= model->vertices.vertex_count) continue;
+        Fixed32 x = model->vertices.x[vi];
+        Fixed32 y = model->vertices.y[vi];
+        Fixed32 z = model->vertices.z[vi];
+        if (x < minx || x > maxx || y < miny || y > maxy || z < minz || z > maxz)
+            continue; /* out of bounding box */
+        /* append index+1 to list */
+        int indexPos = faces->total_indices;
+        faces->vertex_indices_buffer[indexPos] = vi + 1;
+        faces->total_indices++;
+        faces->vertex_count[fidx]++;
+    }
+}
+
+/* legacy plane-crossing helper kept for compatibility (unused) */
+static int face_edge_traverses_plane(Model3D* model, int fi, int fj) {
+    double a, b, c, d;
+    compute_face_plane(model, fj, &a, &b, &c, &d);
+    if (a == 0.0 && b == 0.0 && c == 0.0) {
+        return 0; /* degenerate plane */
+    }
+    /* small tolerance to avoid counting touches as crosses */
+    const double plane_eps = 0.02; /* same as bbox epsilon */
+
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[fi];
+    if (cnt < 2) return 0;
+    int off = faces->vertex_indices_ptr[fi];
+    /* compute signed distance for first vertex */
+    int vi = faces->vertex_indices_buffer[off] - 1;
+    double x = (double)vtx->x[vi], y = (double)vtx->y[vi], z = (double)vtx->z[vi];
+    double prev_sd = a * x + b * y + c * z + d;
+    if (fabsl(prev_sd) < plane_eps) prev_sd = 0.0;
+    for (int k = 1; k < cnt; ++k) {
+        vi = faces->vertex_indices_buffer[off + k] - 1;
+        x = (double)vtx->x[vi]; y = (double)vtx->y[vi]; z = (double)vtx->z[vi];
+        double sd = a * x + b * y + c * z + d;
+        if (fabsl(sd) < plane_eps) sd = 0.0;
+        if ((prev_sd > 0.0 && sd < 0.0) || (prev_sd < 0.0 && sd > 0.0)) {
+            return 1; /* edge crosses plane proper */
+        }
+        prev_sd = sd;
+    }
+    /* check closing edge (last->first) */
+    vi = faces->vertex_indices_buffer[off] - 1;
+    x = (double)vtx->x[vi]; y = (double)vtx->y[vi]; z = (double)vtx->z[vi];
+    double first_sd = a * x + b * y + c * z + d;
+    if (fabsl(first_sd) < plane_eps) first_sd = 0.0;
+    if ((prev_sd > 0.0 && first_sd < 0.0) || (prev_sd < 0.0 && first_sd > 0.0))
+        return 1;
+    return 0;
+}
+#endif
+
+/*
+ * Walk all face pairs and report 3D bbox overlaps.
+ * Epsilon is applied in fixed-point to give a tiny tolerance (0.02 units).
+ * After scanning every combination the function blocks until a key is pressed.
+ */
+static void check_intersect(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    int fc = faces->face_count;
+    /* no logging in check_intersect per request */
+    if (fc <= 1) {
+        printf("check_intersect: not enough faces (%d)\n", fc);
+        keypress();
+        return;
+    }
+
+    /* tolerance in fixed-point (16.16) */
+    const Fixed32 eps = FLOAT_TO_FIXED(0.02f);
+
+    int count = 0;
+    int ip_count = 0; /* interpenetration counter */
+    /* we may split faces as we go; if a split occurs we restart the scan from
+       the beginning so that newly created pieces are also checked. */
+    int changed;
+    do {
+        changed = 0;
+        fc = faces->face_count; /* update after any splits */
+        for (int i = 0; i < fc; ++i) {
+            Fixed32 minx_i = faces->minx3[i];
+            Fixed32 maxx_i = faces->maxx3[i];
+            Fixed32 miny_i = faces->miny3[i];
+            Fixed32 maxy_i = faces->maxy3[i];
+            Fixed32 minz_i = faces->minz3[i];
+            Fixed32 maxz_i = faces->maxz3[i];
+            for (int j = i + 1; j < fc; ++j) {
+                Fixed32 minx_j = faces->minx3[j];
+                Fixed32 maxx_j = faces->maxx3[j];
+                Fixed32 miny_j = faces->miny3[j];
+                Fixed32 maxy_j = faces->maxy3[j];
+                Fixed32 minz_j = faces->minz3[j];
+                Fixed32 maxz_j = faces->maxz3[j];
+                /* check overlap on all three axes with epsilon tolerance */
+                if (minx_i <= maxx_j + eps && maxx_i >= minx_j - eps &&
+                    miny_i <= maxy_j + eps && maxy_i >= miny_j - eps &&
+                    minz_i <= maxz_j + eps && maxz_i >= minz_j - eps) {
+                    /* compute overlap extents along each axis */
+                    Fixed32 ox = (minx_i < minx_j ? minx_j : minx_i);
+                    Fixed32 ux = (maxx_i < maxx_j ? maxx_i : maxx_j);
+                    Fixed32 oy = (miny_i < miny_j ? miny_j : miny_i);
+                    Fixed32 uy = (maxy_i < maxy_j ? maxy_i : maxy_j);
+                    Fixed32 oz = (minz_i < minz_j ? minz_j : minz_i);
+                    Fixed32 uz = (maxz_i < maxz_j ? maxz_i : maxz_j);
+                    float dx = FIXED_TO_FLOAT(ux - ox);
+                    float dy = FIXED_TO_FLOAT(uy - oy);
+                    float dz = FIXED_TO_FLOAT(uz - oz);
+                    /* log raw fixed bbox values for debugging */
+
+                    /* log computed floats regardless of overlap */
+
+                    /* normally ignore pure-touching boxes, but we still
+                     * want to run the plane‑crossing check when one dimension
+                     * collapses to zero (as happens after centering), because
+                     * the face may still pass through the plane of the other.
+                     * dz>=0 is already allowed earlier; now accept dy>=0 as well.
+                     */
+                    if (dx >= 0.0f && dy >= 0.0f) {
+
+                        printf("faces %d and %d overlap (dx=%.3f dy=%.3f dz=%.3f)\n", i, j, dx, dy, dz);
+                        ++count;
+                        if (faces_share_vertex_or_edge(faces, i, j)) {
+                            printf("   -> faces %d and %d share vertex/edge, skipping\n", i, j);
+
+                        } else {
+                            double a1,b1,c1,d1, a2,b2,c2,d2;
+                            compute_face_plane(model, i, &a1, &b1, &c1, &d1);
+                            compute_face_plane(model, j, &a2, &b2, &c2, &d2);
+                            double norm1 = sqrt(a1*a1 + b1*b1 + c1*c1);
+                            double norm2 = sqrt(a2*a2 + b2*b2 + c2*c2);
+                            int coplanar = 0;
+                            if (norm1 > 0 && norm2 > 0) {
+                                double dot = a1*a2 + b1*b2 + c1*c2;
+                                double cosang = dot / (norm1 * norm2);
+                                if (fabs(fabs(cosang) - 1.0) < 0.01) {
+                                    double dist = fabs(d1 - d2) / norm1;
+                                    if (dist < FIXED_TO_FLOAT(eps)) {
+                                        coplanar = 1;
+                                    }
+                                }
+                            }
+                            if (coplanar) {
+                                printf("   -> faces %d and %d are coplanar, skipping\n", i, j);
+
+                            }
+                            if (!coplanar) {
+                                /* use the stricter interior-crossing predicate for
+                                   statistics. boundary contacts (points/edges lying on
+                                   the other face) no longer count as interpenetrations.
+                                   this avoids the dozens of false positives seen earlier. */
+                                int interior = edge_crosses_interior(model, i, j) ||
+                                               edge_crosses_interior(model, j, i);
+                                if (interior) {
+                                    ++ip_count;
+
+                                } else {
+
+                                }
+                                /* now perform splitting decisions using the original
+                                   crossing-count heuristic (boundary hits may still
+                                   justify a cut). */
+                                /* compute crossing counts in both directions once */
+                            int cross_i_j = count_edge_crossings(model, i, j);
+                            int cross_j_i = count_edge_crossings(model, j, i);
+                            /* special rule: if exactly two edges of i cross j and none
+                               of j cross i, we want to split face i by plane j instead
+                               of the usual orientation. */
+                            if (cross_i_j == 2 && cross_j_i == 0) {
+                                printf("   -> two edges of face %d cross face %d; splitting face %d by plane %d\n",
+                                       i, j, i, j);
+
+                                if (split_face_by_plane(model, i, j, NULL, NULL, NULL, 0, 0)) {
+
+                                    changed = 1;
+                                    break;
+                                }
+                            } else if (cross_j_i == 2 && cross_i_j == 0) {
+                                printf("   -> two edges of face %d cross face %d; splitting face %d by plane %d\n",
+                                       j, i, j, i);
+
+                                if (split_face_by_plane(model, j, i, NULL, NULL, NULL, 0, 0)) {
+
+                                    changed = 1;
+                                    break;
+                                }
+                            } else {
+                                /* fall back to standard behaviour */
+                                if (cross_i_j > 0) {
+                                    int force = (cross_i_j == 1);
+                                    printf("   -> edge of face %d cuts face %d (crosscount=%d); splitting face %d by plane %d\n",
+                                           i, j, cross_i_j, j, i);
+
+                                    if (split_face_by_plane(model, j, i, NULL, NULL, NULL, 0, force)) {
+
+                                        changed = 1;
+                                        break;
+                                    }
+                                }
+                                if (!changed && cross_j_i > 0) {
+                                    int force = (cross_j_i == 1);
+                                    printf("   -> edge of face %d cuts face %d (crosscount=%d); splitting face %d by plane %d\n",
+                                           j, i, cross_j_i, i, j);
+
+                                    if (split_face_by_plane(model, i, j, NULL, NULL, NULL, 0, force)) {
+
+                                        changed = 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            }
+                            }
+                        }
+                    }
+                }
+            }
+            if (changed) break;
+    } while (changed);
+    printf("Total overlapping pairs: %d\n", count);
+    printf("Total interpenetrating pairs: %d\n", ip_count);
+    printf("Final face count: %d\n", faces->face_count);
+
+
+    keypress();
 }
 
 // ============================================================================
