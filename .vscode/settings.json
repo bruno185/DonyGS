@@ -4,6 +4,10 @@
         "/^python tools/brace_check\\.py$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^python calc_bbox\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

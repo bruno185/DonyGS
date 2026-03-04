@@ -2084,3 +2084,407 @@ static void inspect_intersection_fixed_ui(Model3D* model) {
     endgraph();
     DoText();
 }
+
+
+/* debug version of pair_plane_before: prompts user, prints diagnostics */
+static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    printf("PAIR_DEBUG: enter two face indices f1 f2 (or any numbers): "); fflush(stdout);
+    if (scanf("%d %d", &f1, &f2) != 2) {
+        printf("invalid input\n"); keypress(); return 0;
+    }
+    int c; while ((c = getchar()) != '\n' && c != EOF) ;
+    printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
+
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int k;
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+
+    /* test4 */
+    printf("tesst 4: all vertices of %d on opposite side of %d's plane as observer?\n", f2, f1);
+    int obs_side1 = 0; int side; int all_same_side;
+    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    if (obs_side1 != 0) {
+        printf("PAIR_DEBUG: obs_side1=%d\n", obs_side1);
+        all_same_side = 1;
+        printf("numbre of vertices in f2: %d\n", n2);
+        for (k = 0; k < n2; ++k) {
+            printf("k = %d: \n", k);
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1;
+            printf("  vertex %d acc=%lld ", v, acc);
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            printf("  vertex %d side=%d\n", v, side);
+            if (obs_side1 != side) { all_same_side = 0; break; }
+        }
+        if (all_same_side) { printf("PAIR_DEBUG: test4 true\n"); keypress(); return 1; }
+    }
+    /* test5 */
+    printf("tesst 5: all vertices of %d on same side of %d's plane as observer?\n", f1, f2);
+    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
+    int obs_side2 = 0; int all_opposite_side = 0;
+    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    if (obs_side2 != 0) {
+        printf("PAIR_DEBUG: obs_side2=%d\n", obs_side2);
+        all_opposite_side = 1;
+        printf("numbre of vertices in f1: %d\n", n1);
+        for (k = 0; k < n1; ++k) {
+            printf("k = %d: \n", k);
+            int v = faces->vertex_indices_buffer[offset1+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d2;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            printf("  vertex %d side=%d\n", v, side);
+            if (obs_side2 == side) { all_opposite_side = 0; break; }
+        }
+        if (all_opposite_side) { printf("PAIR_DEBUG: test5 true\n"); keypress(); return 1; }
+    }
+    printf("PAIR_DEBUG: return 0\n"); keypress();
+    return 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* debug version of pair_plane_before: prompts user, prints diagnostics */
+static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+
+    printf("PAIR_DEBUG: enter two face indices f1 f2 (or any numbers): "); fflush(stdout);
+    if (scanf("%d %d", &f1, &f2) != 2) {
+        printf("invalid input\n"); keypress(); return 0;
+    }
+    int c; while ((c = getchar()) != '\n' && c != EOF) ;
+    printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
+
+
+    // Use cached plane normals and d terms computed in calculateFaceDepths
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    int k;
+    Fixed64 a1 = faces->plane_a[f1];
+    Fixed64 b1 = faces->plane_b[f1];
+    Fixed64 c1 = faces->plane_c[f1];
+    Fixed64 d1 = faces->plane_d[f1];
+    Fixed64 a2 = faces->plane_a[f2];
+    Fixed64 b2 = faces->plane_b[f2];
+    Fixed64 c2 = faces->plane_c[f2];
+    Fixed64 d2 = faces->plane_d[f2];
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+
+    int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
+    int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
+    int side;           // vertex side.
+    int all_same_side; // flag indicating whether all vertices are on the same side
+    int all_opposite_side; // flag indicating whether all vertices are on the opposite side
+    /* test_value replaced by Fixed64 accumulators inside loops to avoid Fixed32 overflow */
+
+    // ********************* TEST 4 *********************
+
+    // Test 4: Is f2 entirely on the same observer-side of f1's plane?
+    // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
+    //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
+    //   same side as the observer (within epsilon), then f2 is conclusively in front
+    //   of f1 (no swap required). If any vertex is on the opposite side, the test fails
+    //   and we continue to stronger tests.
+
+
+    printf("\n**** Test 4 : Testing faces %d and %d\n", f1, f2);
+    printf("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", FIXED64_TO_FLOAT(a1), FIXED64_TO_FLOAT(b1), FIXED64_TO_FLOAT(c1), FIXED64_TO_FLOAT(d1));
+    obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
+    if (d1 > (Fixed64)epsilon) obs_side1 = 1; 
+    else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
+    else goto skipT4_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_same_side = 1;
+
+    printf("FOR loop start\n");
+    printf("obs_side1 = %d\n", obs_side1);
+    printf("test_values for face %d must be of the same sign as obs_side1\n", f2);
+
+    for (k=0; k<n2; k++) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            /* Accumulate in 64-bit to avoid overflow (each product is >> FIXED_SHIFT to keep Fixed32 scale) */
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1; // d1 already Fixed32 scale
+            #if ENABLE_DEBUG_SAVE
+                printf("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, FIXED_TO_FLOAT(vtx->xo[v]), FIXED_TO_FLOAT(vtx->yo[v]), FIXED_TO_FLOAT(vtx->zo[v]));
+                printf("test_value = %f\n", ((double)acc) / FIXED_SCALE);
+            #endif
+            if  (acc > (Fixed64)epsilon) side = 1;
+            else if (acc < -(Fixed64)epsilon) side = -1;
+            else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+            if (obs_side1 != side) { 
+                // if a vertex is on the other side, break the loop
+                // and set the flag to 0 to indicate the test failed (move to next test)
+                all_same_side = 0; 
+                
+                    printf("Test 4 failed for faces %d and %d\n", f1, f2);
+                    keypress(); 
+                break; 
+                }
+    }
+
+        printf("FOR loop stop\n");
+
+    // test 4 passed
+    if (all_same_side) { 
+        printf("Test 4 passed for Faces %d and %d\n", f1, f2);
+        keypress();
+        return 1; // faces are ordered correctly, move to next pair
+    }
+
+    skipT4_debug:
+
+    // ********************* TEST 5 ********************
+    // Test 5: Is f1 entirely on the opposite side of f2's plane relative to the observer?
+    // - This is symmetric to Test 4: if every vertex of f1 is strictly on the opposite
+    //   side of f2's plane from the observer, then f1 is behind f2 and no swap is needed.
+    // - Both Test 4 and Test 5 are relatively cheap and frequently decisive on planar geometry.
+
+
+    printf("Test 5 : Testing faces %d and %d\n", f1, f2);
+    printf("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", FIXED64_TO_FLOAT(a2), FIXED64_TO_FLOAT(b2), FIXED64_TO_FLOAT(c2), FIXED64_TO_FLOAT(d2) );
+
+
+    obs_side2 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
+    if (d2 > (Fixed64)epsilon) obs_side2 = 1; 
+    else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
+    else return 0; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_opposite_side = 1;
+
+    printf("FOR loop start\n");
+    printf("obs_side2 = %d\n", obs_side2);
+    printf("test_values for face %d must be of the opposite sign as obs_side2\n", f1);
+
+    for (k=0; k<n1; k++) {
+        int v = faces->vertex_indices_buffer[offset1+k]-1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d2;
+        printf("acc = %ld\n", acc);
+        if  (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+        if (obs_side2 == side) {
+            // if a vertex is on the same side, break the loop
+            // and set the flag to 0 to indicate the test failed (move to next test)
+            all_opposite_side = 0; 
+
+            printf("Test 5 failed for faces %d and %d\n", f1, f2);
+            keypress();
+            break; }
+        }
+
+        // test 5 passed
+        if (all_opposite_side) { // faces are ordered correctly, move to next pair
+        printf("Test 5 passed for Faces %d and %d\n", f1, f2);
+        keypress();
+
+        }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* debug version of pair_plane_before: prompts user, prints diagnostics */
+static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+
+    printf("PAIR_DEBUG: enter two face indices f1 f2 (or any numbers): "); fflush(stdout);
+    if (scanf("%d %d", &f1, &f2) != 2) {
+        printf("invalid input\n"); keypress(); return 0;
+    }
+    int c; while ((c = getchar()) != '\n' && c != EOF) ;
+    printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
+
+
+    // Use cached plane normals and d terms computed in calculateFaceDepths
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    int k;
+    /* convert planes to doubles for debug arithmetic */
+    double a1 = FIXED64_TO_FLOAT(faces->plane_a[f1]);
+    double b1 = FIXED64_TO_FLOAT(faces->plane_b[f1]);
+    double c1 = FIXED64_TO_FLOAT(faces->plane_c[f1]);
+    double d1 = FIXED64_TO_FLOAT(faces->plane_d[f1]);
+    double a2 = FIXED64_TO_FLOAT(faces->plane_a[f2]);
+    double b2 = FIXED64_TO_FLOAT(faces->plane_b[f2]);
+    double c2 = FIXED64_TO_FLOAT(faces->plane_c[f2]);
+    double d2 = FIXED64_TO_FLOAT(faces->plane_d[f2]);
+    double epsilon = 0.01;
+
+    int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
+    int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
+    int side;           // vertex side.
+    int all_same_side; // flag indicating whether all vertices are on the same side
+    int all_opposite_side; // flag indicating whether all vertices are on the opposite side
+    /* values will be computed as doubles below */
+
+    // ********************* TEST 4 *********************
+
+    // Test 4: Is f2 entirely on the same observer-side of f1's plane?
+    // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
+    //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
+    //   same side as the observer (within epsilon), then f2 is conclusively in front
+    //   of f1 (no swap required). If any vertex is on the opposite side, the test fails
+    //   and we continue to stronger tests.
+
+
+    printf("\n**** Test 4 : Testing faces %d and %d\n", f1, f2);
+    printf("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", a1, b1, c1, d1);
+    obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
+    if (d1 > epsilon) obs_side1 = 1; 
+    else if (d1 < -epsilon) obs_side1 = -1;
+    else goto skipT4_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_same_side = 1;
+
+    printf("FOR loop start\n");
+    printf("obs_side1 = %d\n", obs_side1);
+    printf("test_values for face %d must be of the same sign as obs_side1\n", f2);
+
+    for (k=0; k<n2; k++) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            /* compute using doubles */
+            double vx = FIXED_TO_FLOAT(vtx->xo[v]);
+            double vy = FIXED_TO_FLOAT(vtx->yo[v]);
+            double vz = FIXED_TO_FLOAT(vtx->zo[v]);
+            double acc = a1 * vx + b1 * vy + c1 * vz + d1;
+            #if ENABLE_DEBUG_SAVE
+                printf("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, vx, vy, vz);
+                printf("test_value = %f\n", acc);
+            #endif
+            if  (acc > epsilon) side = 1;
+            else if (acc < -epsilon) side = -1;
+            else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+            if (obs_side1 != side) { 
+                // if a vertex is on the other side, break the loop
+                // and set the flag to 0 to indicate the test failed (move to next test)
+                all_same_side = 0; 
+                
+                    printf("Test 4 failed for faces %d and %d\n", f1, f2);
+                    keypress(); 
+                break; 
+                }
+    }
+
+        printf("FOR loop stop\n");
+
+    // test 4 passed
+    if (all_same_side) { 
+        printf("Test 4 passed for Faces %d and %d\n", f1, f2);
+        keypress();
+        return 1; // faces are ordered correctly, move to next pair
+    }
+
+    skipT4_debug:
+
+    // ********************* TEST 5 ********************
+    // Test 5: Is f1 entirely on the opposite side of f2's plane relative to the observer?
+    // - This is symmetric to Test 4: if every vertex of f1 is strictly on the opposite
+    //   side of f2's plane from the observer, then f1 is behind f2 and no swap is needed.
+    // - Both Test 4 and Test 5 are relatively cheap and frequently decisive on planar geometry.
+
+
+    printf("\n\nTest 5 : Testing faces %d and %d\n", f1, f2);
+    printf("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", a2, b2, c2, d2 );
+
+    obs_side2 = 0; // sign of d2: +1, -1 or 0 (inconclusive)
+    if (d2 > epsilon) obs_side2 = 1; 
+    else if (d2 < -epsilon) obs_side2 = -1;
+    else return 0; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_opposite_side = 1;
+
+    printf("FOR loop start\n");
+    printf("obs_side2 = %d\n", obs_side2);
+    printf("test_values for face %d must be of the opposite sign as obs_side2\n", f1);
+
+    for (k = 0; k < n1; k++) {
+        int v = faces->vertex_indices_buffer[offset1 + k] - 1;
+        /* compute using doubles */
+        double vx = FIXED_TO_FLOAT(vtx->xo[v]);
+        double vy = FIXED_TO_FLOAT(vtx->yo[v]);
+        double vz = FIXED_TO_FLOAT(vtx->zo[v]);
+        double acc = a2 * vx + b2 * vy + c2 * vz + d2;
+            printf("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, vx, vy, vz);
+            printf("test_value = %f\n", acc);
+
+        if (acc > epsilon) side = 1;
+        else if (acc < -epsilon) side = -1;
+        //else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+        // if (obs_side2 == side) {
+        //     // if a vertex is on the same side, break the loop
+        //     // and set the flag to 0 to indicate the test failed (move to next test)
+        //     all_opposite_side = 0;
+
+        //     printf("Test 5 failed for faces %d and %d\n", f1, f2);
+        //     keypress();
+        //     //break; 
+        //     }
+    }
+    printf("FOR loop stop\n");
+
+        // test 5 passed
+        if (all_opposite_side) { // faces are ordered correctly, move to next pair
+            printf("Test 5 passed for Faces %d and %d\n", f1, f2);
+            keypress();
+            return 1;
+        }
+}
+
+

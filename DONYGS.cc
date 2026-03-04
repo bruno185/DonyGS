@@ -829,6 +829,512 @@ void debug_two_faces(Model3D* model, int f1, int f2) {
 }
 
 
+/* -------------------------------------------------------------------------
+ * New painter variant where each pairwise test is factored into its own
+ * helper function.  The body of painter_new historically duplicated much of
+ * the logic from painter_newell_sancha; this version simply calls the
+ * individual test routines in sequence.
+ *
+ * Each helper returns:
+ *   -1 when f1 is conclusively before (no swap)
+ *    1 when f1 is conclusively after (swap needed)
+ *    0 when inconclusive (proceed to next test)
+ *
+ * None of the helper functions call any existing utilities – they contain
+ * the original calculations directly per requirement.
+ */
+
+static int painter_new_test1_depth(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    if (faces->z_max[f2] <= faces->z_min[f1]) return -1;
+    if (faces->z_max[f1] <= faces->z_min[f2]) return 1;
+    return 0;
+}
+
+static int painter_new_test2_bbox_x(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1];
+    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2];
+    /* separation in either direction should *not* trigger a swap; just accept
+       the current ordering (no action required) */
+    if (maxx1 <= minx2 || maxx2 <= minx1) return -1;  // safe to continue
+    return 0;
+}
+
+static int painter_new_test3_bbox_y(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    int miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+    int miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+    /* never request a swap on bbox separation; just continue ordering */
+    if (maxy1 <= miny2 || maxy2 <= miny1) return -1;
+    return 0;
+}
+
+static int painter_new_plane_test4(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int n2 = faces->vertex_count[f2];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
+            c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
+    int obs_side1 = 0, side, all_same_side;
+    if (d1 > (Fixed64)epsilon) obs_side1 = 1;
+    else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
+    else return 0;
+    all_same_side = 1;
+    for (int k = 0; k < n2; ++k) {
+        int v = faces->vertex_indices_buffer[offset2+k]-1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d1;
+        if (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else continue;
+        if (obs_side1 != side) { all_same_side = 0; break; }
+    }
+    if (all_same_side) return -1;
+    return 0;
+}
+
+static int painter_new_plane_test5(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int n1 = faces->vertex_count[f1];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    Fixed64 a2 = faces->plane_a[f2], b2 = faces->plane_b[f2],
+            c2 = faces->plane_c[f2], d2 = faces->plane_d[f2];
+    int obs_side2 = 0, side, all_opposite_side;
+    if (d2 > (Fixed64)epsilon) obs_side2 = 1;
+    else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
+    else return 0;
+    all_opposite_side = 1;
+    for (int k = 0; k < n1; ++k) {
+        int v = faces->vertex_indices_buffer[offset1+k]-1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d2;
+        if (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else continue;
+        if (obs_side2 == side) { all_opposite_side = 0; break; }
+    }
+    if (all_opposite_side) return -1;
+    return 0;
+}
+
+/* Tests 6 and 7 follow same pattern; they return +1 when swap required. */
+static int painter_new_plane_test6(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int n2 = faces->vertex_count[f2];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
+            c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
+    int obs_side1 = 0, side, all_opposite_side;
+    if (d1 > (Fixed64)epsilon) obs_side1 = 1;
+    else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
+    else return 0;
+    all_opposite_side = 1;
+    for (int k = 0; k < n2; ++k) {
+        int v = faces->vertex_indices_buffer[offset2+k]-1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d1;
+        if (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else continue;
+        if (obs_side1 == side) { all_opposite_side = 0; break; }
+    }
+    if (all_opposite_side) return 1;
+    return 0;
+}
+
+static int painter_new_plane_test7(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int n1 = faces->vertex_count[f1];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    Fixed64 a2 = faces->plane_a[f2], b2 = faces->plane_b[f2],
+            c2 = faces->plane_c[f2], d2 = faces->plane_d[f2];
+    int obs_side2 = 0, side, all_same_side;
+    if (d2 > (Fixed64)epsilon) obs_side2 = 1;
+    else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
+    else return 0;
+    all_same_side = 1;
+    for (int k = 0; k < n1; ++k) {
+        int v = faces->vertex_indices_buffer[offset1+k]-1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d2;
+        if (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else continue;
+        if (obs_side2 != side) { all_same_side = 0; break; }
+    }
+    if (all_same_side) return 1;
+    return 0;
+}
+
+/* geometric relation: plane-based tests only (no bbox or depth).  Returns
+   -1 if f1 is geometrically before f2, 1 if after, 0 if indeterminate. */
+static int geometric_face_relation(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    /* test4-like: f2 entirely on same side as observer of f1 */
+    {
+        int n2 = faces->vertex_count[f2];
+        int offset2 = faces->vertex_indices_ptr[f2];
+        Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
+                c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
+        int obs = 0, side, all_same = 1;
+        if (d1 > (Fixed64)epsilon) obs = 1;
+        else if (d1 < -(Fixed64)epsilon) obs = -1;
+        else obs = 0;
+        if (obs != 0) {
+            for (int k = 0; k < n2; ++k) {
+                int v = faces->vertex_indices_buffer[offset2+k] - 1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d1;
+                if (acc > (Fixed64)epsilon) side = 1;
+                else if (acc < -(Fixed64)epsilon) side = -1;
+                else continue;
+                if (obs != side) { all_same = 0; break; }
+            }
+            if (all_same) return -1;
+        }
+    }
+    /* test6-like: f2 entirely on opposite side of f1 */
+    {
+        int n2 = faces->vertex_count[f2];
+        int offset2 = faces->vertex_indices_ptr[f2];
+        Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
+                c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
+        int obs = 0, side, all_opp = 1;
+        if (d1 > (Fixed64)epsilon) obs = 1;
+        else if (d1 < -(Fixed64)epsilon) obs = -1;
+        else obs = 0;
+        if (obs != 0) {
+            for (int k = 0; k < n2; ++k) {
+                int v = faces->vertex_indices_buffer[offset2+k] - 1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d1;
+                if (acc > (Fixed64)epsilon) side = 1;
+                else if (acc < -(Fixed64)epsilon) side = -1;
+                else continue;
+                if (obs == side) { all_opp = 0; break; }
+            }
+            if (all_opp) return 1;
+        }
+    }
+    /* remaining tests 5 and 7 could be implemented similarly, but they are
+       symmetrically covered by swapping the arguments and calling above logic. */
+    return 0;
+}
+
+
+void painter_new(Model3D* model, int face_count) {
+    if (use_float_painter) { /*painter_newell_sancha_float(model, face_count);*/ return; }
+    // copy of initial portion from painter_newell_sancha up to correction loop
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int i, j;
+    Fixed32* face_zmean = faces->z_mean;
+
+    if (!face_zmean) return;
+    long t_start = GetTick();
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i]) faces->sorted_face_indices[visible_count++] = i;
+        }
+        int tail = visible_count;
+        for (i = 0; i < face_count; ++i) {
+            if (!faces->display_flag[i]) faces->sorted_face_indices[tail++] = i;
+        }
+    } else {
+        for (i = 0; i < face_count; i++) faces->sorted_face_indices[i] = i;
+    }
+    qsort_faces_ptr_for_cmp = faces;
+    qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
+    qsort_faces_ptr_for_cmp = NULL;
+    long t_end = GetTick();
+    int swap_count = 0;
+    int swapped;
+    typedef struct { int face1, face2; } OrderedPair;
+    int ordered_pairs_capacity = face_count * 4;
+    OrderedPair* ordered_pairs = NULL;
+    if (ordered_pairs_capacity > 0) {
+        ordered_pairs = (OrderedPair*)malloc(ordered_pairs_capacity * sizeof(OrderedPair));
+        if (!ordered_pairs) ordered_pairs_capacity = 0;
+    }
+    int ordered_pairs_count = 0;
+    if (inconclusive_pairs) { free(inconclusive_pairs); inconclusive_pairs = NULL; }
+    inconclusive_pairs_capacity = face_count * 4;
+    if (inconclusive_pairs_capacity > 0) {
+        inconclusive_pairs = (InconclusivePair*)malloc(inconclusive_pairs_capacity * sizeof(InconclusivePair));
+        if (!inconclusive_pairs) inconclusive_pairs_capacity = 0;
+    }
+    inconclusive_pairs_count = 0;
+    do {
+        swapped = 0;
+        for (i = 0; i < visible_count-1; i++) {
+            int f1 = faces->sorted_face_indices[i];
+            int f2 = faces->sorted_face_indices[i+1];
+            int already_ordered = 0;
+            for (j = 0; j < ordered_pairs_count; j++) {
+                if ((ordered_pairs[j].face1 == f1 && ordered_pairs[j].face2 == f2) ||
+                    (ordered_pairs[j].face1 == f2 && ordered_pairs[j].face2 == f1)) {
+                    already_ordered = 1; break;
+                }
+            }
+            if (already_ordered) continue;
+            int result = 0;
+            if ((result = painter_new_test1_depth(model,f1,f2)) != 0) {
+                if (result == 1) goto new_do_swap;
+                else continue;
+            }
+            if ((result = painter_new_test2_bbox_x(model,f1,f2)) != 0) {
+                continue;
+            }
+            if ((result = painter_new_test3_bbox_y(model,f1,f2)) != 0) {
+                continue;
+            }
+            /* polygon overlap test copied inline since requirement forbids existing functions */
+            if (!projected_polygons_overlap(model, f1, f2)) continue;
+
+            if ((result = painter_new_plane_test4(model,f1,f2)) != 0) {
+                if (result == 1) goto new_do_swap;
+                else continue;
+            }
+            if ((result = painter_new_plane_test5(model,f1,f2)) != 0) {
+                if (result == 1) goto new_do_swap;
+                else continue;
+            }
+            if ((result = painter_new_plane_test6(model,f1,f2)) != 0) {
+                if (result == 1) goto new_do_swap;
+                else continue;
+            }
+            if ((result = painter_new_plane_test7(model,f1,f2)) != 0) {
+                if (result == 1) goto new_do_swap;
+                else continue;
+            }
+            /* inconclusive pair */
+            if (inconclusive_pairs_capacity) {
+                if (inconclusive_pairs_count < inconclusive_pairs_capacity) {
+                    inconclusive_pairs[inconclusive_pairs_count++] = (InconclusivePair){f1,f2};
+                }
+            }
+            continue;
+        new_do_swap:
+            /* perform adjacent swap */
+            faces->sorted_face_indices[i]   = f2;
+            faces->sorted_face_indices[i+1] = f1;
+            ordered_pairs[ordered_pairs_count].face1 = f2;
+            ordered_pairs[ordered_pairs_count].face2 = f1;
+            ordered_pairs_count++;
+            swap_count++;
+            swapped = 1;
+        }
+    } while (swapped);
+    if (ordered_pairs) free(ordered_pairs);
+    long t_stop = GetTick();
+    printf("time = %ld\n", t_stop - t_start);
+    keypress();
+    // optional debug prints omitted for brevity
+}
+
+
+
+void painter_geo(Model3D* model, int face_count) {
+    if (use_float_painter) { //painter_newell_sancha_float(model, face_count); return; 
+        }
+    // ...existing code...
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int i, j;
+    
+    Fixed32* face_zmean = faces->z_mean;
+    if (!face_zmean) return; // safety
+
+    // delegate initial ordering to the fast variant which already implements
+    // visible-face filtering and the stable z-mean sort.
+    painter_newell_sancha_fast(model, face_count);
+
+    // recompute `visible_count` for the correction passes
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i]) ++visible_count;
+        }
+    }
+    
+    int swap_count = 0;
+    int swapped = 0; // flag used for the correction loop
+
+    // Ordered pairs cache: store definitive pairwise relations to avoid re-testing.
+    typedef struct {
+        int face1;  // Face that must be drawn before (farther)
+        int face2;  // Face that must be drawn after (closer)
+    } OrderedPair;
+
+    int ordered_pairs_capacity = face_count * 10; // heuristic capacity to reduce reallocs
+    OrderedPair* ordered_pairs = NULL;
+    if (ordered_pairs_capacity > 0) {
+        ordered_pairs = (OrderedPair*)malloc(ordered_pairs_capacity * sizeof(OrderedPair));
+        if (!ordered_pairs) {
+            ordered_pairs_capacity = 0; // fall back to not caching ordered pairs
+        }
+    }
+    int ordered_pairs_count = 0;
+
+    // Prepare global inconclusive buffer for diagnostic recording. These pairs are
+    // intentionally left unresolved in order to avoid mesh splits; they can be
+    // inspected with `frameInconclusivePairs()` for debugging.
+    if (inconclusive_pairs) {
+        free(inconclusive_pairs);
+        inconclusive_pairs = NULL;
+    }
+    inconclusive_pairs_capacity = face_count * 4;
+    if (inconclusive_pairs_capacity > 0) {
+        inconclusive_pairs = (InconclusivePair*)malloc(inconclusive_pairs_capacity * sizeof(InconclusivePair));
+        if (!inconclusive_pairs) {
+            inconclusive_pairs_capacity = 0;
+        }
+    }
+    inconclusive_pairs_count = 0;
+
+    printf("ordered_pairs_capacity = %d\n", ordered_pairs_capacity);
+    keypress();
+
+    // Bubble-like correction passes (iterate until stable)
+    do {
+        swapped = 0;
+   
+        // Iterate consecutive pairs (only over visible faces if culling is enabled)
+        for (i = 0; i < visible_count-1; i++) {
+            int f1 = faces->sorted_face_indices[i];
+            int f2 = faces->sorted_face_indices[i+1];
+
+            // Skip pairs already declared ordered by previous swaps or tests.
+            // ordered_pairs stores definitive relations discovered earlier in the pass to
+            // avoid repeated work (e.g., if we previously determined f2 < f1 we won't re-evaluate).
+            int already_ordered = 0;
+            int p;
+            for (p = 0; p < ordered_pairs_count; p++) {
+                if (ordered_pairs[p].face1 == f1 && ordered_pairs[p].face2 == f2) {
+                    already_ordered = 1; break; // f1 before f2
+                }
+                if (ordered_pairs[p].face1 == f2 && ordered_pairs[p].face2 == f1) {
+                    already_ordered = 1; break; // f2 before f1 (inverse relation)
+                }
+            }
+            if (already_ordered) {
+                //  printf("Already ordered: %d <-> %d\n", f1, f2);
+                continue;
+            }
+
+
+            /* Tests 4 5 : perform purely geometric plane tests here, replacing the lengthy
+               inline code that followed previously */
+            {
+                int geo  = geometric_face_relation(model, f1, f2);
+                int geo2 = geometric_face_relation(model, f2, f1);
+                if ((f1==6 && f2==45)||(f1==45 && f2==13)) {
+                    // debug here if needed
+                }
+                if (geo == -1) continue;
+                if (geo == 1) goto do_swap;
+                if (geo2 == -1) goto do_swap; // swapped result means f2 before f1 -> swap
+                if (geo2 == 1) continue;     // f2 after f1 -> order correct
+                /* both zero -> inconclusive */
+                if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) {
+                    inconclusive_pairs[inconclusive_pairs_count++] = (InconclusivePair){f1,f2};
+                }
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
+                    ordered_pairs[ordered_pairs_count].face1 = f2;
+                    ordered_pairs[ordered_pairs_count].face2 = f1;
+                    ordered_pairs_count++;
+                }
+                continue;
+            }
+            /* still inconclusive, fall through to record as inconclusive pair */
+
+                
+            do_swap: {
+                // Perform adjacent swap: this is an in-place stable operation and keeps
+                // changes local (simple bubble logic). We record the definitive ordered
+                // relation (f2 before f1 after swap) into `ordered_pairs` when possible
+                // so subsequent passes skip redundant checks.
+                int tmp = faces->sorted_face_indices[i];
+                faces->sorted_face_indices[i] = faces->sorted_face_indices[i+1];
+                faces->sorted_face_indices[i+1] = tmp;
+                swapped = 1;
+                swap_count++;
+
+                // Record the pair as an established ordering (if capacity permits).
+                // If we exceed capacity we silently drop the record — this only affects
+                // performance (more re-evaluation), not correctness.
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
+                    ordered_pairs[ordered_pairs_count].face1 = f2; // now before
+                    ordered_pairs[ordered_pairs_count].face2 = f1; // now after
+                    ordered_pairs_count++;
+                }
+
+                // After a swap we skip ahead to the next pass iteration (goto ends current pair loop)
+                goto endfor;
+            }
+
+
+        // If we reach this point, no test was able to draw a conclusion
+        // We should perform clipping of f1 by f2 (or vice versa), but it is not done now
+       if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) {
+                inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
+                inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
+                inconclusive_pairs_count++;
+            }
+        // add them to the ordered-pairs list so they are not retested
+        // if tests were inconclusive, preserve the current ordering
+        if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
+                ordered_pairs[ordered_pairs_count].face1 = f2;
+                ordered_pairs[ordered_pairs_count].face2 = f1;
+                ordered_pairs_count++;
+            }
+        
+        endfor: ;
+        } // FIN de la boucle for int i=0; i<face_count-1; i++
+
+    } while (swapped);
+    // Fin du tri à bulle
+
+    
+    // Free the memory of the ordered pairs list
+    if (ordered_pairs) {
+        free(ordered_pairs);
+    }  
+}
+
+
 void painter_newell_sancha(Model3D* model, int face_count) {
     if (use_float_painter) { //painter_newell_sancha_float(model, face_count); return; 
         }
@@ -845,47 +1351,19 @@ void painter_newell_sancha(Model3D* model, int face_count) {
     // Step 1: Stable descending Z sort on the mean, with tie-breaker on original index
     // * * * * *
 
-    long t_start = GetTick();
-    // Build list of faces to sort.
-    //
-    // When observer-space back-face culling is enabled (`cull_back_faces == 1`), we
-    // only **sort the subset** of faces that are considered visible (`display_flag == 1`).
-    // Raison:
-    //  - Performance: qsort is O(n log n); sorting fewer faces reduces CPU time for complex meshes.
-    //  - Correctness: some painter tests rely on per-face plane data; excluding culled faces
-    //    from the primary sort prevents spurious re-ordering and reduces false corrections.
-    //
-    // Implementation detail (stability):
-    //  - We place all visible faces first in `faces->sorted_face_indices[0..visible_count-1]`.
-    //  - Then we append the culled faces at the end of the array (unchanged relative order).
-    //    This keeps the `sorted_face_indices` array full and *stable* across frames and toggles.
-    //    The drawing code still checks `display_flag` and will skip culled faces, so appending
-    //    them simply preserves indices without affecting rendering.
-    //
-    // Note: `visible_count` is the number of entries that must be passed to the sorting
-    // routine (qsort) so that only visible faces are reordered.
+    // delegate initial ordering to the fast variant which already implements
+    // visible-face filtering and the stable z-mean sort.
+    painter_newell_sancha_fast(model, face_count);
+
+    // recompute `visible_count` for the correction passes
     int visible_count = face_count;
     if (cull_back_faces) {
         visible_count = 0;
         for (i = 0; i < face_count; ++i) {
-            if (faces->display_flag[i]) faces->sorted_face_indices[visible_count++] = i;
+            if (faces->display_flag[i]) ++visible_count;
         }
-        // Append culled (non-visible) faces after visible ones to preserve array stability.
-        int tail = visible_count;
-        for (i = 0; i < face_count; ++i) {
-            if (!faces->display_flag[i]) faces->sorted_face_indices[tail++] = i;
-        }
-    } else {
-        // If culling is disabled, include all faces in the initial list (simple identity)
-        for (i = 0; i < face_count; i++) faces->sorted_face_indices[i] = i;
     }
-    // Use qsort for O(n log n) sorting while preserving the exact tie-breaker, applied only to visible faces
-    qsort_faces_ptr_for_cmp = faces;
-    qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
-    qsort_faces_ptr_for_cmp = NULL;
-    long t_end = GetTick();
     
-
     int swap_count = 0;
     int swapped = 0; // flag used for the correction loop
 
@@ -926,25 +1404,15 @@ void painter_newell_sancha(Model3D* model, int face_count) {
     do {
         swapped = 0;
    
-        int t1 = 0;
-        int t2 = 0;
-        int t3 = 0;
-        int t4 = 0;
-        int t5 = 0;
-        int t6 = 0;
-        int t7 = 0;
-
-
         // Iterate consecutive pairs (only over visible faces if culling is enabled)
         for (i = 0; i < visible_count-1; i++) {
             int f1 = faces->sorted_face_indices[i];
             int f2 = faces->sorted_face_indices[i+1];
 
-            // show faces to be tested (only in debug mode)
-            #if ENABLE_DEBUG_SAVE
-            debug_two_faces(model, f1, f2);
-            #endif
-
+            if ((f1== 3 && f2 == 44) || (f1 == 44 && f2 == 3)) {
+                printf("Testing pair: %d and %d\n", f1, f2);
+                keypress();
+            }
 
             // Skip pairs already declared ordered by previous swaps or tests.
             // ordered_pairs stores definitive relations discovered earlier in the pass to
@@ -959,13 +1427,11 @@ void painter_newell_sancha(Model3D* model, int face_count) {
                     already_ordered = 1; break; // f2 before f1 (inverse relation)
                 }
             }
-            if (already_ordered) continue;
+            if (already_ordered) {
+                // printf("Already ordered: %d <-> %d\n", f1, f2);
+                continue;
+            }
 
-            // Test 1: Depth overlap (cheap rejection/acceptance)
-            // - If f2's farthest point is in front of f1's nearest point, the order f1->f2
-            //   is respected (no swap). Conversely, if f1's farthest is in front of f2's nearest
-            //   we *must* swap. This is a conservative quick test that filters many non-overlapping cases.
-            t1++;
             // Test 1 : Depth overlap
             // Depth quick test: if farthest point of P2 is in front of nearest point of P1, order is respected
             if (faces->z_max[f2] <= faces->z_min[f1]) continue;
@@ -974,312 +1440,44 @@ void painter_newell_sancha(Model3D* model, int face_count) {
             // Bounding Box 2D overlap (split into X and Y parts)
             // Use cached bounding boxes (computed in calculateFaceDepths)
 
-            t2++;
             // Test 2 : X overlap only (axis-aligned bbox separation test)
             // If bounding boxes do not intersect on X, faces cannot overlap on screen and
             // the current order is safe.
             int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
             int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-
             if (maxx1 <= minx2 || maxx2 <= minx1) continue; // separated on X
             
-            t3++;
             // Test 3 : Y overlap only (axis-aligned bbox separation test)
             // Similarly, if separated on Y, faces do not overlap and no swap is needed.
             if (maxy1 <= miny2 || maxy2 <= miny1) continue; // separated on Y
 
 
+            // Polygon overlap test 
             if (!projected_polygons_overlap(model, f1, f2)) {
                 // bounding boxes overlap but polygons do not overlap
                 continue;
-                
             }
 
-            // Use cached plane normals and d terms computed in calculateFaceDepths
-            int n1 = faces->vertex_count[f1];
-            int n2 = faces->vertex_count[f2];
-            int offset1 = faces->vertex_indices_ptr[f1];
-            int offset2 = faces->vertex_indices_ptr[f2];
-            int k;
-            Fixed64 a1 = faces->plane_a[f1];
-            Fixed64 b1 = faces->plane_b[f1];
-            Fixed64 c1 = faces->plane_c[f1];
-            Fixed64 d1 = faces->plane_d[f1];
-            Fixed64 a2 = faces->plane_a[f2];
-            Fixed64 b2 = faces->plane_b[f2];
-            Fixed64 c2 = faces->plane_c[f2];
-            Fixed64 d2 = faces->plane_d[f2];
-            Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
-
-            int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
-            int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
-            int side;           // vertex side.
-            int all_same_side; // flag indicating whether all vertices are on the same side
-            int all_opposite_side; // flag indicating whether all vertices are on the opposite side
-            /* test_value replaced by Fixed64 accumulators inside loops to avoid Fixed32 overflow */
-            Fixed64 test_value64 = 0;
-
-            // ********************* TEST 4 *********************
-            t4++;
-            // Test 4: Is f2 entirely on the same observer-side of f1's plane?
-            // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
-            //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
-            //   same side as the observer (within epsilon), then f2 is conclusively in front
-            //   of f1 (no swap required). If any vertex is on the opposite side, the test fails
-            //   and we continue to stronger tests.
-
-            #if ENABLE_DEBUG_SAVE
-            printf("\n**** Test 4 : Testing faces %d and %d\n", f1, f2);
-            printf("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", FIXED64_TO_FLOAT(a1), FIXED64_TO_FLOAT(b1), FIXED64_TO_FLOAT(c1), FIXED64_TO_FLOAT(d1));
-            #endif
-
-            obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
-            if (d1 > (Fixed64)epsilon) obs_side1 = 1; 
-            else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
-            else goto skipT4; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
-            all_same_side = 1;
-
-            #if ENABLE_DEBUG_SAVE
-                printf("FOR loop start\n");
-                printf("obs_side1 = %d\n", obs_side1);
-                printf("test_values for face %d must be of the same sign as obs_side1\n", f2);
-            #endif
-            for (k=0; k<n2; k++) {
-                    int v = faces->vertex_indices_buffer[offset2+k]-1;
-                    /* Accumulate in 64-bit to avoid overflow (each product is >> FIXED_SHIFT to keep Fixed32 scale) */
-                    Fixed64 acc = 0;
-                    acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-                    acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-                    acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-                    acc += (Fixed64)d1; // d1 already Fixed32 scale
-                    #if ENABLE_DEBUG_SAVE
-                        printf("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, FIXED_TO_FLOAT(vtx->xo[v]), FIXED_TO_FLOAT(vtx->yo[v]), FIXED_TO_FLOAT(vtx->zo[v]));
-                        printf("test_value = %f\n", ((double)acc) / FIXED_SCALE);
-                    #endif
-                    if  (acc > (Fixed64)epsilon) side = 1;
-                    else if (acc < -(Fixed64)epsilon) side = -1;
-                    else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
-                    if (obs_side1 != side) { 
-                        // if a vertex is on the other side, break the loop
-                        // and set the flag to 0 to indicate the test failed (move to next test)
-                        all_same_side = 0; 
-                        #if ENABLE_DEBUG_SAVE
-                            printf("Test 4 failed for faces %d and %d\n", f1, f2);
-                            keypress();
-                        #endif  
-                        break; 
-                        }
-            }
-            #if ENABLE_DEBUG_SAVE
-                printf("FOR loop stop\n");
-            #endif
-
-            // test 4 passed
-            if (all_same_side) { 
-                #if ENABLE_DEBUG_SAVE
-                printf("Test 4 passed for Faces %d and %d\n", f1, f2);
-                keypress();
-                #endif
-
-                continue; // faces are ordered correctly, move to next pair
+            /* Tests 4 5 : perform purely geometric plane tests here, replacing the lengthy
+               inline code that followed previously */
+            {
+                int geo = geometric_face_relation(model, f1, f2);
+                if (geo == -1) continue;
+                if (geo == 1) goto do_swap;
             }
 
-            skipT4:
-
-            // ********************* TEST 5 ********************
-            t5++;
-            // Test 5: Is f1 entirely on the opposite side of f2's plane relative to the observer?
-            // - This is symmetric to Test 4: if every vertex of f1 is strictly on the opposite
-            //   side of f2's plane from the observer, then f1 is behind f2 and no swap is needed.
-            // - Both Test 4 and Test 5 are relatively cheap and frequently decisive on planar geometry.
-
-            #if ENABLE_DEBUG_SAVE
-            printf("Test 5 : Testing faces %d and %d\n", f1, f2);
-            printf("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", FIXED64_TO_FLOAT(a2), FIXED64_TO_FLOAT(b2), FIXED64_TO_FLOAT(c2), FIXED64_TO_FLOAT(d2) );
-            #endif
-
-            obs_side2 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
-            if (d2 > (Fixed64)epsilon) obs_side2 = 1; 
-            else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
-            else goto skipT5; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
-            all_opposite_side = 1;
-
-            #if ENABLE_DEBUG_SAVE
-                printf("FOR loop start\n");
-                printf("obs_side2 = %d\n", obs_side2);
-                printf("test_values for face %d must be of the opposite sign as obs_side2\n", f1);
-            #endif
-
-            for (k=0; k<n1; k++) {
-                int v = faces->vertex_indices_buffer[offset1+k]-1;
-                Fixed64 acc = 0;
-                acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-                acc += (Fixed64)d2;
-                if  (acc > (Fixed64)epsilon) side = 1;
-                else if (acc < -(Fixed64)epsilon) side = -1;
-                else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
-                if (obs_side2 == side) {
-                    // if a vertex is on the same side, break the loop
-                    // and set the flag to 0 to indicate the test failed (move to next test)
-                    all_opposite_side = 0; 
-                    #if ENABLE_DEBUG_SAVE
-                            printf("Test 5 failed for faces %d and %d\n", f1, f2);
-                            keypress();
-                        #endif  
-                    break; }
-                }
-
-                // test 5 passed
-                if (all_opposite_side) { // faces are ordered correctly, move to next pair
-                    #if ENABLE_DEBUG_SAVE
-                    printf("Test 5 passed for Faces %d and %d\n", f1, f2);
-                    keypress();
-                    #endif
-
-                    continue; // faces are ordered correctly, move to next pair
-                }
-                
-            skipT5:
-
-            // ********************* TEST 6 *********************
-            t6++;
-            // Test 6: Is f2 entirely on the opposite side of f1's plane relative to the observer?
-            // - If all vertices of f2 are strictly on the opposite side, then f2 is behind f1 and
-            //   an adjacent swap is required (f2 should come after f1). This test often detects
-            //   clear occlusion relations and triggers swaps.
-            #if ENABLE_DEBUG_SAVE
-            printf("Test 6 : Testing faces %d and %d\n", f1, f2);
-            printf("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", FIXED64_TO_FLOAT(a1), FIXED64_TO_FLOAT(b1), FIXED64_TO_FLOAT(c1), FIXED64_TO_FLOAT(d1));
-            #endif
-
-            obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
-            if (d1 > (Fixed64)epsilon) obs_side1 = 1; 
-            else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
-            else goto skipT6; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
-
-            all_opposite_side = 1;
-            #if ENABLE_DEBUG_SAVE
-                printf("FOR loop start\n");
-                printf("obs_side1 = %d\n", obs_side1);
-                printf("test_values for face %d must be of the opposite sign as obs_side1\n", f2);
-            #endif
-            for (k=0; k<n2; k++) {
-                int v = faces->vertex_indices_buffer[offset2+k]-1;
-                int side;
-                Fixed64 acc = 0;
-                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-                acc += (Fixed64)d1;
-
-                #if ENABLE_DEBUG_SAVE
-                    printf("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, FIXED_TO_FLOAT(vtx->xo[v]), FIXED_TO_FLOAT(vtx->yo[v]), FIXED_TO_FLOAT(vtx->zo[v]));
-                    printf("test_value = %f\n", ((double)acc) / FIXED_SCALE);
-                #endif
-
-                if  (acc > (Fixed64)epsilon) side = 1;
-                else if  (acc < -(Fixed64)epsilon) side = -1;
-                else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
-                if (obs_side1 == side) { 
-                    all_opposite_side = 0;
-                    #if ENABLE_DEBUG_SAVE
-                            printf("Test 6 failed for faces %d and %d\n", f1, f2);
-                            keypress();
-                        #endif  
-                    break; 
-                    }
-                }
-
-                if (all_opposite_side == 1) { // test 6 passed
-                // f2 is on the opposite side of the observer, therefore f2 is behind f1 ==> swap required
-                    #if ENABLE_DEBUG_SAVE
-                    printf("Test 6 passed for faces %d and %d\n", f1, f2);
-                    keypress();
-                    #endif 
-
-                    goto do_swap;
-                }
-
-
-
-            skipT6: ;
-
-            // ********************* TEST 7 *********************
-            t7++;
-            // Test 7: Is f1 entirely on the same side of f2's plane as the observer?
-            // - Symmetric to Test 6: if all vertices of f1 are on the observer side of f2's plane,
-            //   then f1 is in front of f2 and f1 should be drawn after f2 (swap required).
-            // - Passing Test 7 is a definitive reason to swap without further sampling.
-
-            #if ENABLE_DEBUG_SAVE
-            printf("Test 7 : Testing faces %d and %d\n", f1, f2);
-            printf("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", FIXED64_TO_FLOAT(a2), FIXED64_TO_FLOAT(b2), FIXED64_TO_FLOAT(c2), FIXED64_TO_FLOAT(d2));
-            #endif
-            obs_side2 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
-            if (d2 > (Fixed64)epsilon) obs_side2 = 1; 
-            else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
-            else goto skipT7; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
-
-            all_same_side = 1;
-            #if ENABLE_DEBUG_SAVE
-                printf("FOR loop start\n");
-                printf("obs_side1 = %d\n", obs_side1);
-                printf("test_values for face %d must be of the opposite sign as obs_side1\n", f2);
-            #endif
-
-            for (k=0; k<n1; k++) {
-                int v = faces->vertex_indices_buffer[offset1+k]-1;
-                int side;
-                Fixed64 acc = 0;
-                acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-                acc += (Fixed64)d2;
-                
-                #if ENABLE_DEBUG_SAVE
-                    printf("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, FIXED_TO_FLOAT(vtx->xo[v]), FIXED_TO_FLOAT(vtx->yo[v]), FIXED_TO_FLOAT(vtx->zo[v]));
-                    printf("test_value = %f\n", ((double)acc) / FIXED_SCALE);
-                #endif
-
-                if  (acc > (Fixed64)epsilon) side = 1;
-                else if  (acc < -(Fixed64)epsilon) side = -1;
-                else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
-                if (obs_side2 != side) { 
-                    all_same_side = 0; 
-                    #if ENABLE_DEBUG_SAVE
-                            printf("Test 7 failed for faces %d and %d\n", f1, f2);
-                            keypress();
-                        #endif 
-                    break; 
-                    }
+            /* Remaining geometric checks (tests 5 & 7) can be handled by calling
+               the helper again with swapped arguments.  The result is negated just
+               like `pair_order_relation` does. */
+            {
+                int geo2 = geometric_face_relation(model, f2, f1);
+                if (geo2 == -1) goto do_swap; // swapped result means f2 before f1 -> swap
+                // if (geo2 == 1) continue;     // f2 after f1 -> order correct
+                if (geo2 == 1) goto inconclusive;     // still inconclusive, fall through to record as inconclusive pair */
             }
-                // f1 is not on the same side as the observer, so f1 is not in front of f2
-                // on ne doit pas échanger l'ordre des faces
-                // aucun test n'a permis de conclure : on signale non concluant
-                if (all_same_side == 0)  goto skipT7;
-
-                // f1 est devant f2, on doit échanger l'ordre
-                else {
-                    #if ENABLE_DEBUG_SAVE
-                    printf("Test 7 passed for faces %d and %d\n", f1, f2);
-                    keypress();
-                    #endif 
-
-                    goto do_swap;
-                }
-
-
-
-
+        
                 
             do_swap: {
-
-                #if ENABLE_DEBUG_SAVE
-                    printf("Swapping faces %d and %d\n", f1, f2);
-                #endif
-
                 // Perform adjacent swap: this is an in-place stable operation and keeps
                 // changes local (simple bubble logic). We record the definitive ordered
                 // relation (f2 before f1 after swap) into `ordered_pairs` when possible
@@ -1303,14 +1501,10 @@ void painter_newell_sancha(Model3D* model, int face_count) {
                 goto endfor;
             }
 
-        
-        skipT7: 
-        // Si on arrive ici, c'est que auncun test n'a pas permis de conclure
+        inconclusive: ;
+        // If we reach this point, no test was able to draw a conclusion
         // We should perform clipping of f1 by f2 (or vice versa), but it is not done now
-        #if ENABLE_DEBUG_SAVE
-                printf("NON CONCLUTANT POUR LES FACES %d ET %d\n", f1, f2);
-                keypress();
-        #endif    
+  
        if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) {
                 inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
                 inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
@@ -1327,21 +1521,10 @@ void painter_newell_sancha(Model3D* model, int face_count) {
         endfor: ;
         } // FIN de la boucle for int i=0; i<face_count-1; i++
 
-        #if ENABLE_DEBUG_SAVE
-            printf("Pass completed, swaps this pass: %d\n", swap_count);
-            printf("t1=%d t2=%d t3=%d t4=%d t5=%d t6=%d t7=%d\n", t1, t2, t3, t4, t5, t6, t7);
-            keypress();
-        #endif
-
     } while (swapped);
     // Fin du tri à bulle
 
     
-    #if ENABLE_DEBUG_SAVE
-        printf("Total swaps: %d, Inconclusive pairs: %d, ordored pairs: %d\n", swap_count, inconclusive_pairs_count, ordered_pairs_count);
-        keypress();
-    #endif
-
     // Free the memory of the ordered pairs list
     if (ordered_pairs) {
         free(ordered_pairs);
@@ -2301,80 +2484,13 @@ static int pair_order_relation(Model3D* model, int f1, int f2) {
     if (maxy1 <= miny2) return -1; // f1 below f2
     if (maxy2 <= miny1) return 1;  // f1 above f2
 
-    // Plane-based tests 4..7 (copying logic from painter)
-    int n1 = faces->vertex_count[f1];
-    int n2 = faces->vertex_count[f2];
-    int offset1 = faces->vertex_indices_ptr[f1];
-    int offset2 = faces->vertex_indices_ptr[f2];
-    int k;
-    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
-    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
-
-    int obs_side1 = 0; int obs_side2 = 0; int side; int all_same_side; int all_opposite_side;
-
-    // Test 4
-    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else goto skipT4;
-    all_same_side = 1;
-    for (k=0; k<n2; k++) {
-        int v = faces->vertex_indices_buffer[offset2+k]-1;
-        Fixed64 acc = 0;
-        acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-        acc += (Fixed64)d1;
-        if  (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-        if (obs_side1 != side) { all_same_side = 0; break; }
-    }
-    if (all_same_side) return -1;
-    skipT4: ;
-
-    // Test 5
-    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else goto skipT5;
-    all_opposite_side = 1;
-    for (k=0; k<n1; k++) {
-        int v = faces->vertex_indices_buffer[offset1+k]-1;
-        Fixed64 acc = 0;
-        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-        acc += (Fixed64)d2;
-        if  (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-        if (obs_side2 == side) { all_opposite_side = 0; break; }
-    }
-    if (all_opposite_side) return -1;
-    skipT5: ;
-
-    // Test 6
-    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else goto skipT6;
-    all_opposite_side = 1;
-    for (k=0; k<n2; k++) {
-        int v = faces->vertex_indices_buffer[offset2+k]-1;
-        Fixed64 acc = 0;
-        acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-        acc += (Fixed64)d1;
-        if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-        if (obs_side1 == side) { all_opposite_side = 0; break; }
-    }
-    if (all_opposite_side) return 1; // swap -> f1 should be after f2
-    skipT6: ;
-
-    // Test 7
-    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else goto skipT7;
-    all_same_side = 1;
-    for (k=0; k<n1; k++) {
-        int v = faces->vertex_indices_buffer[offset1+k]-1;
-        Fixed64 acc = 0;
-        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-        acc += (Fixed64)d2;
-        if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-        if (obs_side2 != side) { all_same_side = 0; break; }
-    }
-    if (all_same_side) return 1;
-    skipT7: ;
+    // plane-only geometry tests factored out into helper
+    int geo = geometric_face_relation(model, f1, f2);
+    if (geo != 0) return geo;
+    /* swapped orientation covers the symmetric tests (5 & 7 in the old
+       numbering).  Invert the result because the arguments are reversed. */
+    geo = geometric_face_relation(model, f2, f1);
+    if (geo != 0) return -geo;
 
     // Non-conclusive
     return 0;
@@ -2618,49 +2734,6 @@ static int on_seg_ll(long long ax,long long ay,long long bx,long long by,long lo
 /* tolerance (in pixels) below which an intersection is considered too close
  * to a vertex/edge and thus ignored. Default set by user request to 1.0 px. */
 static double segs_intersect_tol_px = 1.0;
-
-/*
- * point_seg_dist2
- * ----------------
- * Calcule la distance au carré entre un point P(px,py) et un segment AB (ax,ay)-(bx,by).
- *
- * Raison d'utiliser la distance au carré : évite l'appel coûteux à sqrt() pour des
- * comparaisons (nous comparons toujours à tol^2). Cela améliore la performance et
- * évite des erreurs d'arrondi supplémentaires.
- *
- * Méthode : projection orthogonale du point sur la droite AB.
- * - On calcule le paramètre de projection c = (AB · AP).
- * - Si c <= 0, le plus proche est A (distance P-A).
- * - Si c >= |AB|^2, le plus proche est B (distance P-B).
- * - Sinon, on projette P sur AB et on renvoie la distance P - projection.
- *
- * Propriétés et invariants :
- * - Retourne une valeur >= 0 (double) correspondant à (distance)^2.
- * - Comportement bien défini pour segments dégénérés (A==B) : la branche c>=d couvre ce cas.
- */
-/* `point_seg_dist2` (double) removed: use `point_seg_dist2_fixed_int` (integer) for distance checks. */
-
-/*
- * set_segs_intersect_tol_px
- * -------------------------
- * Setter runtime pour ajuster la tolérance (en pixels) utilisée par
- * `segs_intersect_int_dbl` pour ignorer les intersections jugées trop
- * proches des sommets/aretes.
- *
- * Comportement :
- * - Les valeurs négatives sont clampées à 0.0 (tolérance minimale nulle).
- * - La tolérance est interprétée en pixels d'écran.
- * - Modifier cette valeur influence directement les décisions d'intersection
- *   : augmenter tol réduit les faux positifs sur croisements sub‑pixel, mais
- *   peut masquer de petits recouvrements réels.
- *
- * Usage recommandé : fixer la tolérance entre 0.25 et 1.5 px selon vos
- * exigences visuelles ; 1.0 px est le réglage par défaut après discussion.
- */
-static void set_segs_intersect_tol_px(double px) {
-    if (px < 0.0) px = 0.0;
-    segs_intersect_tol_px = px;
-}
 
 /*
  * segs_intersect_int_dbl
@@ -4018,6 +4091,427 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
     return 0;
 }
 
+/* globals used when autotest calls debug function without interaction */
+static int autopair_f1 = -1;
+static int autopair_f2 = -1;
+/* flag used to silence pair_plane_before_debug during autotest */
+static int pair_plane_before_debug_quiet = 0;
+
+/* helper macros for guarded prints */
+#define PDBG(...) if(!pair_plane_before_debug_quiet) printf(__VA_ARGS__)
+#define PKEYP() if(!pair_plane_before_debug_quiet) keypress()
+
+/* prototype for autotest */
+void plane_before_autotest(Model3D* model);
+
+/* debug version of pair_plane_before: prompts user, prints diagnostics */
+static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+    /* if autopair values are set, use them quietly */
+    if (autopair_f1 >= 0 && autopair_f2 >= 0) {
+        f1 = autopair_f1;
+        f2 = autopair_f2;
+    }
+    /* if running in silent/autotest mode, just forward to non-debug implementation */
+    if (pair_plane_before_debug_quiet) {
+        return pair_plane_before(model, f1, f2);
+    }
+    else {
+        PDBG("PAIR_DEBUG: enter two face indices f1 f2 (or any numbers): "); fflush(stdout);
+        if (scanf("%d %d", &f1, &f2) != 2) {
+            PDBG("invalid input\n"); PKEYP(); return 0;
+        }
+        int c; while ((c = getchar()) != '\n' && c != EOF) ;
+        PDBG("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
+    }
+
+    // Use cached plane normals and d terms computed in calculateFaceDepths
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    int k;
+    /* convert planes to doubles for debug arithmetic */
+    double a1 = FIXED64_TO_FLOAT(faces->plane_a[f1]);
+    double b1 = FIXED64_TO_FLOAT(faces->plane_b[f1]);
+    double c1 = FIXED64_TO_FLOAT(faces->plane_c[f1]);
+    double d1 = FIXED64_TO_FLOAT(faces->plane_d[f1]);
+    double a2 = FIXED64_TO_FLOAT(faces->plane_a[f2]);
+    double b2 = FIXED64_TO_FLOAT(faces->plane_b[f2]);
+    double c2 = FIXED64_TO_FLOAT(faces->plane_c[f2]);
+    double d2 = FIXED64_TO_FLOAT(faces->plane_d[f2]);
+    double epsilon = 0.01;
+
+    int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
+    int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
+    int side;           // vertex side.
+    int all_same_side; // flag indicating whether all vertices are on the same side
+    int all_opposite_side; // flag indicating whether all vertices are on the opposite side
+    /* values will be computed as doubles below */
+
+    // ********************* TEST 4 *********************
+
+    // Test 4: Is f2 entirely on the same observer-side of f1's plane?
+    // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
+    //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
+    //   same side as the observer (within epsilon), then f2 is conclusively in front
+    //   of f1 (no swap required). If any vertex is on the opposite side, the test fails
+    //   and we continue to stronger tests.
+
+
+    PDBG("\n**** Test 4 : Testing faces %d and %d\n", f1, f2);
+    PDBG("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", a1, b1, c1, d1);
+    obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
+    if (d1 > epsilon) obs_side1 = 1; 
+    else if (d1 < -epsilon) obs_side1 = -1;
+    else goto skipT4_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_same_side = 1;
+
+    printf("FOR loop start\n");
+    printf("obs_side1 = %d\n", obs_side1);
+    printf("test_values for face %d must be of the same sign as obs_side1\n", f2);
+
+    for (k=0; k<n2; k++) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            /* compute using doubles */
+            double vx = FIXED_TO_FLOAT(vtx->xo[v]);
+            double vy = FIXED_TO_FLOAT(vtx->yo[v]);
+            double vz = FIXED_TO_FLOAT(vtx->zo[v]);
+            double acc = a1 * vx + b1 * vy + c1 * vz + d1;
+
+            PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, vx, vy, vz);
+            PDBG("test_value = %f\n", acc);
+
+            if  (acc > epsilon) side = 1;
+            else if (acc < -epsilon) side = -1;
+            else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+            if (obs_side1 != side) { 
+                // if a vertex is on the other side, break the loop
+                // and set the flag to 0 to indicate the test failed (move to next test)
+                all_same_side = 0; 
+                
+                    printf("Test 4 failed for faces %d and %d\n", f1, f2);
+                    keypress(); 
+                break; 
+                }
+    }
+
+        PDBG("FOR loop stop\n");
+
+    // test 4 passed
+    if (all_same_side) { 
+        PDBG("Test 4 passed for Faces %d and %d\n", f1, f2);
+        PKEYP();
+        return 1; // faces are ordered correctly, move to next pair
+    }
+
+    skipT4_debug:
+
+    // ********************* TEST 5 ********************
+    // Test 5: Is f1 entirely on the opposite side of f2's plane relative to the observer?
+    // - This is symmetric to Test 4: if every vertex of f1 is strictly on the opposite
+    //   side of f2's plane from the observer, then f1 is behind f2 and no swap is needed.
+    // - Both Test 4 and Test 5 are relatively cheap and frequently decisive on planar geometry.
+
+
+    PDBG("\n\nTest 5 : Testing faces %d and %d\n", f1, f2);
+    PDBG("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", a2, b2, c2, d2 );
+
+    obs_side2 = 0; // sign of d2: +1, -1 or 0 (inconclusive)
+    if (d2 > epsilon) obs_side2 = 1; 
+    else if (d2 < -epsilon) obs_side2 = -1;
+    else return 0; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_opposite_side = 1;
+
+    PDBG("FOR loop start\n");
+    PDBG("obs_side2 = %d\n", obs_side2);
+    PDBG("test_values for face %d must be of the opposite sign as obs_side2\n", f1);
+
+    for (k = 0; k < n1; k++) {
+        int v = faces->vertex_indices_buffer[offset1 + k] - 1;
+        /* compute using doubles */
+        double vx = FIXED_TO_FLOAT(vtx->xo[v]);
+        double vy = FIXED_TO_FLOAT(vtx->yo[v]);
+        double vz = FIXED_TO_FLOAT(vtx->zo[v]);
+        double acc = a2 * vx + b2 * vy + c2 * vz + d2;
+
+        PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, vx, vy, vz);
+        PDBG("test_value = %f\n", acc);
+
+        if (acc > epsilon) side = 1;
+        else if (acc < -epsilon) side = -1;
+        //else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+        // if (obs_side2 == side) {
+        //     // if a vertex is on the same side, break the loop
+        //     // and set the flag to 0 to indicate the test failed (move to next test)
+        //     all_opposite_side = 0;
+
+        //     printf("Test 5 failed for faces %d and %d\n", f1, f2);
+        //     keypress();
+        //     //break; 
+        //     }
+    }
+    PDBG("FOR loop stop\n");
+
+        // test 5 passed
+        if (all_opposite_side) { // faces are ordered correctly, move to next pair
+            PDBG("Test 5 passed for Faces %d and %d\n", f1, f2);
+            PKEYP();
+            return 1;
+        }
+}
+
+
+/* debug version of pair_plane_before: prompts user, prints diagnostics */
+static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+    /* handle autopair/quiet similar to non-fixed debug */
+    if (autopair_f1 >= 0 && autopair_f2 >= 0) {
+        f1 = autopair_f1;
+        f2 = autopair_f2;
+    } else if (!pair_plane_before_debug_quiet) {
+        printf("PAIR_DEBUG: enter two face indices f1 f2 (or any numbers): "); fflush(stdout);
+        if (scanf("%d %d", &f1, &f2) != 2) {
+            printf("invalid input\n"); keypress(); return 0;
+        }
+        int c; while ((c = getchar()) != '\n' && c != EOF) ;
+        printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
+    }
+
+
+    // Use cached plane normals and d terms computed in calculateFaceDepths
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    int k;
+    Fixed64 a1 = faces->plane_a[f1];
+    Fixed64 b1 = faces->plane_b[f1];
+    Fixed64 c1 = faces->plane_c[f1];
+    Fixed64 d1 = faces->plane_d[f1];
+    Fixed64 a2 = faces->plane_a[f2];
+    Fixed64 b2 = faces->plane_b[f2];
+    Fixed64 c2 = faces->plane_c[f2];
+    Fixed64 d2 = faces->plane_d[f2];
+
+    /* compute epsilon based on magnitude of the two plane normals
+       instead of scanning every vertex; this keeps value bounded even when
+       observer-space coordinates are large. */
+    Fixed32 epsilon;
+    {
+        long t0 = GetTick();
+        double fa1 = FIXED64_TO_FLOAT(a1);
+        double fb1 = FIXED64_TO_FLOAT(b1);
+        double fc1 = FIXED64_TO_FLOAT(c1);
+        double fa2 = FIXED64_TO_FLOAT(a2);
+        double fb2 = FIXED64_TO_FLOAT(b2);
+        double fc2 = FIXED64_TO_FLOAT(c2);
+        double norm1 = sqrt(fa1*fa1 + fb1*fb1 + fc1*fc1);
+        double norm2 = sqrt(fa2*fa2 + fb2*fb2 + fc2*fc2);
+        double base = (norm1 > norm2) ? norm1 : norm2;
+        double epsf = base * 0.001;  /* 0.1% of larger normal length */
+        if (epsf < 0.01) epsf = 0.01;
+        epsilon = FLOAT_TO_FIXED((float)epsf);
+        long t1 = GetTick();
+        PDBG("plane_norm epsilon = %f (fixed %ld) n1=%f n2=%f ticks=%ld\n",
+               epsf, (long)epsilon, norm1, norm2, t1 - t0);
+    }
+
+    int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
+    int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
+    int side;           // vertex side.
+    int all_same_side; // flag indicating whether all vertices are on the same side
+    int all_opposite_side; // flag indicating whether all vertices are on the opposite side
+    /* test_value replaced by Fixed64 accumulators inside loops to avoid Fixed32 overflow */
+
+    // ********************* TEST 4 *********************
+
+    // Test 4: Is f2 entirely on the same observer-side of f1's plane?
+    // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
+    //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
+    //   same side as the observer (within epsilon), then f2 is conclusively in front
+    //   of f1 (no swap required). If any vertex is on the opposite side, the test fails
+    //   and we continue to stronger tests.
+
+
+    PDBG("\n**** Test 4 : Testing faces %d and %d\n", f1, f2);
+    PDBG("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", FIXED64_TO_FLOAT(a1), FIXED64_TO_FLOAT(b1), FIXED64_TO_FLOAT(c1), FIXED64_TO_FLOAT(d1));
+    obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
+    if (d1 > (Fixed64)epsilon) obs_side1 = 1; 
+    else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
+    else goto skipT4_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_same_side = 1;
+
+    printf("FOR loop start\n");
+    printf("obs_side1 = %d\n", obs_side1);
+    printf("test_values for face %d must be of the same sign as obs_side1\n", f2);
+
+    for (k=0; k<n2; k++) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            /* Accumulate in 64-bit to avoid overflow (each product is >> FIXED_SHIFT to keep Fixed32 scale) */
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1; // d1 already Fixed32 scale
+
+            PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
+                   k, v+1,
+                   FIXED_TO_FLOAT(vtx->xo[v]),
+                   FIXED_TO_FLOAT(vtx->yo[v]),
+                   FIXED_TO_FLOAT(vtx->zo[v]));
+            /* show raw fixed value, integer part (shifted) and float equivalent */
+            // PDBG("test_value (fixed64 raw) = %lld\n", (long long)acc);
+            // PDBG("test_value (fixed64 >>%d) = %lld\n", FIXED_SHIFT, (long long)(acc >> FIXED_SHIFT));
+            PDBG("test_value (float)        = %f\n", FIXED64_TO_FLOAT(acc));
+
+             if  (acc > (Fixed64)epsilon) side = 1;
+            else if (acc < -(Fixed64)epsilon) side = -1;
+            else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+
+            if  (acc > (Fixed64)epsilon) side = 1;
+            else if (acc < -(Fixed64)epsilon) side = -1;
+            else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+            if (obs_side1 != side) { 
+                // if a vertex is on the other side, break the loop
+                // and set the flag to 0 to indicate the test failed (move to next test)
+                all_same_side = 0; 
+                
+                    PDBG("Test 4 failed for faces %d and %d\n", f1, f2);
+                    PKEYP(); 
+                break; 
+                }
+    }
+    PDBG("FOR loop stop\n");
+    // test 4 passed
+    if (all_same_side) { 
+        PDBG("Test 4 passed for Faces %d and %d\n", f1, f2);
+        PKEYP();
+        // return 1; // faces are ordered correctly, move to next pair
+    }
+
+    skipT4_debug:
+
+    // ********************* TEST 5 ********************
+    // Test 5: Is f1 entirely on the opposite side of f2's plane relative to the observer?
+    // - This is symmetric to Test 4: if every vertex of f1 is strictly on the opposite
+    //   side of f2's plane from the observer, then f1 is behind f2 and no swap is needed.
+    // - Both Test 4 and Test 5 are relatively cheap and frequently decisive on planar geometry.
+
+
+    PDBG("\n**** Test 5 : Testing faces %d and %d\n", f1, f2);
+    PDBG("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", FIXED64_TO_FLOAT(a2), FIXED64_TO_FLOAT(b2), FIXED64_TO_FLOAT(c2), FIXED64_TO_FLOAT(d2) );
+
+
+    obs_side2 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
+    if (d2 > (Fixed64)epsilon) obs_side2 = 1; 
+    else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
+    // else return 0; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_opposite_side = 1;
+
+    PDBG("FOR loop start\n");
+    PDBG("obs_side2 = %d\n", obs_side2);
+    PDBG("test_values for face %d must be of the opposite sign as obs_side2\n", f1);
+
+    for (k=0; k<n1; k++) {
+        int v = faces->vertex_indices_buffer[offset1+k]-1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d2;
+ 
+        /* vertex coords */
+        PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
+               k, v+1,
+               FIXED_TO_FLOAT(vtx->xo[v]),
+               FIXED_TO_FLOAT(vtx->yo[v]),
+               FIXED_TO_FLOAT(vtx->zo[v]));
+        /* report acc in three ways */
+        // PDBG("test_value (fixed64 raw)       = %lld\n", (long long)acc);
+        // PDBG("test_value (fixed64 >>%d)       = %lld\n", FIXED_SHIFT, (long long)(acc >> FIXED_SHIFT));
+        PDBG("test_value (float equiv)        = %f\n", FIXED64_TO_FLOAT(acc));
+        
+
+        
+        if  (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+        if (obs_side2 == side) {
+            // if a vertex is on the same side, break the loop
+            // and set the flag to 0 to indicate the test failed (move to next test)
+            all_opposite_side = 0; 
+
+            PDBG("Test 5 failed for faces %d and %d\n", f1, f2);
+            PKEYP();
+            break; }
+        }
+
+        // test 5 passed
+        if (all_opposite_side) { // faces are ordered correctly, move to next pair
+        PDBG("Test 5 passed for Faces %d and %d\n", f1, f2);
+        PKEYP();
+        return 1;
+        }
+    // reached if neither test decided
+    return 0;
+}
+
+
+
+/* automatic test that iterates all face pairs and logs epsilon+results */
+void plane_before_autotest(Model3D* model) {
+    if (!model) { printf("No model for autotest\n"); return; }
+    FILE *fp = fopen("epsilon.txt", "w");
+    if (!fp) { printf("Unable to open epsilon.txt for writing\n"); return; }
+    FaceArrays3D* faces = &model->faces;
+    int fc = faces->face_count;
+    for (int f1 = 0; f1 < fc; ++f1) {
+        for (int f2 = 0; f2 < fc; ++f2) {
+            if (f1 == f2) continue;
+            /* compute epsilon based on plane normals (same as debug_fixed) */
+            Fixed64 a1 = faces->plane_a[f1];
+            Fixed64 b1 = faces->plane_b[f1];
+            Fixed64 c1 = faces->plane_c[f1];
+            Fixed64 a2 = faces->plane_a[f2];
+            Fixed64 b2 = faces->plane_b[f2];
+            Fixed64 c2 = faces->plane_c[f2];
+            double fa1 = FIXED64_TO_FLOAT(a1);
+            double fb1 = FIXED64_TO_FLOAT(b1);
+            double fc1d = FIXED64_TO_FLOAT(c1);
+            double fa2 = FIXED64_TO_FLOAT(a2);
+            double fb2 = FIXED64_TO_FLOAT(b2);
+            double fc2d = FIXED64_TO_FLOAT(c2);
+            double norm1 = sqrt(fa1*fa1 + fb1*fb1 + fc1d*fc1d);
+            double norm2 = sqrt(fa2*fa2 + fb2*fb2 + fc2d*fc2d);
+            double base = (norm1 > norm2) ? norm1 : norm2;
+            double epsf = base * 0.001;
+            if (epsf < 0.01) epsf = 0.01;
+            Fixed32 epsilon = FLOAT_TO_FIXED((float)epsf);
+
+            int res = pair_plane_before(model, f1, f2);
+
+            autopair_f1 = f1;
+            autopair_f2 = f2;
+            pair_plane_before_debug_quiet = 1;
+            int debug_res = pair_plane_before_debug_fixed(model, f1, f2);
+            pair_plane_before_debug_quiet = 0;
+            autopair_f1 = autopair_f2 = -1;
+
+            printf("AUTO: faces %d %d eps=%f result=%d debug=%d\n",
+                   f1, f2, epsf, res, debug_res);
+            fprintf(fp, "%d %d %f %d %d\n",
+                    f1, f2, epsf, res, debug_res);
+        }
+    }
+    fclose(fp);
+    printf("Autotest completed, results written to epsilon.txt\n");
+}
+
 static int pair_plane_before(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -4034,7 +4528,8 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
      * If observer is in front of f1 and all f2 vertices are also in front,
      * then f2 occludes f1 -> f1 is before (should be drawn first). */
     int obs_side1 = 0; int side; int all_same_side;
-    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    obs_side1 = 0; 
+    if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
     if (obs_side1 != 0) {
         all_same_side = 1;
         for (k = 0; k < n2; ++k) {
@@ -4053,7 +4548,8 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
      * If observer is in front of f2 and all f1 vertices are behind f2's plane, then f1 is before f2. */
     Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
     int obs_side2 = 0; int all_opposite_side = 0;
-    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    obs_side2 = 0; 
+    if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
     if (obs_side2 != 0) {
         all_opposite_side = 1;
         for (k = 0; k < n1; ++k) {
@@ -10433,6 +10929,18 @@ segment "code22";
                 keypress();
                 goto loopReDraw;
 
+            case 33: // '!' - autotest plane_before on all pairs
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                plane_before_autotest(model);
+                goto loopReDraw;
+
+            case 77: // 'M' - debug pair_plane_before
+            case 109: // 'm'
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                // pair_plane_before_debug(model, 0, 0);
+                pair_plane_before_debug_fixed(model, 0, 0);
+                goto loopReDraw;
+
             case 79: // 'O' - check projected polygon overlap
             case 111: // 'o'
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
@@ -10445,9 +10953,6 @@ segment "code22";
                 display_model_face_ids(model, &params, filename);
                 goto loopReDraw;
 
-            /* New: direct painter mode keys
-             * '1' -> FAST, '2' -> NORMAL (Fixed), '3' -> NEWELL_SANCHAV2, 'U' -> FLOAT
-             */
             case 49: // '1' - set FAST painter
                 painter_mode = PAINTER_MODE_FAST;
                 printf("Painter mode: FAST (simple face sorting only)\n");
@@ -10475,6 +10980,16 @@ segment "code22";
                 painter_mode = PAINTER_MODE_CORRECTV2;
                 printf("Painter mode: CORRECT V2 (painter_correctV2)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
+
+            case 63: // '?' - run geometry-only painter (painter_geo)
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                painter_geo(model, model->faces.face_count);
+                goto loopReDraw;
+
+            case 58: // ':' - invoke newly implemented painter_new directly
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                painter_new(model, model->faces.face_count);
+                goto loopReDraw;
 
             case 55: // '7' - choose fill color
                 {

@@ -182,5 +182,8 @@ Retour à l'affichage graphique normal par n'importe quelle touche.
 A refaire, plus progressivement.
 
 
-Plantage sir 1 vs 46
+newell sancha V2 marche bien (touche G) : à confirmer.
+newell sancha V3 : KO
+
+
 

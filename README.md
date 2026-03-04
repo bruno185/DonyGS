@@ -364,7 +364,7 @@ This copies the compiled binary to a bootable disk image for use with emulators 
 
 ## Known Limitations
 
-- **Polygon Splitting**: Not implemented; complex overlapping geometry may produce artifacts
+- **Polygon Splitting**: Basic in‑memory splitting on load (faces cut by intersecting planes) now implemented to eliminate simple interpenetrations
 - **Transparency**: Not supported; all polygons are opaque
 - **Lighting**: No shading model; faces use flat colors from palette
 - **Large Models**: Performance degrades significantly above ~500 faces in NORMAL mode
@@ -372,7 +372,7 @@ This copies the compiled binary to a bootable disk image for use with emulators 
 
 ## Future Enhancements
 
-- Implement polygon splitting for perfect accuracy
+- Improve and extend polygon splitting logic (currently handles simple plane cuts on load)
 - Add Z-buffer rendering mode as alternative to painter's algorithm
 - Optimize CORRECT mode for better performance
 - Support textured polygons
