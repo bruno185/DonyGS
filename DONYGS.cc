@@ -1224,9 +1224,6 @@ void painter_geo(Model3D* model, int face_count) {
     }
     inconclusive_pairs_count = 0;
 
-    printf("ordered_pairs_capacity = %d\n", ordered_pairs_capacity);
-    keypress();
-
     // Bubble-like correction passes (iterate until stable)
     do {
         swapped = 0;
@@ -1260,8 +1257,9 @@ void painter_geo(Model3D* model, int face_count) {
             {
                 int geo  = geometric_face_relation(model, f1, f2);
                 int geo2 = geometric_face_relation(model, f2, f1);
-                if ((f1==6 && f2==45)||(f1==45 && f2==13)) {
-                    // debug here if needed
+                if ((f1==6 && f2==45)||(f1==45 && f2==6)) {
+                    printf("Geometric relation f1=%d f2=%d : geo=%d geo2=%d\n", f1, f2, geo, geo2);
+                    keypress();
                 }
                 if (geo == -1) continue;
                 if (geo == 1) goto do_swap;
@@ -1271,6 +1269,30 @@ void painter_geo(Model3D* model, int face_count) {
                 if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) {
                     inconclusive_pairs[inconclusive_pairs_count++] = (InconclusivePair){f1,f2};
                 }
+                /* try a QuickDraw-centric raycast if the projected polygons actually overlap */
+                if (projected_polygons_overlap(model, f1, f2)) {
+                    int rc = ray_cast_hierarchical(model, f1, f2);
+                    if ((f1==6 && f2==45)||(f1==45 && f2==6)) {
+                        printf("Raycast result f1=%d f2=%d : rc=%d\n", f1, f2, rc);
+                        keypress();
+                    }
+                    if (rc < 0) {
+                        /* ray hit f1 first -> f1 is in front, so the current order f1,f2 is wrong;
+                           swap them. */
+                        goto do_swap;
+                    } else if (rc > 0) {
+                        /* ray hit f2 first -> f1 is farther than f2; order f1 before f2 is correct,
+                           record this ordering. */
+                        if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
+                            ordered_pairs[ordered_pairs_count].face1 = f1;
+                            ordered_pairs[ordered_pairs_count].face2 = f2;
+                            ordered_pairs_count++;
+                        }
+                        continue;
+                    }
+                    /* rc == 0 falls through to record inconclusive as before */
+                }
+                /* no overlap or raycast inconclusive – treat as non-swapped but remember order */
                 if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
                     ordered_pairs[ordered_pairs_count].face1 = f2;
                     ordered_pairs[ordered_pairs_count].face2 = f1;
