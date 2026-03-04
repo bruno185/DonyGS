@@ -1176,6 +1176,9 @@ void painter_geo(Model3D* model, int face_count) {
     Fixed32* face_zmean = faces->z_mean;
     if (!face_zmean) return; // safety
 
+
+    printf("Running painter_geo with %d faces (cull_back_faces=%d)...\n", face_count, cull_back_faces);
+
     // delegate initial ordering to the fast variant which already implements
     // visible-face filtering and the stable z-mean sort.
     painter_newell_sancha_fast(model, face_count);
@@ -1257,10 +1260,10 @@ void painter_geo(Model3D* model, int face_count) {
             {
                 int geo  = geometric_face_relation(model, f1, f2);
                 int geo2 = geometric_face_relation(model, f2, f1);
-                if ((f1==6 && f2==45)||(f1==45 && f2==6)) {
-                    printf("Geometric relation f1=%d f2=%d : geo=%d geo2=%d\n", f1, f2, geo, geo2);
-                    keypress();
-                }
+                // if ((f1==6 && f2==45)||(f1==45 && f2==6)) {
+                //     printf("Geometric relation f1=%d f2=%d : geo=%d geo2=%d\n", f1, f2, geo, geo2);
+                //     keypress();
+                // }
                 if (geo == -1) continue;
                 if (geo == 1) goto do_swap;
                 if (geo2 == -1) goto do_swap; // swapped result means f2 before f1 -> swap
@@ -1272,10 +1275,10 @@ void painter_geo(Model3D* model, int face_count) {
                 /* try a QuickDraw-centric raycast if the projected polygons actually overlap */
                 if (projected_polygons_overlap(model, f1, f2)) {
                     int rc = ray_cast_hierarchical(model, f1, f2);
-                    if ((f1==6 && f2==45)||(f1==45 && f2==6)) {
-                        printf("Raycast result f1=%d f2=%d : rc=%d\n", f1, f2, rc);
-                        keypress();
-                    }
+                    // if ((f1==6 && f2==45)||(f1==45 && f2==6)) {
+                    //     printf("Raycast result f1=%d f2=%d : rc=%d\n", f1, f2, rc);
+                    //     keypress();
+                    // }
                     if (rc < 0) {
                         /* ray hit f1 first -> f1 is in front, so the current order f1,f2 is wrong;
                            swap them. */
@@ -1431,10 +1434,6 @@ void painter_newell_sancha(Model3D* model, int face_count) {
             int f1 = faces->sorted_face_indices[i];
             int f2 = faces->sorted_face_indices[i+1];
 
-            if ((f1== 3 && f2 == 44) || (f1 == 44 && f2 == 3)) {
-                printf("Testing pair: %d and %d\n", f1, f2);
-                keypress();
-            }
 
             // Skip pairs already declared ordered by previous swaps or tests.
             // ordered_pairs stores definitive relations discovered earlier in the pass to
