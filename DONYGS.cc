@@ -928,7 +928,8 @@ static int painter_new_plane_test5(Model3D* model, int f1, int f2) {
     return 0;
 }
 
-/* Tests 6 and 7 follow same pattern; they return +1 when swap required. */
+/* Tests 6 and 7 follow same pattern; they return +1 when swap required.
+   neither test ever produces a negative result. */
 static int painter_new_plane_test6(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -1095,6 +1096,7 @@ void painter_new(Model3D* model, int face_count) {
         if (!inconclusive_pairs) inconclusive_pairs_capacity = 0;
     }
     inconclusive_pairs_count = 0;
+    int rctest = 0;
     do {
         swapped = 0;
         for (i = 0; i < visible_count-1; i++) {
@@ -1114,31 +1116,53 @@ void painter_new(Model3D* model, int face_count) {
                 else continue;
             }
             if ((result = painter_new_test2_bbox_x(model,f1,f2)) != 0) {
-                continue;
+                continue;          /* separation in X, order safe */
             }
             if ((result = painter_new_test3_bbox_y(model,f1,f2)) != 0) {
-                continue;
+                continue;          /* separation in Y, order safe */
             }
             /* polygon overlap test copied inline since requirement forbids existing functions */
             if (!projected_polygons_overlap(model, f1, f2)) continue;
 
-            if ((result = painter_new_plane_test4(model,f1,f2)) != 0) {
-                if (result == 1) goto new_do_swap;
-                else continue;
+            /* plane tests 4 & 5 only distinguish “definitely before” (-1) from
+               “undecidable” (0); they never request a swap.  if result < 0 the
+               current ordering is confirmed and we skip to next pair, otherwise
+               we fall through to the next test. */
+            if ((result = painter_new_plane_test4(model,f1,f2)) < 0)
+                continue;
+            if ((result = painter_new_plane_test5(model,f1,f2)) < 0)
+                continue;
+
+            /* tests 6 and 7 may request a swap.  test6 returns 0 or 1,
+               test7 returns -1, 0 or 1, so we handle them slightly
+               differently for clarity. */
+            result = painter_new_plane_test6(model,f1,f2);
+            if (result == 1)                 /* definite swap */
+                goto new_do_swap;
+            /* result == 0 → fall through to test7 */
+
+            result = painter_new_plane_test7(model,f1,f2);
+            if (result == 1)                 /* definite swap */
+                goto new_do_swap;
+            /* result == 0 -> inconclusive; try a QuickDraw raycast if polygons overlap */
+            if (projected_polygons_overlap(model, f1, f2)) {
+                int rc = ray_cast_hierarchical(model, f1, f2);
+                rctest++;
+                if (rc < 0) {
+                    /* ray hit f1 first: swap order */
+                    goto new_do_swap;
+                } else if (rc > 0) {
+                    /* ray hit f2 first: current order f1,f2 is correct, record it */
+                    if (ordered_pairs_capacity && ordered_pairs_count < ordered_pairs_capacity) {
+                        ordered_pairs[ordered_pairs_count].face1 = f1;
+                        ordered_pairs[ordered_pairs_count].face2 = f2;
+                        ordered_pairs_count++;
+                    }
+                    continue;   /* move on to next pair */
+                }
+                /* rc == 0 falls through to record inconclusive pair */
             }
-            if ((result = painter_new_plane_test5(model,f1,f2)) != 0) {
-                if (result == 1) goto new_do_swap;
-                else continue;
-            }
-            if ((result = painter_new_plane_test6(model,f1,f2)) != 0) {
-                if (result == 1) goto new_do_swap;
-                else continue;
-            }
-            if ((result = painter_new_plane_test7(model,f1,f2)) != 0) {
-                if (result == 1) goto new_do_swap;
-                else continue;
-            }
-            /* inconclusive pair */
+            /* no overlap or raycast inconclusive – treat as inconclusive pair */
             if (inconclusive_pairs_capacity) {
                 if (inconclusive_pairs_count < inconclusive_pairs_capacity) {
                     inconclusive_pairs[inconclusive_pairs_count++] = (InconclusivePair){f1,f2};
@@ -1159,10 +1183,9 @@ void painter_new(Model3D* model, int face_count) {
     if (ordered_pairs) free(ordered_pairs);
     long t_stop = GetTick();
     printf("time = %ld\n", t_stop - t_start);
+    printf("raycast tests = %d\n", rctest); 
     keypress();
-    // optional debug prints omitted for brevity
 }
-
 
 
 void painter_geo(Model3D* model, int face_count) {
