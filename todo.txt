@@ -185,5 +185,8 @@ A refaire, plus progressivement.
 newell sancha V2 marche bien (touche G) : à confirmer.
 newell sancha V3 : KO
 
+Dans painter_corrct (et V2) on pourrait peut s'abstenir de la pass 1 : 
+les back faces sont déjà triées par Z ...??
+
 
 
