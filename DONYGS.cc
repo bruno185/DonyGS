@@ -8333,6 +8333,55 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
     return vertex_count;  // Return the number of vertices read
 }
 
+// Normalize auto-fit parameters so that observer distance becomes 150
+// by scaling model vertices and projection scale accordingly.
+//
+// For a model where auto-fit produced:
+//   D = auto_suggested_distance
+//   P = auto_suggested_proj_scale
+// the normalization applies:
+//   factor = D / 150
+//   new D = D * factor
+//   new P = P * factor
+//   vertices *= factor
+//
+// This keeps the apparent size on-screen constant while forcing the
+// observer distance to be 150.
+void normalizeAutoFitDistanceTo150(Model3D* model) {
+    if (model == NULL) return;
+    Fixed32 D = model->auto_suggested_distance;
+    Fixed32 P = model->auto_suggested_proj_scale;
+    if (D <= 0 || P <= 0) return;
+
+    const Fixed32 targetD = INT_TO_FIXED(150);
+    // Apply the pure “distance forced to 150 with unchanged on-screen size” formula:
+    //   factor = sqrt(150 / D)
+    // Here sqrt is required because screen projection is proportional to (P * M) / D,
+    // so scaling both M and P by k changes screen size by k^2.
+    float factor_f = sqrtf(FIXED_TO_FLOAT(targetD) / FIXED_TO_FLOAT(D));
+    if (factor_f <= 0.0f) return;
+    Fixed32 factor = FLOAT_TO_FIXED(factor_f);
+
+    // Scale model vertices
+    VertexArrays3D* vtx = &model->vertices;
+    for (int i = 0; i < vtx->vertex_count; ++i) {
+        vtx->x[i] = FIXED_MUL_64(vtx->x[i], factor);
+        vtx->y[i] = FIXED_MUL_64(vtx->y[i], factor);
+        vtx->z[i] = FIXED_MUL_64(vtx->z[i], factor);
+    }
+
+    // Update metadata to match the applied scaling
+    model->auto_suggested_distance = targetD;
+    model->auto_suggested_proj_scale = FIXED_MUL_64(P, factor);
+    model->auto_proj_scale = model->auto_suggested_proj_scale;
+    s_global_proj_scale_fixed = model->auto_proj_scale;
+
+    printf("Auto-fit normalized: D=%.4f P=%.2f factor=%.4f\n",
+        FIXED_TO_FLOAT(model->auto_suggested_distance),
+        FIXED_TO_FLOAT(model->auto_suggested_proj_scale),
+        FIXED_TO_FLOAT(factor));
+}
+
 segment "code13";
 // Function to read faces into parallel arrays in FaceArrays3D structure
 int readFaces_model(const char* filename, Model3D* model) {
@@ -9725,6 +9774,12 @@ segment "code22";
             s_global_proj_scale_fixed = model->auto_suggested_proj_scale; // sync global scale
             model->auto_fit_applied = 1;
             printf("Auto-fit applied at load (distance=%.4f proj_scale=%.2f)\n", FIXED_TO_FLOAT(model->auto_suggested_distance), FIXED_TO_FLOAT(model->auto_suggested_proj_scale));
+
+            // Normalize the auto-fit so that the observer distance becomes 150
+            // (keeps the apparent size unchanged by scaling vertices + projection scale)
+            normalizeAutoFitDistanceTo150(model);
+            // Ensure the observer distance used for rendering matches the normalized distance
+            params.distance = model->auto_suggested_distance;
         } else {
             params.distance = FLOAT_TO_FIXED(30.0);
         }
