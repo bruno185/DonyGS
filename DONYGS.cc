@@ -185,6 +185,7 @@ static int *f_plane_conv_buf = NULL; /* 0 = not converted from fixed, 1 = conver
 static int *order_buf = NULL; static int order_cap = 0;
 
 
+
 // ============================================================================
 //                            FIXED POINT DEFINITIONS
 // ============================================================================
@@ -203,6 +204,9 @@ static int *order_buf = NULL; static int order_cap = 0;
 // Basic fixed-point definitions
 typedef long Fixed32;           // 32-bit fixed point number (16.16)
 typedef long long Fixed64;      // 64-bit for intermediate calculations
+
+// Cached observer distance (params.distance) used for epsilon scaling in geometric tests
+static Fixed32 current_observer_distance = 65536; // 1.0 in 16.16 fixed point
 
 static Fixed32 s_global_proj_scale_fixed; // Global projection scale (pixels per projected unit)
 
@@ -994,7 +998,12 @@ static int painter_new_plane_test7(Model3D* model, int f1, int f2) {
 static int geometric_face_relation(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+
+    /* Fixed epsilon scaled by current observer distance (0.002 * distance). */
+    //Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    // Fixed64 epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.0001f));
+    Fixed64 epsilon = FLOAT_TO_FIXED(0.01f);
+
     /* test4-like: f2 entirely on same side as observer of f1 */
     {
         int n2 = faces->vertex_count[f2];
@@ -1002,8 +1011,8 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
         Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
                 c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
         int obs = 0, side, all_same = 1;
-        if (d1 > (Fixed64)epsilon) obs = 1;
-        else if (d1 < -(Fixed64)epsilon) obs = -1;
+        if (d1 > epsilon) obs = 1;
+        else if (d1 < -epsilon) obs = -1;
         else obs = 0;
         if (obs != 0) {
             for (int k = 0; k < n2; ++k) {
@@ -1013,8 +1022,8 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
                 acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
                 acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
                 acc += (Fixed64)d1;
-                if (acc > (Fixed64)epsilon) side = 1;
-                else if (acc < -(Fixed64)epsilon) side = -1;
+                if (acc > epsilon) side = 1;
+                else if (acc < -epsilon) side = -1;
                 else continue;
                 if (obs != side) { all_same = 0; break; }
             }
@@ -1028,8 +1037,8 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
         Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
                 c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
         int obs = 0, side, all_opp = 1;
-        if (d1 > (Fixed64)epsilon) obs = 1;
-        else if (d1 < -(Fixed64)epsilon) obs = -1;
+        if (d1 > epsilon) obs = 1;
+        else if (d1 < -epsilon) obs = -1;
         else obs = 0;
         if (obs != 0) {
             for (int k = 0; k < n2; ++k) {
@@ -1039,8 +1048,8 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
                 acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
                 acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
                 acc += (Fixed64)d1;
-                if (acc > (Fixed64)epsilon) side = 1;
-                else if (acc < -(Fixed64)epsilon) side = -1;
+                if (acc > epsilon) side = 1;
+                else if (acc < -epsilon) side = -1;
                 else continue;
                 if (obs == side) { all_opp = 0; break; }
             }
@@ -8039,11 +8048,9 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
         }
     }
 
-    // Debug: show parsed observer angles in degrees
-    // if (!PERFORMANCE_MODE)
-    // {
-    // printf("Observer angles (degrees) - H: %d, V: %d, W: %d\n", params->angle_h, params->angle_v, params->angle_w);
-    // }
+    // Store the current observer distance for use in geometric epsilon scaling 
+    // and other distance-dependent calculations.
+    current_observer_distance = params->distance;
 }
 
 /**
@@ -8320,11 +8327,6 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
         }
         owner->auto_suggested_proj_scale = FLOAT_TO_FIXED(s);
         owner->auto_fit_ready = 1;
-
-    #if ENABLE_DEBUG_SAVE
-        printf("[INFO] readVertices: applied bbox center cx=%.4f cy=%.4f cz=%.4f\n", FIXED_TO_FLOAT(owner->auto_center_x), FIXED_TO_FLOAT(owner->auto_center_y), FIXED_TO_FLOAT(owner->auto_center_z));
-        printf("[INFO] readVertices: brute auto-fit suggestion: distance=%.4f proj_scale=%.2f\n", FIXED_TO_FLOAT(owner->auto_suggested_distance), s);
-    #endif
     }
 
     // printf("\n\nAnalyse terminee. %d lignes lues.\n", line_number - 1);

@@ -189,4 +189,7 @@ Dans painter_corrct (et V2) on pourrait peut s'abstenir de la pass 1 :
 les back faces sont déjà triées par Z ...??
 
 
+Dans geometric_face_relation, il faut rempalcer epsilon fixe, par 0,0016666666666667 x ObserverParams::distance
+
+
 
