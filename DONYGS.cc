@@ -999,10 +999,10 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
 
-    /* Fixed epsilon scaled by current observer distance (0.002 * distance). */
     //Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
-    // Fixed64 epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.0001f));
-    Fixed64 epsilon = FLOAT_TO_FIXED(0.01f);
+
+    /* Fixed epsilon scaled by current observer distance (0.002 * distance). */
+    Fixed64 epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.001f));
 
     /* test4-like: f2 entirely on same side as observer of f1 */
     {
@@ -1060,7 +1060,6 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
        symmetrically covered by swapping the arguments and calling above logic. */
     return 0;
 }
-
 
 void painter_new(Model3D* model, int face_count) {
     if (use_float_painter) { /*painter_newell_sancha_float(model, face_count);*/ return; }
@@ -1723,6 +1722,12 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
      * 2) Correct front-faces order within themselves (indices front_start_pos to n-1)
      * This ensures back-faces stay before front-faces while both groups benefit from corrections. */
 
+
+    // we can skip the entire first pass since back-faces are already sorted by painter_newell_sancha_fast 
+    // use painter_correctV2 for a better back faces sorting 
+    // that doesn't rely only on a basic Z sorting.
+    goto after_pass1;
+
     /* PASS 1: Correct back-faces (plane_d <= 0) - only if culling is OFF */
     printf("Back faces:");
     if (old_cull == 0) { /* Skip this pass entirely if culling is ON (back-faces won't be displayed) */
@@ -1809,6 +1814,7 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         }
     } /* End of PASS 1 (back-faces) */
 
+    after_pass1: ;
     /* PASS 2: Correct front-faces (plane_d > 0) */
     printf("\nFront faces:");
     for (int target = 0; target < face_count; ++target) {
@@ -8375,6 +8381,8 @@ void normalizeAutoFitDistanceTo150(Model3D* model) {
     model->auto_suggested_proj_scale = FIXED_MUL_64(P, factor);
     model->auto_proj_scale = model->auto_suggested_proj_scale;
     s_global_proj_scale_fixed = model->auto_proj_scale;
+    // Keep epsilon scaling (used in geometry tests) consistent with the forced distance.
+    current_observer_distance = targetD;
 
     printf("Auto-fit normalized: D=%.4f P=%.2f factor=%.4f\n",
         FIXED_TO_FLOAT(model->auto_suggested_distance),
@@ -9587,7 +9595,7 @@ static void show_help_pager(void) {
     const char* lines[] = {
         "Space: Display model info",
         "A/Z: Decrease/Increase distance",
-        "+/-: Adjust projection scale (±10%)",
+        "+/-: Adjust projection scale (+/-10%)",
         "K: Edit angles/distance (ENTER may auto-fit)",
         "Arrow Left/Right: Change horizontal angle",
         "Arrow Up/Down: Change vertical angle",
@@ -9609,7 +9617,7 @@ static void show_help_pager(void) {
         "7: Choose fill color",
         "8: Choose frame color",
         "9: Reset colors to defaults",
-        "P: Toggle frame‑only polygons",
+        "P: Toggle frame-only polygons",
         "B: Toggle back‑face culling",
         "I: Toggle display of inconclusive pairs",
         "E/e: Pan left", 
@@ -9620,7 +9628,7 @@ static void show_help_pager(void) {
         "D: Inspect faces BEFORE target",
         "S: Inspect faces AFTER target",
         "V: Show single face (navigate with arrows)",
-        "Q: Interactive face‑pair inspector",
+        "Q: Interactive face-pair inspector",
         "L: Label faces with IDs",
         "F: Dump face equations to equ.csv",
         "N: Load new model",
