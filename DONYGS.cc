@@ -185,7 +185,6 @@ static int *f_plane_conv_buf = NULL; /* 0 = not converted from fixed, 1 = conver
 static int *order_buf = NULL; static int order_cap = 0;
 
 
-
 // ============================================================================
 //                            FIXED POINT DEFINITIONS
 // ============================================================================
@@ -2765,6 +2764,96 @@ int check_sort_repair(Model3D* model, int face_count) {
 
     free(pos_of_face);
     printf("check_sort_repair: repairs=%d\n", repairs);
+    return repairs;
+}
+
+/* check_sort_repair_fast
+ * ----------------------
+ * Faster variant of check_sort_repair that:
+ *  - uses the QuickDraw region intersection centroid (QD) as the test point,
+ *  - uses ray_cast_distances() at that single point,
+ *  - performs the same minimal forward-only reordering when the ray cast
+ *    indicates the current sort order is incorrect.
+ *
+ * The intent is to keep the same repair strategy, but with fewer centroid
+ * candidates and less per-pair overhead.
+ */
+int check_sort_repair_fast(Model3D* model, int face_count) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (face_count <= 0) return 0;
+
+    startgraph(mode); /* Required for QuickDraw region operations */
+    
+    int n = face_count;
+    int *pos_of_face = (int*)malloc(sizeof(int) * n);
+    if (!pos_of_face) {
+        endgraph();
+        return 0;
+    }
+
+    MoveTo(3,10); printf("Computing repairs..."); /* Inform user that the batch test is running (prevents blank-screen confusion) */
+    
+    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+
+    int repairs = 0;
+
+    for (int f1 = 0; f1 < n; ++f1) {
+        if (faces->display_flag[f1] == 0) continue;
+        if (cull_back_faces && faces->plane_d[f1] <= 0) continue;
+        for (int f2 = f1 + 1; f2 < n; ++f2) {
+            if (faces->display_flag[f2] == 0) continue;
+            if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
+
+            /* Quick AABB reject */
+            int _ix0, _iy0, _ix1, _iy1;
+            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
+
+            /* Only consider true overlap (not touching) */
+            if (!projected_polygons_overlap(model, f1, f2)) continue;
+
+            /* Use QuickDraw region centroid (fast and representative) as first attempt. */
+            int cx = 0, cy = 0;
+            long long area2 = 0;
+            int got_centroid = 0;
+
+            if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &cx, &cy, &area2) && area2 != 0) {
+                got_centroid = 1;
+            }
+
+            if (!got_centroid) continue;
+
+            float tf1 = 0.0f, tf2 = 0.0f;
+            if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) continue;
+
+            int rc = 0;
+            if (tf1 < tf2) rc = -1;
+            else if (tf1 > tf2) rc = 1;
+            else rc = 0;
+            if (rc == 0) continue;
+
+            int closer = (rc == -1) ? f1 : f2;
+            int other  = (rc == -1) ? f2 : f1;
+            int pclos = pos_of_face[closer];
+            int pother = pos_of_face[other];
+            if (pclos <= pother) {
+                int tmp = faces->sorted_face_indices[pclos];
+                if (pclos < pother) {
+                    memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
+                    faces->sorted_face_indices[pother] = tmp;
+                    for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
+                    ++repairs;
+                }
+            }
+        }
+    }
+    free(pos_of_face);
+    MoveTo(3,20); 
+    printf("Repairs done: repairs=%d\n", repairs); /* Inform user that repairs are done */
+    printf("Press any key to continue...\n");
+    keypress();
+    endgraph();
+    DoText(); /* Return to text mode */
     return repairs;
 }
 
@@ -9894,6 +9983,13 @@ segment "code22";
                 check_sort_repair(model, model->faces.face_count);
                 printf("Press any key to continue...\n");
                 keypress();
+                goto loopReDraw;
+
+            case 46: // '.' - Run check_sort_repair_fast (faster minimal repair using QD centroid)
+                printf("Running check_sort_repair_fast (QD centroid + minimal repair)...\n");
+                check_sort_repair_fast(model, model->faces.face_count);
+                // printf("Press any key to continue...\n");
+                // keypress();
                 goto loopReDraw;
 
             case 60: // '<' - Run check_sort and wait for key so user can read results

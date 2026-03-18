@@ -196,6 +196,10 @@ tester : geometric_face_relation_double.
 TEst 5 : j'ai changé result = 1 en result = -1. NON : il faut renvoyer 1 : on teste que f2 est à l'opposé de l'observateur.
 Il semble que la face 0 ne soit pas testée (???)
 geometric_face_relation_double : KO avec a k=60. (mais ok aavec geometric_face_relation)
+geometric_face_relation_double : abandonné.
+
+painter_correctV2 : un peu plus rapide que v1. Pourquoi ??
+
 
 
 
