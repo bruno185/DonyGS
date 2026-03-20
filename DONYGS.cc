@@ -3257,9 +3257,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     /* Minimum area (pixels^2) considered as true overlap (use global constant) */
     /* (local override removed so global MIN_INTERSECTION_AREA_PIXELS controls behavior) */
     /* Inform the user when an overlap check is performed (useful in interactive mode). */
-    #if ENABLE_DEBUG_SAVE
-    printf("Checking projected overlap for faces %d and %d (touching is considered NON-overlap)\n", f1, f2);
-    #endif
+
     int n1 = faces->vertex_count[f1];
     int n2 = faces->vertex_count[f2];
     if (n1 < 3 || n2 < 3) return 0;
@@ -3392,11 +3390,11 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
                 /* Mark candidate on proper segment intersection (do not accept immediately) */
                 candidate = 1;
                 overlapCheckCount++; overlapSegiAccept++;
-                /* debug print removed */
                 break;
             }
         }
-        if (candidate) break;
+        // if (candidate) break; // intial version 
+        if (candidate) return 1; /* early accept on proper intersection (heuristic) */
     }
 
     /* Step 4: Containment tests.
@@ -3499,19 +3497,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
 
         int tx2=0, ty2=0; long long a22 = 0; debug_overlap_subj = f2; debug_overlap_clip = f1; ok2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &tx2, &ty2, &a22); debug_overlap_subj = -1; debug_overlap_clip = -1; area2_2 = (unsigned long long)(a22 >= 0 ? a22 : -a22);
         /* returned from fixed-clip (debug traces removed) */
-
-        /* Also compute double areas for diagnostic parity */
-        int dtx=0,dty=0; long long _tmpa2_1 = 0; /* diagnostic parity via QD bbox */
-        compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &dtx, &dty, &_tmpa2_1);
-        iarea1 = (double)_tmpa2_1;
-        long long _tmpa2_2 = 0;
-        compute_intersection_centroid_ordered_qd_fixed(model, f2, f1, &dtx, &dty, &_tmpa2_2);
-        iarea2 = (double)_tmpa2_2; 
-    } else {
-        /* qd-clip invocation (debug traces removed) */
-        /* default behavior: double-based clipping (existing path) */
-        debug_overlap_subj = f1; debug_overlap_clip = f2; long long _ia2_1 = 0; ok1 = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &icx1, &icy1, &_ia2_1); iarea1 = ok1 ? (double)_ia2_1 : 0.0; debug_overlap_subj = -1; debug_overlap_clip = -1;
-        debug_overlap_subj = f2; debug_overlap_clip = f1; long long _ia2_2 = 0; ok2 = compute_intersection_centroid_ordered_qd_fixed(model, f2, f1, &icx2, &icy2, &_ia2_2); iarea2 = ok2 ? (double)_ia2_2 : 0.0; debug_overlap_subj = -1; debug_overlap_clip = -1;
+        /* no QD parity code in text/non-QD mode */
     }
 
     double bbox_area = 0.0; if (!(oxmin > oxmax || oymin > oymax)) bbox_area = (double)(oxmax - oxmin) * (double)(oymax - oymin);
