@@ -166,8 +166,6 @@ static int random_colors_capacity = 0;
 // #define PAINTER_MODE_FLOAT 2
 #define PAINTER_MODE_CORRECT 3
 #define PAINTER_MODE_CORRECTV2 4
-#define PAINTER_MODE_NEWELL_SANCHAV2 5
-#define PAINTER_MODE_NEWELL_SANCHAV3 6
 
 static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct,4=correctV2,5=newell_sanchaV2,6=newell_sanchaV3
 
@@ -2264,251 +2262,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
 }
 
 
-/* painter_newell_sanchaV3
- * -------------------------
- * Variant of V2 that, when culling is OFF, places back-faces at the beginning
- * of the sorted list and performs the local reordering pass only over the
- * FRONT partition (i.e., the double-loop iterates only over front faces).
- * This ensures back faces are drawn first while preserving conservative local
- * reordering behavior for front faces.
- */
-void painter_newell_sanchaV3(Model3D* model, int face_count) {
-    if (!model) return;
-    FaceArrays3D* faces = &model->faces;
-    if (face_count <= 0) return;
-
-    int i;
-    int n = face_count;
-    int *pair_done = NULL;
-    if (n > 0) {
-        pair_done = (int*)malloc(n * n * sizeof(int));
-        if (pair_done) {
-            for (i = 0; i < n * n; ++i) pair_done[i] = 0;
-        }
-    }
-
-    /* Seed with fast stable z-mean sort */
-    painter_newell_sancha_fast(model, face_count);
-
-    /* If culling is OFF, stable-partition sorted list so that back-faces (plane_d <= 0)
-     * appear first. We'll then only process the front-face partition that follows. */
-    int back_count = 0;
-    if (!cull_back_faces) {
-        int *back_list = (int*)malloc(sizeof(int) * n);
-        int *front_list = (int*)malloc(sizeof(int) * n);
-        if (!back_list || !front_list) { if (back_list) free(back_list); if (front_list) free(front_list); if (pair_done) free(pair_done); return; }
-        int b = 0, f = 0;
-        for (i = 0; i < n; ++i) {
-            int fid = faces->sorted_face_indices[i];
-            if (faces->plane_d[fid] <= 0) back_list[b++] = fid; else front_list[f++] = fid;
-        }
-        for (i = 0; i < b; ++i) faces->sorted_face_indices[i] = back_list[i];
-        for (i = 0; i < f; ++i) faces->sorted_face_indices[b + i] = front_list[i];
-        back_count = b;
-        free(back_list); free(front_list);
-    }
-
-    /* Prepare helper arrays (position map and min-allowed positions) */
-    int *pos_of_face = (int*)malloc(n * sizeof(int)); if (!pos_of_face) { if (pair_done) free(pair_done); return; }
-    for (i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
-    int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(pos_of_face); if (pair_done) free(pair_done); return; }
-    for (i = 0; i < n; ++i) min_allowed_pos[i] = -1;
-
-    int *failed_pairs = (int*)malloc(2 * n * n * sizeof(int)); int failed_pairs_count = 0;
-
-    /* Only process front faces: start index depends on whether culling is ON/OFF */
-    int process_start = (!cull_back_faces) ? back_count : 0;
-
-    for (int t_idx = process_start; t_idx < n; ++t_idx) {
-        int target = faces->sorted_face_indices[t_idx];
-        if (cull_back_faces && faces->plane_d[target] <= 0) continue; /* safety */
-        int pos = pos_of_face[target];
-        int best_move = -1, move_before = 0;
-        for (int iidx = process_start; iidx < n; ++iidx) {
-            if (iidx == pos) continue;
-            int f = faces->sorted_face_indices[iidx];
-            if (cull_back_faces && faces->plane_d[f] <= 0) continue; /* safety */
-            int idx1 = target * n + f;
-            int idx2 = f * n + target;
-            if (pair_done && (pair_done[idx1] || pair_done[idx2])) continue;
-            if (faces->z_max[f] <= faces->z_min[target]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->z_max[target] <= faces->z_min[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->maxx[f] <= faces->minx[target]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->maxx[target] <= faces->minx[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->maxy[f] <= faces->miny[target]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->maxy[target] <= faces->miny[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (!projected_polygons_overlap(model, f, target)) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (iidx < pos) {
-                /* Geometric plane test: does `f` belong after `target`? */
-                if (pair_plane_after(model, f, target)) {
-                    best_move = iidx; move_before = 1; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break;
-                }
-                /* Fallback: plane tests inconclusive -> use hierarchical ray-cast (QD→SH→BBOX) to break tie */
-                {
-                    int rc = ray_cast_hierarchical(model, f, target);
-                    if (rc == -1) { /* `f` is closer than `target` => `f` should be after `target` */
-                        best_move = iidx; move_before = 1; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break;
-                    } else if (rc == 1) {
-                        /* ray confirms current ordering (f before target) */
-                        if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue;
-                    }
-                    /* rc == 0 -> undetermined, fall through to mark pair_done below */
-                }
-            } else {
-                /* Geometric plane test: does `f` belong before `target`? */
-                if (pair_plane_before(model, f, target)) {
-                    best_move = iidx; move_before = 0; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break;
-                }
-                /* Fallback: plane tests inconclusive -> use hierarchical ray-cast (QD→SH→BBOX) to break tie */
-                {
-                    int rc = ray_cast_hierarchical(model, f, target);
-                    if (rc == 1) { /* `f` is farther than `target` => `f` should be before `target` */
-                        best_move = iidx; move_before = 0; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break;
-                    } else if (rc == -1) {
-                        /* ray confirms current ordering (f after target) */
-                        if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue;
-                    }
-                    /* rc == 0 -> undetermined, fall through to mark pair_done below */
-                }
-            }
-            if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; 
-        }
-        if (best_move != -1) {
-            int insert_idx;
-            if (move_before) {
-                insert_idx = best_move; if (insert_idx < process_start) insert_idx = process_start;
-            } else {
-                insert_idx = best_move + 1; if (insert_idx < process_start) insert_idx = process_start;
-            }
-            if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
-            if (insert_idx >= n) insert_idx = n - 1;
-            move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, insert_idx, pos_of_face);
-            pos = pos_of_face[target];
-            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-        }
-    }
-
-    free(pos_of_face); free(min_allowed_pos);
-    if (pair_done) free(pair_done);
-    if (failed_pairs) free(failed_pairs);
-}
-
-/* painter_newell_sanchaV2
- * -------------------------
- * PASS-2 inspired conservative local reordering for FRONT faces.
- * - Seed with `painter_newell_sancha` to compute planes/zmeans
- * - Partition faces into BACK/FRONT and operate only on FRONT partition
- * - For each front face, scan faces before and after and apply cheap tests
- *   (z, bbox), projected overlap, then plane tests. On decisive decision,
- *   insert the target before/after the chosen face (no blind swaps).
- * - Limits applied to moves to keep behavior stable and interactive.
- */
-void painter_newell_sanchaV2(Model3D* model, int face_count) {
-    if (!model) return;
-    FaceArrays3D* faces = &model->faces;
-    if (face_count <= 0) return;
-
-    int i, j, vi, a, b;
-    int *indices_i;
-    int *indices_j;
-    int match;
-    int found;
-
-    // Allocate pair_done array to mark processed face pairs
-    int n = face_count;
-    int *pair_done = NULL;
-    if (n > 0) {
-        pair_done = (int*)malloc(n * n * sizeof(int));
-        if (pair_done) {
-            for (i = 0; i < n * n; ++i) pair_done[i] = 0;
-        }
-    }
-
-    /* Nouvelle version sans partition back/front, double boucle sur toutes les faces selon culling */
-    painter_newell_sancha_fast(model, face_count);
-    int moves = 0;
-
-    int *pos_of_face = (int*)malloc(n * sizeof(int)); 
-    if (!pos_of_face) { if (pair_done) free(pair_done); return; }
-
-    for (i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
-    int *min_allowed_pos = (int*)malloc(n * sizeof(int)); 
-    if (!min_allowed_pos) { free(pos_of_face); if (pair_done) free(pair_done); return; }
-    for (i = 0; i < n; ++i) min_allowed_pos[i] = -1;
-
-    int failed_tests_count = 0;
-    // Buffer to store failed pairs (target, f)
-    int max_failed_pairs = n * n;
-    int *failed_pairs = (int*)malloc(2 * max_failed_pairs * sizeof(int));
-    int failed_pairs_count = 0;
-    for (int target = 0; target < n; ++target) {
-        if (cull_back_faces && faces->plane_d[target] <= 0) continue;
-        int pos = pos_of_face[target];
-        int best_move = -1;
-        int move_before = 0;
-        for (int i = 0; i < n; ++i) {
-            if (i == pos) continue;
-            int f = faces->sorted_face_indices[i];
-            if (cull_back_faces && faces->plane_d[f] <= 0) continue;
-            int idx1 = target * n + f;
-            int idx2 = f * n + target;
-            if (pair_done && (pair_done[idx1] || pair_done[idx2])) continue;
-            if (faces->z_max[f] <= faces->z_min[target]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->z_max[target] <= faces->z_min[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->maxx[f] <= faces->minx[target]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->maxx[target] <= faces->minx[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->maxy[f] <= faces->miny[target]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (faces->maxy[target] <= faces->miny[f]) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (!projected_polygons_overlap(model, f, target)) { if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; continue; }
-            if (i < pos) {
-                if (pair_plane_after(model, f, target)) { best_move = i; move_before = 1; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break; }
-            } else {
-                if (pair_plane_before(model, f, target)) { best_move = i; move_before = 0; if (pair_done) pair_done[idx1] = pair_done[idx2] = 1; break; }
-            }
-
-            if (pair_done) pair_done[idx1] = pair_done[idx2] = 1;
-        }
-        if (best_move != -1) {
-            if (move_before) {
-                moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, best_move, pos_of_face);
-                pos = pos_of_face[target];
-                if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-            } else {
-                int insert_idx = (best_move < pos) ? (best_move + 1) : best_move;
-                if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
-                if (insert_idx >= n) insert_idx = n - 1;
-                moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, n, pos, insert_idx, pos_of_face);
-                pos = pos_of_face[target];
-                if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-            }
-        }
-    }
-    // debug output of failed tests
-    // {
-    // printf("Number of cases where all tests failed: %d\n", failed_tests_count);
-    // if (failed_pairs_count > 0) {
-    //     printf("Pairs where all tests failed:\n");
-    //     for (int k = 0; k < failed_pairs_count; ++k) {
-    //         if (k % 3 == 0) printf("  ");
-    //         printf("(face %d, face %d)", failed_pairs[2 * k], failed_pairs[2 * k + 1]);
-    //         if ((k % 3 == 2) || (k == failed_pairs_count - 1)) {
-    //             printf("\n");
-    //         } else {
-    //             printf(" ; ");
-    //         }
-    //     }
-    //     fflush(stdout);
-    // }
-    // keypress();
-    // }
-
-
-    free(pos_of_face); free(min_allowed_pos);
-    if (pair_done) free(pair_done);
-    if (failed_pairs) free(failed_pairs);
-}
-
-
 /* Helper: pairwise ordering decision using tests 1..7 from painter_newell_sancha
  * Returns:
  *  -1 if f1 is (conclusively) before f2
@@ -2642,8 +2395,12 @@ int check_sort_repair(Model3D* model, int face_count) {
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
 
     int repairs = 0;
+    const char* instructions = "\nWhen graphics is disabled  : ESC = quit, RETURN = automatic mode (no graphics), any other key = step-by-step mode (graphics enabled, press a key for each step)\n\n";
+    int automatic_mode = 0; /* 0=graphical inspect, 1=automatic (no graphics) */
 
+    printf("%s", instructions);
     for (int f1 = 0; f1 < n; ++f1) {
+        printf("%d ", f1);
         if (faces->display_flag[f1] == 0) continue;
         if (cull_back_faces && faces->plane_d[f1] <= 0) continue;
         for (int f2 = f1 + 1; f2 < n; ++f2) {
@@ -2746,13 +2503,17 @@ int check_sort_repair(Model3D* model, int face_count) {
                         //printf("check_sort_repair: moved face %d FORWARD BY ONE (pos %d -> %d)\n", closer, pclos, pclos+1);
 
                         /* Display both faces involved for visual inspection */
-                        {
+                        if (!automatic_mode) {
                             char msg[128];
                             snprintf(msg, sizeof(msg), "Face %d moved after face %d", closer, other);
                             int _k = show_inspect_faces_with_message(model, closer, other, msg);
                             if (_k == 27) { /* ESC */ free(pos_of_face); return repairs; }
+                            if (_k == 13 || _k == 10) { /* RETURN/ENTER */
+                                automatic_mode = 1; /* switch to automatic mode (no graphics) */
+                            }
                             /* Inform user that the batch test is still running (prevents blank-screen confusion) */
                             printf("Test running...\n"); fflush(stdout);
+                            printf("\n%s\n", instructions);
                         }
                     }
                 } else {
@@ -2763,7 +2524,7 @@ int check_sort_repair(Model3D* model, int face_count) {
     }
 
     free(pos_of_face);
-    printf("check_sort_repair: repairs=%d\n", repairs);
+    printf("\ncheck_sort_repair: repairs=%d\n", repairs);
     return repairs;
 }
 
@@ -3350,10 +3111,8 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     }
 }
 
-
     /* Debug: enable verbose output for a specific pair by setting OVERLAP_DEBUG_PAIR="f1,f2" in the environment */
     int dbg_pair = 0;
-
 
     /* Step 3: Edge-vs-edge proper intersection check.
      * For each edge in f1 and each edge in f2:
@@ -8246,12 +8005,6 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     } else if (painter_mode == PAINTER_MODE_CORRECTV2) {
         /* painter_correctV2: experimental face splitting version */
         painter_correctV2(model, model->faces.face_count, 0);
-    } else if (painter_mode == PAINTER_MODE_NEWELL_SANCHAV3) {
-        /* painter_newell_sanchaV3: back-faces-first variant when culling is OFF */
-        painter_newell_sanchaV3(model, model->faces.face_count);
-    } else if (painter_mode == PAINTER_MODE_NEWELL_SANCHAV2) {
-        /* painter_newell_sanchaV2: conservative pass-2 inspired local reordering */
-        painter_newell_sanchaV2(model, model->faces.face_count);
     } 
     t_end = GetTick();
 
@@ -9940,8 +9693,6 @@ segment "code22";
                 else if (painter_mode == PAINTER_MODE_FIXED) printf("    Painter mode: NORMAL (Fixed32/64)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECT) printf("    Painter mode: CORRECT (painter_correct)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECTV2) printf("    Painter mode: CORRECT V2 (painter_correctV2 with face splitting detection)\n");
-                else if (painter_mode == PAINTER_MODE_NEWELL_SANCHAV3) printf("    Painter mode: NEWELL_SANCHAV3 (painter_newell_sanchaV3)\n");
-                else if (painter_mode == PAINTER_MODE_NEWELL_SANCHAV2) printf("    Painter mode: NEWELL_SANCHAV2 (painter_newell_sanchaV2)\n");
                 else printf("    Painter mode: FLOAT (float-based)\n\n");
                 printf("    Back-face culling: %s\n", cull_back_faces ? "ON" : "OFF");
                 printf("    Pan offset: (%d, %d)\n", pan_dx, pan_dy);
@@ -10126,18 +9877,6 @@ segment "code22";
                 inspect_faces_after(model, &params, filename);
                 goto loopReDraw;
 
-
-            case 71: // 'G' - reorder using NEWELL_SANCHAV2
-            case 103: // 'g'
-                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
-                printf("Running painter_newell_sanchaV2 reordering pass...\n");
-                int tick_count_start = GetTick();
-                painter_newell_sanchaV2(model, model->faces.face_count);
-                int tick_count_end = GetTick();
-                printf("Reordering completed in %d ticks (1/60 sec.)\n", tick_count_end - tick_count_start);
-                keypress();
-                goto loopReDraw;
-
             case 33: // '!' - autotest plane_before on all pairs
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 plane_before_autotest(model);
@@ -10162,17 +9901,10 @@ segment "code22";
                 printf("Painter mode: FAST (simple face sorting only)\n");
                 inconclusive_pairs_count = 0; // clear inconclusive pairs in fast mode
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
-                
 
             case 50: // '2' - set NORMAL (Fixed32/64) painter
                 painter_mode = PAINTER_MODE_FIXED;
                 printf("Painter mode: NORMAL (full tests, Fixed32/64)\n");
-                if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
-                
-
-            case 51: // '3' - set NEWELL_SANCHAV3 painter (back-faces-first variant)
-                painter_mode = PAINTER_MODE_NEWELL_SANCHAV3;
-                printf("Painter mode: NEWELL_SANCHAV3 (painter_newell_sanchaV3)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
             case 52: // '4' - set CORRECT painter (runs painter_correct)
