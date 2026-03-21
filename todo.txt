@@ -200,6 +200,12 @@ geometric_face_relation_double : abandonné.
 
 painter_correctV2 : un peu plus rapide que v1. Pourquoi ??
 
+sur Tore.obj : face 3 vs 16 : do not overlap ??? position h=40 ==> après des modifs, on des des faux overlap 
+==> retour à la version d'origine.  idée : revoir complètement l'overlap.
+
+dump2dcoordsCSV : passe le nom de fichier en arg + msg pendant lécriture des fichiers
+
+
 
 
 
