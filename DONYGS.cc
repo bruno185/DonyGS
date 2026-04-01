@@ -2637,6 +2637,15 @@ int check_sort_repair_fast(Model3D* model, int face_count) {
         return 0;
     }
 
+    int relation_capacity = n + 16;
+    int relation_count = 0;
+    int (*after_relations)[2] = (int(*)[2])malloc(sizeof(int) * 2 * relation_capacity);
+    if (!after_relations) {
+        free(pos_of_face);
+        endgraph();
+        return 0;
+    }
+
     MoveTo(3,10); printf("Computing repairs..."); /* Inform user that the batch test is running (prevents blank-screen confusion) */
     
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
@@ -2691,11 +2700,28 @@ int check_sort_repair_fast(Model3D* model, int face_count) {
                     faces->sorted_face_indices[pother] = tmp;
                     for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
                     ++repairs;
+
+                    // Record required relation A after B and enforce all relations.
+                    if (relation_count >= relation_capacity) {
+                        int new_cap = relation_capacity * 2;
+                        int (*tmp_rel)[2] = (int(*)[2])realloc(after_relations, sizeof(int) * 2 * new_cap);
+                        if (tmp_rel) {
+                            after_relations = tmp_rel;
+                            relation_capacity = new_cap;
+                        }
+                    }
+                    if (relation_count < relation_capacity) {
+                        after_relations[relation_count][0] = closer;
+                        after_relations[relation_count][1] = other;
+                        relation_count++;
+                    }
+                    enforce_mandatory_after_relations(model, n, pos_of_face, relation_count, after_relations);
                 }
             }
         }
     }
     free(pos_of_face);
+    free(after_relations);
     MoveTo(3,20); 
     printf("Repairs done: repairs=%d\n", repairs); /* Inform user that repairs are done */
     printf("Press any key to continue...\n");
