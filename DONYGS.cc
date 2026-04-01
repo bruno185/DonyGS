@@ -9559,7 +9559,7 @@ static void show_help_pager(void) {
         "8: Choose frame color",
         "9: Reset colors to defaults",
         "P: Toggle frame-only polygons",
-        "B: Toggle back‑face culling",
+        "B: Toggle back-face culling",
         "I: Toggle display of inconclusive pairs",
         "E/e: Pan left", 
         "R/r: Pan right",
@@ -9571,7 +9571,7 @@ static void show_help_pager(void) {
         "V: Show single face (navigate with arrows)",
         "Q: Interactive face-pair inspector",
         "L: Label faces with IDs",
-        "F: Dump face equations to equ.csv",
+        "F: Dump face data (3D, 2D, sort order) to file",
         "N: Load new model",
         "H: Display this help message",
         "ESC: Quit program"
