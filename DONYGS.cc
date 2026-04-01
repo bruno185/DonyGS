@@ -5,7 +5,7 @@
  *
  * Purpose:
  *   High-performance 3D viewer implementing the DONYGS painter algorithm with
- *   multiple painter modes (FAST / FIXED / CORRECT / CORRECTV2 / NEWELL_SANCHAV2). FLOAT mode is archived (see `chutier.txt`). Reads simplified OBJ files
+ *   multiple painter modes (FAST / FIXED / CORRECT / CORRECTV2). FLOAT mode is archived (see `chutier.txt`). Reads simplified OBJ files
  *   (vertices "v" and faces "f"), transforms them into observer space,
  *   projects to 2D screen coordinates and renders filled polygons.
  *
@@ -17,9 +17,6 @@
  *                 tests and corrections (robust)
  *       * CORRECT : Advanced ordering correction with local face reordering (slower)
  *       * CORRECTV2 : Experimental local correction (painter_correctV2) for pathological cases
- *       * NEWELL_SANCHAV2 : Bubble-style variant for conservative local reordering
- *       * FLOAT : float-based painter (ARCHIVED: implementation moved to `chutier.txt`)
- *                 Calls in `DONYGS.cc` are commented out; to restore, move the implementation back from `chutier.txt`
  *   - Observer-space back-face culling toggle (`B` key) that marks faces as
  *     non-displayable and restricts sorting to visible faces for correctness
  *     and speed when enabled.
@@ -167,7 +164,7 @@ static int random_colors_capacity = 0;
 #define PAINTER_MODE_CORRECT 3
 #define PAINTER_MODE_CORRECTV2 4
 
-static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct,4=correctV2,5=newell_sanchaV2,6=newell_sanchaV3
+static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,4=correct,5=correctV2
 
 // Runtime toggle kept for compatibility; main() may set this and we propagate to painter_mode
 static int use_float_painter = 0;
@@ -9548,7 +9545,6 @@ static void show_help_pager(void) {
         "W/X: Change screen rotation angle",
         "C: Toggle color palette display",
         "J: Toggle jittered rendering",
-        "G: Run NEWELL_SANCHAV2 reordering pass",
         "!: Run plane_before autotest on all pairs",
         ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
         ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
