@@ -2313,68 +2313,6 @@ static int pair_order_relation(Model3D* model, int f1, int f2) {
     return 0;
 }
 
-/* check_sort
- * ----------
- * For every unordered pair of faces, if their 2D bounding boxes overlap,
- * call `ray_cast(model, f1, f2)` and check that the current ordering in
- * `faces->sorted_face_indices` matches the ray_cast result.
- * Prints mismatches and returns the number of mismatches detected.
- */
-int check_sort(Model3D* model, int face_count) {
-    if (!model) return 0;
-    FaceArrays3D* faces = &model->faces;
-    if (face_count <= 0) return 0;
-
-    int n = face_count;
-    int *pos_of_face = (int*)malloc(sizeof(int) * n);
-    if (!pos_of_face) return 0;
-    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
-
-    int checked = 0;
-    int mismatches = 0;
-    int undetermined = 0;
-    int skipped_by_cull = 0;
-
-    for (int f1 = 0; f1 < n; ++f1) {
-        if (faces->display_flag[f1] == 0) { ++skipped_by_cull; continue; }
-        if (cull_back_faces && faces->plane_d[f1] <= 0) { ++skipped_by_cull; continue; }
-        for (int f2 = f1 + 1; f2 < n; ++f2) {
-            if (faces->display_flag[f2] == 0) { ++skipped_by_cull; continue; }
-            if (cull_back_faces && faces->plane_d[f2] <= 0) { ++skipped_by_cull; continue; }
-
-            /* Quick AABB reject using existing helper */
-            int _ix0, _iy0, _ix1, _iy1;
-            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
-
-            // Use full projected polygon overlap test (touching-only treated as non-overlap)
-            if (!projected_polygons_overlap(model, f1, f2)) continue;
-
-            ++checked;
-            int pos1 = pos_of_face[f1];
-            int pos2 = pos_of_face[f2];
-            int rc = ray_cast(model, f1, f2);
-            if (rc == 0) { ++undetermined; continue; }
-            // rc == -1 -> f1 is closer than f2 -> f1 should be after f2 (pos1 > pos2)
-            if (rc == -1) {
-                if (!(pos1 > pos2)) {
-                    printf("check_sort: MISMATCH (ray says %d closer than %d): positions %d vs %d\n", f1, f2, pos1, pos2);
-                    ++mismatches;
-                }
-            } else if (rc == 1) {
-                // rc == 1 -> f1 is farther than f2 -> f1 should be before f2 (pos1 < pos2)
-                if (!(pos1 < pos2)) {
-                    printf("check_sort: MISMATCH (ray says %d farther than %d): positions %d vs %d\n", f1, f2, pos1, pos2);
-                    ++mismatches;
-                }
-            }
-        }
-    }
-
-    free(pos_of_face);
-    printf("check_sort: checked=%d mismatches=%d undetermined=%d skipped_by_cull=%d\n", checked, mismatches, undetermined, skipped_by_cull);
-    return mismatches;
-}
-
 /* Helper: enforce mandatory after-relations.
  *
  * Ce mécanisme permet de conserver l'invariant simplement : après un
@@ -2597,7 +2535,7 @@ int check_sort_repair(Model3D* model, int face_count) {
                             if (_k == 13 || _k == 10) { /* RETURN/ENTER */
                                 automatic_mode = 1;
                             }
-                            printf("Test running...\n"); fflush(stdout);
+                            printf("Check and repair running...\n"); fflush(stdout);
                             printf("\n%s\n", instructions);
                         }
                     }
@@ -4579,7 +4517,7 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
 
 // ===================== RAY CAST & INSPECTOR PROTOTYPES =====================
 int ray_cast(Model3D* model, int f1, int f2);
-int check_sort(Model3D* model, int face_count);
+// int check_sort(Model3D* model, int face_count);
 int check_sort_repair(Model3D* model, int face_count);
 // Prototypes only at the top
 // ===================== RAY CAST & INSPECTOR IMPLEMENTATION =====================
@@ -9576,7 +9514,6 @@ static void show_help_pager(void) {
         "J: Toggle jittered rendering",
         "G: Run NEWELL_SANCHAV2 reordering pass",
         "!: Run plane_before autotest on all pairs",
-        "<: Run check_sort (ray_cast verify)",
         ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
         ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
         "1: Painter = FAST (simple sort only)",
@@ -9700,7 +9637,6 @@ segment "code22";
         while (1) {
             printf("Enter the filename to read (ENTER to exit): ");
             if (fgets(filename, sizeof(filename), stdin) != NULL) {
-                printf("nom de fichier = %s\n", filename);
                 size_t len = strlen(filename);
                 if (len > 0 && filename[len-1] == '\n') {
                     filename[len-1] = '\0';
@@ -9871,12 +9807,7 @@ segment "code22";
                 // keypress();
                 goto loopReDraw;
 
-            case 60: // '<' - Run check_sort and wait for key so user can read results
-                printf("Running check_sort (ray_cast verification)...\n");
-                check_sort(model, model->faces.face_count);
-                printf("Press any key to continue...\n");
-                keypress();
-                goto loopReDraw;
+
 
             case 43:  // '+' - increase projection scale by 10% (applies to current scale)
             case 61:  // '=' also acts as '+' on some keyboards
