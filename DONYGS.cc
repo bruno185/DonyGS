@@ -4447,8 +4447,6 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     return 0;
 }
 
-
-
 /* automatic test that iterates all face pairs and logs epsilon+results */
 void plane_before_autotest(Model3D* model) {
     if (!model) { printf("No model for autotest\n"); return; }
@@ -9597,15 +9595,8 @@ static void show_help_pager(void) {
         int end = pos + content_per_page;
         for (int i = pos; i < end && i < n; ++i) printf("%s\n", lines[i]);
 
-        // If we're at the end, wait for any key and return
-        if (end >= n) {
-            printf("\nPress any key to return...\n");
-            keypress();
-            return;
-        }
-
-        // Not the last page: prompt for next action
-        printf("\nPress 'Q' pour quitter, any other key to continue...\n");
+        // Prompt for next action on every page.
+        printf("\nPress ESC to quit, any other key to continue...\n");
         char key;
         asm 
             {
@@ -9619,12 +9610,17 @@ static void show_help_pager(void) {
             rep #0x30
             }
 
-        
-        if (key == 'Q' || key == 'q') return;
-        // any other key (including SPACE) continues
-        pos = end;
+        if (key == 27) return; // ESC quits
+
+        // Any other key advances page. If on final page, wrap to first page.
+        if (end >= n) {
+            pos = 0;
+        } else {
+            pos = end;
+        }
+
         // clear a separating line between pages
-        DoText(); // clear screen and home cursor... Don't know why.
+        DoText();
         printf("\n");
     }
 }
