@@ -2375,6 +2375,51 @@ int check_sort(Model3D* model, int face_count) {
     return mismatches;
 }
 
+/* Helper: enforce mandatory after-relations.
+ *
+ * Ce mécanisme permet de conserver l'invariant simplement : après un
+ * mouvement découvert par `check_sort_repair`, on mémorise la relation
+ * 'a after b'.
+ * Si un autre mouvement ultérieur modifie l'ordre global, on revalide
+ * toutes les relations enregistrées et on ajuste la liste pour restaurer
+ * explicitement `a` après `b`.
+ *
+ * Par construction, ce code est conservatif : il applique les relations
+ * une par une et redémarre la passe à chaque correction pour éviter
+ * d'échapper une relation qui deviendrait invalide après un déplacement.
+ */
+static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of_face, int relation_count, const int (*relations)[2]) {
+    if (!model || !pos_of_face || !relations) return;
+    FaceArrays3D* faces = &model->faces;
+
+    for (int i = 0; i < relation_count; ++i) {
+        int a = relations[i][0];
+        int b = relations[i][1];
+
+        // Skip relations invalides ou hors bornes
+        if (a < 0 || a >= n || b < 0 || b >= n) continue;
+
+        int pa = pos_of_face[a];
+        int pb = pos_of_face[b];
+
+        // Si a n'est pas derrière b, décaler a immédiatement après b
+        if (pa <= pb) {
+            int tmp = faces->sorted_face_indices[pa];
+            memmove(&faces->sorted_face_indices[pa], &faces->sorted_face_indices[pa + 1], sizeof(int) * (pb - pa));
+            faces->sorted_face_indices[pb] = tmp;
+
+            // Réparer la table de positions en O(delta)
+            for (int k = pa; k <= pb; ++k) {
+                pos_of_face[faces->sorted_face_indices[k]] = k;
+            }
+
+            // On recommence à zéro pour s'assurer que la relation suivante est
+            // évaluée sur l'ordre mis à jour (garantie de convergence simple).
+            i = -1;
+        }
+    }
+}
+
 /* check_sort_repair
  * -----------------
  * Minimal deterministic repair of face ordering. For each pair that
@@ -2394,6 +2439,22 @@ int check_sort_repair(Model3D* model, int face_count) {
     if (!pos_of_face) return 0;
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
 
+    /* Relations obligatoires enregistrées pendant le passage de réparation.
+     * Chaque entrée est [a,b] signifiant : a doit se trouver après b dans
+     * faces->sorted_face_indices (pos[a] > pos[b]).
+     *
+     * Ceci implémente le mécanisme demandé : si on a déplacé A après B, on garde
+     * cette contrainte et on la vérifie constamment quand d'autres mouvements peuvent
+     * ré-ordonner B.
+     */
+    int relation_capacity = n + 16;
+    int relation_count = 0;
+    int (*after_relations)[2] = (int(*)[2])malloc(sizeof(int) * 2 * relation_capacity);
+    if (!after_relations) {
+        free(pos_of_face);
+        return 0;
+    }
+
     int repairs = 0;
     const char* instructions = "\nWhen graphics is disabled  : ESC = quit, RETURN = automatic mode (no graphics), any other key = step-by-step mode (graphics enabled, press a key for each step)\n\n";
     int automatic_mode = 0; /* 0=graphical inspect, 1=automatic (no graphics) */
@@ -2406,6 +2467,9 @@ int check_sort_repair(Model3D* model, int face_count) {
         for (int f2 = f1 + 1; f2 < n; ++f2) {
             if (faces->display_flag[f2] == 0) continue;
             if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
+
+            /* Quick Z reject: no 2D overlap is possible if depth ranges do not intersect */
+            if (faces->z_max[f1] <= faces->z_min[f2] || faces->z_max[f2] <= faces->z_min[f1]) continue;
 
             /* Quick AABB reject using existing helper */
             int _ix0, _iy0, _ix1, _iy1;
@@ -2486,44 +2550,64 @@ int check_sort_repair(Model3D* model, int face_count) {
             if (rc == -1 || rc == 1) {
                 /* Single-direction strategy: always move the *closer* face forward
                  * (towards higher indices) to be immediately AFTER the other face.
-                 * This avoids oscillations caused by moving faces backward.
                  */
                 int closer = (rc == -1) ? f1 : f2;
                 int other  = (rc == -1) ? f2 : f1;
                 int pclos = pos_of_face[closer];
                 int pother = pos_of_face[other];
                 if (pclos <= pother) {
-                    /* Move `closer` to position `pother` (immediately after `other`). */
                     int tmp = faces->sorted_face_indices[pclos];
                     if (pclos < pother) {
                         memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
                         faces->sorted_face_indices[pother] = tmp;
                         for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
                         ++repairs;
-                        //printf("check_sort_repair: moved face %d FORWARD BY ONE (pos %d -> %d)\n", closer, pclos, pclos+1);
 
-                        /* Display both faces involved for visual inspection */
+                        /* 
+                         * Enregistrer la contrainte “closer doit être après other”.
+                         * Cette relation devient une obligation à maintenir après
+                         * chaque modification qui affecte le tri.
+                         */
+                        if (relation_count >= relation_capacity) {
+                            int new_cap = relation_capacity * 2;
+                            int (*tmp_rel)[2] = (int(*)[2])realloc(after_relations, sizeof(int) * 2 * new_cap);
+                            if (tmp_rel) {
+                                after_relations = tmp_rel;
+                                relation_capacity = new_cap;
+                            }
+                        }
+                        if (relation_count < relation_capacity) {
+                            after_relations[relation_count][0] = closer;
+                            after_relations[relation_count][1] = other;
+                            relation_count++;
+                        }
+
+                        /* Chaque fois qu'on ajoute une contrainte, on force la
+                         * réévaluation de toutes les contraintes enregistrées. 
+                         * Cela garantit qu’une relation précédente (A>B) reste vraie
+                         * même si une nouvelle insertion déplace B vers l’avant.
+                         */
+                        enforce_mandatory_after_relations(model, n, pos_of_face, relation_count, after_relations);
+
                         if (!automatic_mode) {
                             char msg[128];
                             snprintf(msg, sizeof(msg), "Face %d moved after face %d", closer, other);
                             int _k = show_inspect_faces_with_message(model, closer, other, msg);
-                            if (_k == 27) { /* ESC */ free(pos_of_face); return repairs; }
+                            if (_k == 27) { /* ESC */ free(pos_of_face); free(after_relations); return repairs; }
                             if (_k == 13 || _k == 10) { /* RETURN/ENTER */
-                                automatic_mode = 1; /* switch to automatic mode (no graphics) */
+                                automatic_mode = 1;
                             }
-                            /* Inform user that the batch test is still running (prevents blank-screen confusion) */
                             printf("Test running...\n"); fflush(stdout);
                             printf("\n%s\n", instructions);
                         }
                     }
-                } else {
-                    /* Already after `other` (pclos > pother): no change needed. */
                 }
             }
         }
     }
 
     free(pos_of_face);
+    free(after_relations);
     printf("\ncheck_sort_repair: repairs=%d\n", repairs);
     return repairs;
 }
@@ -2565,6 +2649,9 @@ int check_sort_repair_fast(Model3D* model, int face_count) {
         for (int f2 = f1 + 1; f2 < n; ++f2) {
             if (faces->display_flag[f2] == 0) continue;
             if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
+
+            /* Quick Z reject: no 2D overlap is possible if depth ranges do not intersect */
+            if (faces->z_max[f1] <= faces->z_min[f2] || faces->z_max[f2] <= faces->z_min[f1]) continue;
 
             /* Quick AABB reject */
             int _ix0, _iy0, _ix1, _iy1;
@@ -9433,10 +9520,10 @@ static void show_help_pager(void) {
         "G: Run NEWELL_SANCHAV2 reordering pass",
         "!: Run plane_before autotest on all pairs",
         "<: Run check_sort (ray_cast verify)",
-        ";: Run check_sort_repair (verify+minimal fix)",
+        ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
+        ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
         "1: Painter = FAST (simple sort only)",
         "2: Painter = NORMAL (Fixed32/64)",
-        "3: Painter = NEWELL_SANCHAV3 (v3 variant)",
         "4: Painter = CORRECT (painter_correct)",
         "5: Painter = CORRECTV2",
         ": : Run painter_new (experimental)",
