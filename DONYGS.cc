@@ -8735,6 +8735,39 @@ void dumpFaceEquationsCSV(Model3D* model, const char* csv_filename, int alt_form
     printf("Wrote face equations to %s (%d faces)\n", csv_filename, face_count);
 }
 
+// Dump 2D coordinates of projected face vertices into a text file formatted by face.
+// Each face entry has the form:
+// face <i> (<n> verts):
+//   <vertex_idx>: <x2d> <y2d>
+//   ...
+static void dumpFace2DCoordinates(Model3D* model, const char* txt_filename) {
+    if (!model || !txt_filename) return;
+    FILE* f = fopen(txt_filename, "w");
+    if (!f) {
+        printf("Error: cannot open '%s' for writing\n", txt_filename);
+        return;
+    }
+
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int face_count = faces->face_count;
+
+    for (int fi = 0; fi < face_count; ++fi) {
+        int n = faces->vertex_count[fi];
+        fprintf(f, "face %d (%d verts):\n", fi, n);
+        int offset = faces->vertex_indices_ptr[fi];
+        for (int j = 0; j < n; ++j) {
+            int vid_obj = faces->vertex_indices_buffer[offset + j];
+            int vid = vid_obj - 1;
+            if (vid < 0 || vid >= vtx->vertex_count) continue;
+            fprintf(f, "  %d: %d %d\n", vid_obj, vtx->x2d[vid], vtx->y2d[vid]);
+        }
+    }
+
+    fclose(f);
+    printf("Wrote face 2D coordinates to %s (%d faces)\n", txt_filename, face_count);
+}
+
 // Helper macro to swap face indices in the sorted_face_indices array
 // (We swap indices, not the faces themselves, to keep the buffer intact)
 #define SWAP_FACE(faces, i, j) \
@@ -10144,6 +10177,8 @@ case 98:  // 'b'
                 if (model != NULL) {
                     // Use semicolon column separators and comma decimal separator
                     dumpFaceEquationsCSV(model, "equ.csv", 1);
+                    // Also dump 2D per-face vertex coordinates to faces2D.txt
+                    dumpFace2DCoordinates(model, "faces2D.txt");
                 }
                 goto loopReDraw;
 
