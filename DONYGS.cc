@@ -2394,7 +2394,7 @@ int check_sort_repair(Model3D* model, int face_count) {
     }
 
     int repairs = 0;
-    const char* instructions = "\nWhen graphics is disabled  : ESC = quit, RETURN = automatic mode (no graphics), any other key = step-by-step mode (graphics enabled, press a key for each step)\n\n";
+    const char* instructions = "\nWhen graphics is disabled  :\nESC=abort, RETURN=automatic mode (no graphics), N=skip, any other key = continue.\n\n";
     int automatic_mode = 0; /* 0=graphical inspect, 1=automatic (no graphics) */
 
     printf("%s", instructions);
@@ -2495,6 +2495,31 @@ int check_sort_repair(Model3D* model, int face_count) {
                 int pother = pos_of_face[other];
                 if (pclos <= pother) {
                     int tmp = faces->sorted_face_indices[pclos];
+                    if (!automatic_mode) {
+                        char msg[160];
+                        snprintf(msg, sizeof(msg), "Face %d after face %d ? \n(N=skip, ESC=abort, RET=auto, other=apply)", closer, other);
+                        int _k = show_inspect_faces_with_message(model, closer, other, msg, 3, 188);
+                        if (_k == 27) { /* ESC */ free(pos_of_face); free(after_relations); return repairs; }
+                        if (_k == 'N' || _k == 'n') {
+                            // skip move, continue to next pair
+                            if (!automatic_mode) {
+                                printf("Check and repair running...\n"); fflush(stdout);
+                                printf("\n%s\n", instructions);
+                                printf("Face %d\n", f1);
+                            }
+                            continue;
+                        }
+                        if (_k == 13 || _k == 10) { /* RETURN/ENTER */
+                            automatic_mode = 1;
+                            // Fall through to move execution, but also show text status for return.
+                            if (!automatic_mode) {
+                                printf("Check and repair running...\n"); fflush(stdout);
+                                printf("\n%s\n", instructions);
+                                printf("Face %d\n", f1);
+                            }
+                        }
+                    }
+
                     if (pclos < pother) {
                         memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
                         faces->sorted_face_indices[pother] = tmp;
@@ -2520,24 +2545,12 @@ int check_sort_repair(Model3D* model, int face_count) {
                             relation_count++;
                         }
 
-                        /* Chaque fois qu'on ajoute une contrainte, on force la
-                         * réévaluation de toutes les contraintes enregistrées. 
-                         * Cela garantit qu’une relation précédente (A>B) reste vraie
-                         * même si une nouvelle insertion déplace B vers l’avant.
-                         */
                         enforce_mandatory_after_relations(model, n, pos_of_face, relation_count, after_relations);
+                    }
 
-                        if (!automatic_mode) {
-                            char msg[128];
-                            snprintf(msg, sizeof(msg), "Face %d moved after face %d", closer, other);
-                            int _k = show_inspect_faces_with_message(model, closer, other, msg);
-                            if (_k == 27) { /* ESC */ free(pos_of_face); free(after_relations); return repairs; }
-                            if (_k == 13 || _k == 10) { /* RETURN/ENTER */
-                                automatic_mode = 1;
-                            }
-                            printf("Check and repair running...\n"); fflush(stdout);
-                            printf("\n%s\n", instructions);
-                        }
+                    if (!automatic_mode) {
+                        printf("Check and repair running...\n"); fflush(stdout);
+                        printf("\n%s\n", instructions);
                     }
                 }
             }
@@ -4679,7 +4692,7 @@ static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const
  * - Renders the model in wireframe, highlights `f1`/`f2`, performs MoveTo(3,198) then prints `msg`,
  *   waits for a key, and restores rendering state. Kept minimal and non-invasive.
  */
-static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const char* msg) {
+static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const char* msg, int screenx, int screeny) {
     if (!model) return;
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -4700,7 +4713,7 @@ static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const
     drawFace(model, f2, COL_ORANGE, 1);
     faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
 
-    MoveTo(3,198);
+    MoveTo(screenx, screeny);
     printf("%s", msg);
     // Wait for key
     int key = 0;
@@ -8730,6 +8743,29 @@ static void dumpFace2DCoordinates(Model3D* model, const char* txt_filename) {
     printf("Wrote face 2D coordinates to %s (%d faces)\n", txt_filename, face_count);
 }
 
+// Dump sorted face indices in the order used by the painter (sorted_face_indices array)
+// Each line contains a face index (0-based) in draw order.
+static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename) {
+    if (!model || !txt_filename) return;
+    FILE* f = fopen(txt_filename, "w");
+    if (!f) {
+        printf("Error: cannot open '%s' for writing\n", txt_filename);
+        return;
+    }
+
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+
+    fprintf(f, "# Sorted face indices in painter draw order (0-based face id); %d faces\n", face_count);
+    for (int i = 0; i < face_count; ++i) {
+        int face_id = faces->sorted_face_indices[i];
+        fprintf(f, "%d\n", face_id);
+    }
+
+    fclose(f);
+    printf("Wrote sorted face indices to %s (%d faces)\n", txt_filename, face_count);
+}
+
 // Helper macro to swap face indices in the sorted_face_indices array
 // (We swap indices, not the faces themselves, to keep the buffer intact)
 #define SWAP_FACE(faces, i, j) \
@@ -10128,10 +10164,13 @@ case 98:  // 'b'
             case 70:  // 'F' - dump face equations to equ.csv
             case 102: // 'f'
                 if (model != NULL) {
+                    printf("Writing files...\n");
                     // Use semicolon column separators and comma decimal separator
-                    dumpFaceEquationsCSV(model, "equ.csv", 1);
-                    // Also dump 2D per-face vertex coordinates to faces2D.txt
-                    dumpFace2DCoordinates(model, "faces2D.txt");
+                    dumpFaceEquationsCSV(model, "Faces3D.csv", 1);
+                    // Also dump 2D per-face vertex coordinates to Faces2D.txt
+                    dumpFace2DCoordinates(model, "Faces2D.txt");
+                    // Dump sorted face indices in painter output order
+                    dumpSortedFaceIndices(model, "FacesOrder.txt");
                 }
                 goto loopReDraw;
 
