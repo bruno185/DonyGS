@@ -162,16 +162,11 @@ static int random_colors_capacity = 0;
 #define PAINTER_MODE_FIXED 1
 // #define PAINTER_MODE_FLOAT 2
 #define PAINTER_MODE_CORRECT 3
-#define PAINTER_MODE_CORRECTV2 4
+#define PAINTER_MODE_CORRECTV2 6
+#define PAINTER_MODE_GEO 5
 
-static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,4=correct,5=correctV2
+static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct,5=geo,6=correctV2
 
-// Runtime toggle kept for compatibility; main() may set this and we propagate to painter_mode
-static int use_float_painter = 0;
-
-// --- Reusable scratch buffers for float painter (ARCHIVED: implementation moved to `chutier.txt`).
-// Buffers retained for potential restoration; the FLOAT painter implementation is archived and calls are commented out in `DONYGS.cc`.
-static float *float_xo = NULL, *float_yo = NULL, *float_zo = NULL; static int float_vcap = 0;
 static float *float_px = NULL, *float_py = NULL; static int *float_px_int = NULL, *float_py_int = NULL;static float *f_z_min_buf = NULL, *f_z_max_buf = NULL, *f_z_mean_buf = NULL;
 static int *f_minx_buf = NULL, *f_maxx_buf = NULL, *f_miny_buf = NULL, *f_maxy_buf = NULL;
 static int *f_display_buf = NULL;
@@ -356,7 +351,7 @@ static inline int normalize_deg(int deg) {
 #define MAX_LINE_LENGTH 256     // Maximum file line size
 #define MAX_VERTICES 6000       // Maximum vertices in a 3D model
 #define MAX_FACES 6000          // Maximum faces in a 3D model (using parallel arrays)
-#define MAX_FACE_VERTICES 6     // Maximum vertices per face (triangles/quads/hexagons)
+#define MAX_FACE_VERTICES 16     // Maximum vertices per face (triangles/quads/hexagons)
 #define CENTRE_X 160            // Screen center in X (320/2)
 #define CENTRE_Y 100            // Screen center in Y (200/2)
 //#define mode 640              // Graphics mode 640x200 pixels
@@ -1056,7 +1051,6 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
 }
 
 void painter_new(Model3D* model, int face_count) {
-    if (use_float_painter) { /*painter_newell_sancha_float(model, face_count);*/ return; }
     // copy of initial portion from painter_newell_sancha up to correction loop
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -1192,8 +1186,6 @@ void painter_new(Model3D* model, int face_count) {
 
 
 void painter_geo(Model3D* model, int face_count) {
-    if (use_float_painter) { //painter_newell_sancha_float(model, face_count); return; 
-        }
     // ...existing code...
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -1387,8 +1379,6 @@ void painter_geo(Model3D* model, int face_count) {
 
 
 void painter_newell_sancha(Model3D* model, int face_count) {
-    if (use_float_painter) { //painter_newell_sancha_float(model, face_count); return; 
-        }
     // ...existing code...
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -7600,89 +7590,6 @@ static int split_face_by_plane(Model3D* model, int f1, int f2,
     return 1;
 }
 
-#if 0
-/* utility: ensure vertices in `verts` are present on face `fidx`.
-   This naively appends indices to the end of the face's index list; any
-   duplicates will later be cleaned by `cleanup_list`/`remove_duplicates` in
-   `split_face_by_plane`.  We only add if the vertex lies within the face's
-   bounding box to avoid polluting unrelated faces. */
-static void append_vertices_to_face(Model3D* model, int fidx, int *verts, int n) {
-    if (!model || fidx < 0) return;
-    FaceArrays3D* faces = &model->faces;
-    if (fidx >= faces->face_count) return;
-    int cnt = faces->vertex_count[fidx];
-    int off = faces->vertex_indices_ptr[fidx];
-    /* compute bbox of face for quick reject */
-    Fixed32 minx=INT32_MAX, maxx=INT32_MIN;
-    Fixed32 miny=INT32_MAX, maxy=INT32_MIN;
-    Fixed32 minz=INT32_MAX, maxz=INT32_MIN;
-    for (int k = 0; k < cnt; ++k) {
-        int vi = faces->vertex_indices_buffer[off + k] - 1;
-        Fixed32 x = model->vertices.x[vi];
-        Fixed32 y = model->vertices.y[vi];
-        Fixed32 z = model->vertices.z[vi];
-        if (x < minx) minx = x; if (x > maxx) maxx = x;
-        if (y < miny) miny = y; if (y > maxy) maxy = y;
-        if (z < minz) minz = z; if (z > maxz) maxz = z;
-    }
-    /* for each candidate vertex, add to face if within bbox */
-    for (int i = 0; i < n; ++i) {
-        int vi = verts[i];
-        if (vi < 0 || vi >= model->vertices.vertex_count) continue;
-        Fixed32 x = model->vertices.x[vi];
-        Fixed32 y = model->vertices.y[vi];
-        Fixed32 z = model->vertices.z[vi];
-        if (x < minx || x > maxx || y < miny || y > maxy || z < minz || z > maxz)
-            continue; /* out of bounding box */
-        /* append index+1 to list */
-        int indexPos = faces->total_indices;
-        faces->vertex_indices_buffer[indexPos] = vi + 1;
-        faces->total_indices++;
-        faces->vertex_count[fidx]++;
-    }
-}
-
-/* legacy plane-crossing helper kept for compatibility (unused) */
-static int face_edge_traverses_plane(Model3D* model, int fi, int fj) {
-    double a, b, c, d;
-    compute_face_plane(model, fj, &a, &b, &c, &d);
-    if (a == 0.0 && b == 0.0 && c == 0.0) {
-        return 0; /* degenerate plane */
-    }
-    /* small tolerance to avoid counting touches as crosses */
-    const double plane_eps = 0.02; /* same as bbox epsilon */
-
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int cnt = faces->vertex_count[fi];
-    if (cnt < 2) return 0;
-    int off = faces->vertex_indices_ptr[fi];
-    /* compute signed distance for first vertex */
-    int vi = faces->vertex_indices_buffer[off] - 1;
-    double x = (double)vtx->x[vi], y = (double)vtx->y[vi], z = (double)vtx->z[vi];
-    double prev_sd = a * x + b * y + c * z + d;
-    if (fabsl(prev_sd) < plane_eps) prev_sd = 0.0;
-    for (int k = 1; k < cnt; ++k) {
-        vi = faces->vertex_indices_buffer[off + k] - 1;
-        x = (double)vtx->x[vi]; y = (double)vtx->y[vi]; z = (double)vtx->z[vi];
-        double sd = a * x + b * y + c * z + d;
-        if (fabsl(sd) < plane_eps) sd = 0.0;
-        if ((prev_sd > 0.0 && sd < 0.0) || (prev_sd < 0.0 && sd > 0.0)) {
-            return 1; /* edge crosses plane proper */
-        }
-        prev_sd = sd;
-    }
-    /* check closing edge (last->first) */
-    vi = faces->vertex_indices_buffer[off] - 1;
-    x = (double)vtx->x[vi]; y = (double)vtx->y[vi]; z = (double)vtx->z[vi];
-    double first_sd = a * x + b * y + c * z + d;
-    if (fabsl(first_sd) < plane_eps) first_sd = 0.0;
-    if ((prev_sd > 0.0 && first_sd < 0.0) || (prev_sd < 0.0 && first_sd > 0.0))
-        return 1;
-    return 0;
-}
-#endif
-
 /*
  * Walk all face pairs and report 3D bbox overlaps.
  * Epsilon is applied in fixed-point to give a tiny tolerance (0.02 units).
@@ -8061,6 +7968,8 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     } else if (painter_mode == PAINTER_MODE_CORRECT) {
         /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
         painter_correct(model, model->faces.face_count, 0);
+    } else if (painter_mode == PAINTER_MODE_GEO) {
+        painter_geo(model, model->faces.face_count);
     } else if (painter_mode == PAINTER_MODE_CORRECTV2) {
         /* painter_correctV2: experimental face splitting version */
         painter_correctV2(model, model->faces.face_count, 0);
@@ -9078,179 +8987,7 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
             invalid_faces_skipped++;
         }
     }
-    // Print statistics after drawing
-//     printf("Display statistics: %d valid faces drawn, %d invalid faces skipped\n", valid_faces_drawn, invalid_faces_skipped);
-//     printf("Triangles: %d, Quads: %d\n", triangle_count, quad_count);
 }
-
-#if 0
-// drawPolygons_jitter: same behavior as drawPolygons but applies a small random
-// pixel offset (0..jitter_max) to each vertex 2D coordinate prior to drawing.
-// This function is intentionally a copy of drawPolygons() with the per-vertex
-// jitter applied when filling the QuickDraw polygon points. It keeps bbox
-// culling decisions unchanged (bbox uses unjittered coords) to avoid spurious
-// off-screen skips.
-void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total) {
-    int i, j;
-    VertexArrays3D* vtx = &model->vertices;
-    FaceArrays3D* faces = &model->faces;
-    Handle polyHandle;
-    DynamicPolygon *poly;
-    int min_x, max_x, min_y, max_y;
-    int valid_faces_drawn = 0;
-    int invalid_faces_skipped = 0;
-    int triangle_count = 0;
-    int quad_count = 0;
-    Pattern pat;
-    
-    // Precompute screen scale and screen bounds for culling
-    int screenScale = mode / 320;
-    int screenW = screenScale * (CENTRE_X * 2);
-    int screenH = screenScale * (CENTRE_Y * 2);
-
-    if (globalPolyHandle == NULL) {
-        int max_polySize = 2 + 8 + (MAX_FACE_VERTICES * 4);
-        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
-        if (globalPolyHandle == NULL) {
-            printf("Error: Unable to allocate global polygon handle\n");
-            return;
-        }
-    }
-    
-    polyHandle = globalPolyHandle;
-    
-    if (poly_handle_locked) { 
-        HUnlock(polyHandle); 
-        poly_handle_locked = 0; 
-    }
-    HLock(polyHandle); 
-    poly_handle_locked = 1;
-
-    SetPenMode(0);
-    SetSolidPenPat(COL_FILL_DEFAULT);
-
-    int start_face = 0;
-    int max_faces_to_draw = face_count;
-    for (i = start_face; i < start_face + max_faces_to_draw; i++) {
-        int face_id = faces->sorted_face_indices[i];
-        if (faces->display_flag[face_id] == 0) continue;
-        if (faces->vertex_count[face_id] >= 3) {
-            int offset = faces->vertex_indices_ptr[face_id];
-            int vcount_face = faces->vertex_count[face_id];
-            int *indices_base = &faces->vertex_indices_buffer[offset];
-
-            int all_valid = 1;
-            for (j = 0; j < vcount_face; ++j) {
-                int vi = indices_base[j] - 1;
-                if (vi < 0 || vi >= vtx->vertex_count) { all_valid = 0; break; }
-            }
-            if (!all_valid) { invalid_faces_skipped++; continue; }
-
-            int polySize = 2 + 8 + (vcount_face * 4);
-            poly = (DynamicPolygon *)*polyHandle;
-            poly->polySize = polySize;
-
-            int *x2d = vtx->x2d;
-            int *y2d = vtx->y2d;
-
-            int first_vi = indices_base[0] - 1;
-            int x = x2d[first_vi];
-            int y = y2d[first_vi];
-            int jx = rand() % (jitter_max + 1);
-            int jy = rand() % (jitter_max + 1);
-            poly->polyPoints[0].h = screenScale * (x + pan_dx) + jx;
-            poly->polyPoints[0].v = y + pan_dy + jy;
-            min_x = max_x = x;
-            min_y = max_y = y;
-
-            for (j = 1; j < vcount_face; ++j) {
-                int vi = indices_base[j] - 1;
-                x = x2d[vi];
-                y = y2d[vi];
-                jx = rand() % (jitter_max + 1);
-                jy = rand() % (jitter_max + 1);
-                poly->polyPoints[j].h = screenScale * (x + pan_dx) + jx;
-                poly->polyPoints[j].v = y + pan_dy + jy;
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
-            }
-
-            poly->polyBBox.h1 = min_x + pan_dx;
-            poly->polyBBox.v1 = min_y + pan_dy;
-            poly->polyBBox.h2 = max_x + pan_dx;
-            poly->polyBBox.v2 = max_y + pan_dy;
-
-            int sc_min_x = screenScale * (min_x + pan_dx);
-            int sc_max_x = screenScale * (max_x + pan_dx);
-            int sc_min_y = (min_y + pan_dy);
-            int sc_max_y = (max_y + pan_dy);
-            if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) {
-                // Off-screen; skip drawing
-            } else {
-                if (framePolyOnly) {
-                    int frame_color;
-                    if (user_frame_color == 17) {
-                        if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
-                            frame_color = random_fill_colors[face_id];
-                        } else if (user_fill_color >= 0) {
-                            frame_color = user_fill_color;
-                        } else {
-                            frame_color = COL_FILL_DEFAULT; // default fill color
-                        }
-                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
-                        frame_color = random_frame_colors[face_id];
-                    } else if (user_frame_color >= 0) {
-                        frame_color = user_frame_color;
-                    } else {
-                        frame_color = COL_FRAME;
-                    }
-                    SetSolidPenPat(frame_color);
-                    FramePoly(polyHandle);
-                    SetSolidPenPat(COL_FILL_DEFAULT); // keep fill pen as default for next faces
-                } else {
-                    int fill_color;
-                    if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
-                        fill_color = random_fill_colors[face_id];
-                    } else if (user_fill_color >= 0) {
-                        fill_color = user_fill_color;
-                    } else {
-                        fill_color = COL_FILL_DEFAULT;
-                    }
-                    SetSolidPenPat(fill_color);
-                    GetPenPat(pat);
-                    FillPoly(polyHandle, pat);
-                    
-                    int frame_color;
-                    if (user_frame_color == 17) {
-                        // Same as fill color
-                        frame_color = fill_color;
-                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
-                        frame_color = random_frame_colors[face_id];
-                    } else if (user_frame_color >= 0) {
-                        frame_color = user_frame_color;
-                    } else {
-                        frame_color = COL_FRAME;
-                    }
-                    SetSolidPenPat(frame_color);
-                    FramePoly(polyHandle);
-                    SetSolidPenPat(COL_FILL_DEFAULT); // restore fill pen
-                }
-                valid_faces_drawn++;
-                if (vcount_face == 3) triangle_count++;
-                else if (vcount_face == 4) quad_count++;
-            }
-        } else {
-            invalid_faces_skipped++;
-        }
-    }
-    // Print statistics after drawing
-//     printf("Display statistics: %d valid faces drawn, %d invalid faces skipped\n", valid_faces_drawn, invalid_faces_skipped);
-//     printf("Triangles: %d, Quads: %d\n", triangle_count, quad_count);
-#endif
-
-segment "code18";
 
 // Generate random colors for all faces
 void generate_random_colors(int face_count) {
@@ -9550,6 +9287,7 @@ static void show_help_pager(void) {
         ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
         "1: Painter = FAST (simple sort only)",
         "2: Painter = NORMAL (Fixed32/64)",
+        "3: Painter = GEO (geometry-only)",
         "4: Painter = CORRECT (painter_correct)",
         "5: Painter = CORRECTV2",
         ": : Run painter_new (experimental)",
@@ -9802,6 +9540,7 @@ segment "code22";
                 if (painter_mode == PAINTER_MODE_FAST) printf("    Painter mode: FAST (simple face sorting only)\n");
                 else if (painter_mode == PAINTER_MODE_FIXED) printf("    Painter mode: NORMAL (Fixed32/64)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECT) printf("    Painter mode: CORRECT (painter_correct)\n");
+                else if (painter_mode == PAINTER_MODE_GEO) printf("    Painter mode: GEO (geometry-only)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECTV2) printf("    Painter mode: CORRECT V2 (painter_correctV2 with face splitting detection)\n");
                 else printf("    Painter mode: FLOAT (float-based)\n\n");
                 printf("    Back-face culling: %s\n", cull_back_faces ? "ON" : "OFF");
@@ -10010,6 +9749,11 @@ segment "code22";
             case 50: // '2' - set NORMAL (Fixed32/64) painter
                 painter_mode = PAINTER_MODE_FIXED;
                 printf("Painter mode: NORMAL (full tests, Fixed32/64)\n");
+                if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
+
+            case 51: // '3' - set GEO painter
+                painter_mode = PAINTER_MODE_GEO;
+                printf("Painter mode: GEO (geometry-only)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
             case 52: // '4' - set CORRECT painter (runs painter_correct)
