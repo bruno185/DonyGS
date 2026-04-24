@@ -825,9 +825,7 @@ void debug_two_faces(Model3D* model, int f1, int f2) {
 
 /* -------------------------------------------------------------------------
  * New painter variant where each pairwise test is factored into its own
- * helper function.  The body of painter_new historically duplicated much of
- * the logic from painter_newell_sancha; this version simply calls the
- * individual test routines in sequence.
+ * helper function. 
  *
  * Each helper returns:
  *   -1 when f1 is conclusively before (no swap)
@@ -1048,140 +1046,6 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
     /* remaining tests 5 and 7 could be implemented similarly, but they are
        symmetrically covered by swapping the arguments and calling above logic. */
     return 0;
-}
-
-void painter_new(Model3D* model, int face_count) {
-    // copy of initial portion from painter_newell_sancha up to correction loop
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int i, j;
-    Fixed32* face_zmean = faces->z_mean;
-
-    if (!face_zmean) return;
-    long t_start = GetTick();
-    int visible_count = face_count;
-    if (cull_back_faces) {
-        visible_count = 0;
-        for (i = 0; i < face_count; ++i) {
-            if (faces->display_flag[i]) faces->sorted_face_indices[visible_count++] = i;
-        }
-        int tail = visible_count;
-        for (i = 0; i < face_count; ++i) {
-            if (!faces->display_flag[i]) faces->sorted_face_indices[tail++] = i;
-        }
-    } else {
-        for (i = 0; i < face_count; i++) faces->sorted_face_indices[i] = i;
-    }
-    qsort_faces_ptr_for_cmp = faces;
-    qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
-    qsort_faces_ptr_for_cmp = NULL;
-    long t_end = GetTick();
-    int swap_count = 0;
-    int swapped;
-    typedef struct { int face1, face2; } OrderedPair;
-    int ordered_pairs_capacity = face_count * 4;
-    OrderedPair* ordered_pairs = NULL;
-    if (ordered_pairs_capacity > 0) {
-        ordered_pairs = (OrderedPair*)malloc(ordered_pairs_capacity * sizeof(OrderedPair));
-        if (!ordered_pairs) ordered_pairs_capacity = 0;
-    }
-    int ordered_pairs_count = 0;
-    if (inconclusive_pairs) { free(inconclusive_pairs); inconclusive_pairs = NULL; }
-    inconclusive_pairs_capacity = face_count * 4;
-    if (inconclusive_pairs_capacity > 0) {
-        inconclusive_pairs = (InconclusivePair*)malloc(inconclusive_pairs_capacity * sizeof(InconclusivePair));
-        if (!inconclusive_pairs) inconclusive_pairs_capacity = 0;
-    }
-    inconclusive_pairs_count = 0;
-    int rctest = 0;
-    do {
-        swapped = 0;
-        for (i = 0; i < visible_count-1; i++) {
-            int f1 = faces->sorted_face_indices[i];
-            int f2 = faces->sorted_face_indices[i+1];
-            int already_ordered = 0;
-            for (j = 0; j < ordered_pairs_count; j++) {
-                if ((ordered_pairs[j].face1 == f1 && ordered_pairs[j].face2 == f2) ||
-                    (ordered_pairs[j].face1 == f2 && ordered_pairs[j].face2 == f1)) {
-                    already_ordered = 1; break;
-                }
-            }
-            if (already_ordered) continue;
-            int result = 0;
-            if ((result = painter_new_test1_depth(model,f1,f2)) != 0) {
-                if (result == 1) goto new_do_swap;
-                else continue;
-            }
-            if ((result = painter_new_test2_bbox_x(model,f1,f2)) != 0) {
-                continue;          /* separation in X, order safe */
-            }
-            if ((result = painter_new_test3_bbox_y(model,f1,f2)) != 0) {
-                continue;          /* separation in Y, order safe */
-            }
-            /* polygon overlap test copied inline since requirement forbids existing functions */
-            if (!projected_polygons_overlap(model, f1, f2)) continue;
-
-            /* plane tests 4 & 5 only distinguish “definitely before” (-1) from
-               “undecidable” (0); they never request a swap.  if result < 0 the
-               current ordering is confirmed and we skip to next pair, otherwise
-               we fall through to the next test. */
-            if ((result = painter_new_plane_test4(model,f1,f2)) < 0)
-                continue;
-            if ((result = painter_new_plane_test5(model,f1,f2)) < 0)
-                continue;
-
-            /* tests 6 and 7 may request a swap.  test6 returns 0 or 1,
-               test7 returns -1, 0 or 1, so we handle them slightly
-               differently for clarity. */
-            result = painter_new_plane_test6(model,f1,f2);
-            if (result == 1)                 /* definite swap */
-                goto new_do_swap;
-            /* result == 0 → fall through to test7 */
-
-            result = painter_new_plane_test7(model,f1,f2);
-            if (result == 1)                 /* definite swap */
-                goto new_do_swap;
-            /* result == 0 -> inconclusive; try a QuickDraw raycast if polygons overlap */
-            if (projected_polygons_overlap(model, f1, f2)) {
-                int rc = ray_cast_hierarchical(model, f1, f2);
-                rctest++;
-                if (rc < 0) {
-                    /* ray hit f1 first: swap order */
-                    goto new_do_swap;
-                } else if (rc > 0) {
-                    /* ray hit f2 first: current order f1,f2 is correct, record it */
-                    if (ordered_pairs_capacity && ordered_pairs_count < ordered_pairs_capacity) {
-                        ordered_pairs[ordered_pairs_count].face1 = f1;
-                        ordered_pairs[ordered_pairs_count].face2 = f2;
-                        ordered_pairs_count++;
-                    }
-                    continue;   /* move on to next pair */
-                }
-                /* rc == 0 falls through to record inconclusive pair */
-            }
-            /* no overlap or raycast inconclusive – treat as inconclusive pair */
-            if (inconclusive_pairs_capacity) {
-                if (inconclusive_pairs_count < inconclusive_pairs_capacity) {
-                    inconclusive_pairs[inconclusive_pairs_count++] = (InconclusivePair){f1,f2};
-                }
-            }
-            continue;
-        new_do_swap:
-            /* perform adjacent swap */
-            faces->sorted_face_indices[i]   = f2;
-            faces->sorted_face_indices[i+1] = f1;
-            ordered_pairs[ordered_pairs_count].face1 = f2;
-            ordered_pairs[ordered_pairs_count].face2 = f1;
-            ordered_pairs_count++;
-            swap_count++;
-            swapped = 1;
-        }
-    } while (swapped);
-    if (ordered_pairs) free(ordered_pairs);
-    long t_stop = GetTick();
-    printf("time = %ld\n", t_stop - t_start);
-    printf("raycast tests = %d\n", rctest); 
-    keypress();
 }
 
 
@@ -4051,8 +3915,6 @@ static int pair_plane_before_debug_quiet = 0;
 #define PDBG(...) if(!pair_plane_before_debug_quiet) printf(__VA_ARGS__)
 #define PKEYP() if(!pair_plane_before_debug_quiet) keypress()
 
-/* prototype for autotest */
-void plane_before_autotest(Model3D* model);
 
 /* debug version of pair_plane_before: prompts user, prints diagnostics */
 static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
@@ -4409,55 +4271,6 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
         }
     // reached if neither test decided
     return 0;
-}
-
-/* automatic test that iterates all face pairs and logs epsilon+results */
-void plane_before_autotest(Model3D* model) {
-    if (!model) { printf("No model for autotest\n"); return; }
-    FILE *fp = fopen("epsilon.txt", "w");
-    if (!fp) { printf("Unable to open epsilon.txt for writing\n"); return; }
-    FaceArrays3D* faces = &model->faces;
-    int fc = faces->face_count;
-    for (int f1 = 0; f1 < fc; ++f1) {
-        for (int f2 = 0; f2 < fc; ++f2) {
-            if (f1 == f2) continue;
-            /* compute epsilon based on plane normals (same as debug_fixed) */
-            Fixed64 a1 = faces->plane_a[f1];
-            Fixed64 b1 = faces->plane_b[f1];
-            Fixed64 c1 = faces->plane_c[f1];
-            Fixed64 a2 = faces->plane_a[f2];
-            Fixed64 b2 = faces->plane_b[f2];
-            Fixed64 c2 = faces->plane_c[f2];
-            double fa1 = FIXED64_TO_FLOAT(a1);
-            double fb1 = FIXED64_TO_FLOAT(b1);
-            double fc1d = FIXED64_TO_FLOAT(c1);
-            double fa2 = FIXED64_TO_FLOAT(a2);
-            double fb2 = FIXED64_TO_FLOAT(b2);
-            double fc2d = FIXED64_TO_FLOAT(c2);
-            double norm1 = sqrt(fa1*fa1 + fb1*fb1 + fc1d*fc1d);
-            double norm2 = sqrt(fa2*fa2 + fb2*fb2 + fc2d*fc2d);
-            double base = (norm1 > norm2) ? norm1 : norm2;
-            double epsf = base * 0.001;
-            if (epsf < 0.01) epsf = 0.01;
-            Fixed32 epsilon = FLOAT_TO_FIXED((float)epsf);
-
-            int res = pair_plane_before(model, f1, f2);
-
-            autopair_f1 = f1;
-            autopair_f2 = f2;
-            pair_plane_before_debug_quiet = 1;
-            int debug_res = pair_plane_before_debug_fixed(model, f1, f2);
-            pair_plane_before_debug_quiet = 0;
-            autopair_f1 = autopair_f2 = -1;
-
-            printf("AUTO: faces %d %d eps=%f result=%d debug=%d\n",
-                   f1, f2, epsf, res, debug_res);
-            fprintf(fp, "%d %d %f %d %d\n",
-                    f1, f2, epsf, res, debug_res);
-        }
-    }
-    fclose(fp);
-    printf("Autotest completed, results written to epsilon.txt\n");
 }
 
 static int pair_plane_before(Model3D* model, int f1, int f2) {
@@ -9282,7 +9095,6 @@ static void show_help_pager(void) {
         "W/X: Change screen rotation angle",
         "C: Toggle color palette display",
         "J: Toggle jittered rendering",
-        "!: Run plane_before autotest on all pairs",
         ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
         ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
         "1: Painter = FAST (simple sort only)",
@@ -9290,8 +9102,6 @@ static void show_help_pager(void) {
         "3: Painter = GEO (geometry-only)",
         "4: Painter = CORRECT (painter_correct)",
         "5: Painter = CORRECTV2",
-        ": : Run painter_new (experimental)",
-        "?: Run geometry-only painter (painter_geo)",
         "6: Both colors RANDOM mode",
         "7: Choose fill color",
         "8: Choose frame color",
@@ -9721,11 +9531,6 @@ segment "code22";
                 inspect_faces_after(model, &params, filename);
                 goto loopReDraw;
 
-            case 33: // '!' - autotest plane_before on all pairs
-                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
-                plane_before_autotest(model);
-                goto loopReDraw;
-
             case 77: // 'M' - debug pair_plane_before
             case 109: // 'm'
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
@@ -9765,16 +9570,6 @@ segment "code22";
                 painter_mode = PAINTER_MODE_CORRECTV2;
                 printf("Painter mode: CORRECT V2 (painter_correctV2)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
-
-            case 63: // '?' - run geometry-only painter (painter_geo)
-                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
-                painter_geo(model, model->faces.face_count);
-                goto loopReDraw;
-
-            case 58: // ':' - invoke newly implemented painter_new directly
-                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
-                painter_new(model, model->faces.face_count);
-                goto loopReDraw;
 
             case 55: // '7' - choose fill color
                 {
