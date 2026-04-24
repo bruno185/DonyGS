@@ -4076,7 +4076,37 @@ static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
 }
 
 
-/* debug version of pair_plane_before: prompts user, prints diagnostics */
+/* pair_plane_before_debug_fixed
+ * --------------------------------
+ * Fixed-point debug wrapper for the normal `pair_plane_before()` ordering test.
+ *
+ * Purpose:
+ * - Provide a diagnostic version of the plane-based face ordering test that can
+ *   be used interactively or in quiet/autotest mode.
+ * - Print detailed debug output for plane coefficients, vertex-side comparisons,
+ *   and test pass/fail decisions.
+ * - Help developers understand why two faces are considered ordered or inconclusive.
+ *
+ * Behavior:
+ * - If `pair_plane_before_debug_quiet` is set, this function forwards directly to
+ *   `pair_plane_before()` and suppresses interactive debugging.
+ * - Otherwise it prompts the user for face indices (unless auto-pair values are set),
+ *   then evaluates Tests 4 and 5 with verbose output.
+ * - It uses cached plane coefficients from `calculateFaceDepths()` and converts them
+ *   to doubles only for reporting, while the actual geometric decision logic is still
+ *   conceptually the same as the underlying plane tests.
+ *
+ * Test semantics:
+ * - Test 4: Verify whether all vertices of face2 lie on the same observer-side
+ *   of face1's plane. If so, face2 is in front of face1 and the ordering is confirmed.
+ * - Test 5: Verify whether all vertices of face1 lie on the opposite observer-side
+ *   of face2's plane. If so, face1 is behind face2 and the ordering is confirmed.
+ *
+ * Note:
+ * - This function is primarily a debug aid, not a production ordering routine.
+ * - It prints per-vertex values and pauses via `PKEYP()` so the developer can inspect
+ *   intermediate results.
+ */
 static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -4093,7 +4123,6 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
         int c; while ((c = getchar()) != '\n' && c != EOF) ;
         printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
     }
-
 
     // Use cached plane normals and d terms computed in calculateFaceDepths
     int n1 = faces->vertex_count[f1];
@@ -4112,7 +4141,15 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
 
     /* compute epsilon based on magnitude of the two plane normals
        instead of scanning every vertex; this keeps value bounded even when
-       observer-space coordinates are large. */
+       observer-space coordinates are large.
+       
+       Formula:
+       - norm1 = length(normal1)
+       - norm2 = length(normal2)
+       - epsf = max(norm1, norm2) * 0.001   (0.1% of the larger normal)
+       - epsf = max(epsf, 0.01)              (minimum tolerance)
+       - epsilon = convert epsf to Fixed32 scale
+    */
     Fixed32 epsilon;
     {
         long t0 = GetTick();
@@ -4181,22 +4218,18 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
             // PDBG("test_value (fixed64 >>%d) = %lld\n", FIXED_SHIFT, (long long)(acc >> FIXED_SHIFT));
             PDBG("test_value (float)        = %f\n", FIXED64_TO_FLOAT(acc));
 
-             if  (acc > (Fixed64)epsilon) side = 1;
+            if (acc > (Fixed64)epsilon) side = 1;
             else if (acc < -(Fixed64)epsilon) side = -1;
-            else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+            else continue; // ignore vertices that are effectively on the plane
 
-            if  (acc > (Fixed64)epsilon) side = 1;
-            else if (acc < -(Fixed64)epsilon) side = -1;
-            else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
-            if (obs_side1 != side) { 
-                // if a vertex is on the other side, break the loop
-                // and set the flag to 0 to indicate the test failed (move to next test)
-                all_same_side = 0; 
-                
-                    PDBG("Test 4 failed for faces %d and %d\n", f1, f2);
-                    PKEYP(); 
-                break; 
-                }
+            if (obs_side1 != side) {
+                /* if a vertex of f2 is on the opposite side of f1's plane than the observer,
+                 * Test 4 cannot conclude the ordering; continue to later tests. */
+                all_same_side = 0;
+                PDBG("Test 4 failed for faces %d and %d\n", f1, f2);
+                PKEYP();
+                break;
+            }
     }
     PDBG("FOR loop stop\n");
     // test 4 passed
@@ -4254,21 +4287,21 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
         else if (acc < -(Fixed64)epsilon) side = -1;
         else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
         if (obs_side2 == side) {
-            // if a vertex is on the same side, break the loop
-            // and set the flag to 0 to indicate the test failed (move to next test)
-            all_opposite_side = 0; 
-
+            /* if a vertex of f1 is on the same side of f2's plane as the observer,
+             * Test 5 cannot conclude the ordering and must fail. */
+            all_opposite_side = 0;
             PDBG("Test 5 failed for faces %d and %d\n", f1, f2);
             PKEYP();
-            break; }
+            break;
         }
+    }
 
-        // test 5 passed
-        if (all_opposite_side) { // faces are ordered correctly, move to next pair
+    // test 5 passed
+    if (all_opposite_side) {
         PDBG("Test 5 passed for Faces %d and %d\n", f1, f2);
         PKEYP();
         return 1;
-        }
+    }
     // reached if neither test decided
     return 0;
 }
