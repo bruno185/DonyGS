@@ -4116,11 +4116,17 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
         f1 = autopair_f1;
         f2 = autopair_f2;
     } else if (!pair_plane_before_debug_quiet) {
-        printf("PAIR_DEBUG: enter two face indices f1 f2 (or any numbers): "); fflush(stdout);
-        if (scanf("%d %d", &f1, &f2) != 2) {
+        printf("PAIR_DEBUG: enter face index f1: "); fflush(stdout);
+        if (scanf("%d", &f1) != 1) {
             printf("invalid input\n"); keypress(); return 0;
         }
         int c; while ((c = getchar()) != '\n' && c != EOF) ;
+
+        printf("PAIR_DEBUG: enter face index f2: "); fflush(stdout);
+        if (scanf("%d", &f2) != 1) {
+            printf("invalid input\n"); keypress(); return 0;
+        }
+        while ((c = getchar()) != '\n' && c != EOF) ;
         printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
     }
 
