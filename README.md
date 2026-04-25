@@ -16,7 +16,7 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 - **Multiple Painter Algorithms**: Five distinct rendering modes optimized for different use cases (FLOAT is archived)
   - **FAST**: Simple Z-mean sorting with bounding box tests (highest performance)
   - **NORMAL**: Full Newell-Sancha algorithm with Fixed32/64 arithmetic (robust)
-  - **NEWELL_SANCHAV2**: Bubble-style/local-pass variant (conservative local reordering)
+  - **GEO**: Geometry-only heuristic painter mode; plane/ordering tests without the full local correction pipeline
   - **CORRECT**: Advanced ordering correction with local face reordering
   - **CORRECT V2**: Experimental local correction (painter_correctV2)
   - **FLOAT**: Float-based painter (ARCHIVED — implementation moved to `chutier.txt`) 
@@ -60,9 +60,9 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 - Fixed32 (16.16) and Fixed64 (32.32) arithmetic throughout
 - Most robust for complex geometry
 
-#### NEWELL_SANCHAV2 Mode (Key: `3`)
-- Variant of the Newell-Sancha painter (V2)
-- Fixed-point-based algorithm with improved local ordering behavior (`painter_newell_sanchaV2`)
+#### GEO Mode (Key: `3`)
+- Geometry-only painter mode that uses plane-based ordering heuristics
+- Uses `painter_geo` rather than the full Newell/Sancha pairwise correction path
 - Recommended for certain pathological meshes where the V2 heuristic helps reduce inconclusive pairs
 
 #### FLOAT Mode (Key: `U`) — Archived
@@ -71,16 +71,17 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 - Removed from active build by default.
 
 #### CORRECT Mode (Key: `4`)
-- Extends NORMAL mode with local face reordering
-- Attempts to resolve ordering conflicts through strategic swaps
+- Extends NORMAL mode with local face reordering after separating faces into FRONT and BACK groups
+- Attempts to resolve ordering conflicts through strategic swaps between those groups
 - Best for geometries with many inconclusive pairs
 - Much slower
 
 #### CORRECT V2 Mode (Key: `5`)
 - Experimental variant: `painter_correctV2`
+- Separates faces into FRONT and BACK groups before applying local corrections
 - Improves robustness of face sorting when culling is OFF
 - Locally corrects cases where a BACK face appears in front and overlaps a FRONT face
-- Uses geometric plane tests and zmean as fallback for local corrections (no global reordering)
+- Uses geometric plane tests for overlapping faces, with zmean as a deterministic fallback (no global reordering)
 - Diagnostic/log code is present but disabled by default (file output commented out, can be re-enabled for analysis)
 - Slower, mainly for pathological models or advanced debugging
 
@@ -131,7 +132,8 @@ Observer-space culling eliminates faces oriented away from the viewer:
 1. **Launch Application**: Run `3D Explorer` from your Apple IIGS
 2. **Enter Filename**: Type the OBJ filename when prompted (or press ENTER to exit)
 3. **Model Loads**: The application parses vertices and faces, applies auto-fit if available
-4. **Set Camera Parameters**: Confirm or modify observer settings:
+4. **Intersection Check**: Asks whether to perform an intersection check. Answering yes runs a validation pass that reports overlapping/intersecting polygons before rendering. Intersecting polygons will be cut so the model can be displayed, but this face-splitting behavior is an initial alpha implementation and is limited.
+5. **Set Camera Parameters**: Confirm or modify observer settings:
    - **Horizontal Angle**: Rotation around vertical axis in degrees (ENTER for default 30°)
    - **Vertical Angle**: Rotation around horizontal axis in degrees (ENTER for default 20°)
    - **Screen Rotation**: Rotation around screen Z-axis in degrees (ENTER for default 0°)
@@ -170,7 +172,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 |-----|-------------|----------------------|
 | `1` | FAST        | Simple Z-mean sorting (fastest) |
 | `2` | NORMAL      | Full Newell-Sancha with Fixed32/64 |
-| `3` | NEWELL_SANCHAV2 | Bubble-style variant for conservative local reordering |
+| `3` | GEO | Geometry-only mode with plane-based ordering heuristics |
 | `4` | CORRECT     | Advanced ordering correction |
 | `5` | CORRECT V2  | Experimental local correction (painter_correctV2) |
 
@@ -199,12 +201,43 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `V` | Show Face | Display single face (arrows to navigate); `Space` shows detailed textual info (ID, sorted position, vertices, transformed 3D and 2D coords, plane equation); `F` saves details to `Face<ID>.txt`; any other key exits |
 | `D` | Inspect Before | Analyze faces before selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `S` | Inspect After | Analyze faces after selected face in sorted order (can apply moves with `A`/`O` during preview) |
-| `O` | Overlap Check | Test projected polygon overlap between two faces |
-| `A` | Scan All Overlaps | Scan all bbox-intersecting face pairs and save `overlapall.csv` and `overlap.csv` (temporarily disables `J` jitter for deterministic results) |
+| `M` | Debug Pair Plane | Interactive `pair_plane_before` diagnostics for two faces, prompts separately for `f1` and `f2` |
+| `Q` | Inspect Face Pair | Interactive face-pair inspector for ordering anomalies |
+| `;` | Repair Face Order | Run `check_sort_repair` to correct inverted or misordered faces |
 | `I` | Toggle Inconclusive | Show/hide inconclusive face pairs with frames |
 | `L` | Face ID Labels | Display face numbers centered on each polygon |
-| `F` | Export Debug Data | Dump face equations to `equ.csv` |
+| `F` | Export Debug Data | Dump `Faces3D.csv`, `Faces2D.txt`, and `FacesOrder.txt` |
 
+![Random Colors](Screenshots/model_faceID.png)
+
+
+### Face Pair Inspector (`Q` key)
+
+The `Q` key launches a dedicated interactive face-pair inspector for exploring face ordering diagnostics.
+
+- Prompts separately for `f1` and `f2` face IDs.
+- Displays the model in wireframe with `f1` highlighted in green and `f2` highlighted in orange.
+- Runs the full diagnostic battery for the selected pair, including QuickDraw-based region tests, bounding-box checks, plane-side tests, and overlap analysis.
+- Use the arrow keys to move between face pairs while in the inspector.
+- Press `Space` to print the current computed test results and ordering decisions.
+- Press `ESC` to exit the inspector and return to the main view.
+
+### Face Order Repair (`;` key)
+
+The `;` key runs `check_sort_repair`, which detects inverted or misordered faces and applies minimal fixes to restore a ray-cast consistent painter order.
+
+- Performs a model-wide scan of face pairs that fail ordering checks.
+- Uses precise ray cast verification (`ray_cast_distances` / `ray_cast_hierarchical`), `projected_polygons_overlap`, and centroid-based intersection tests to determine which face should come first.
+- Repairs only the minimal offending ordering relations, preserving as much of the existing sort order as possible.
+- Works with or without visualization:
+  - In graphical mode it can display the current sorting state and highlighted pairs.
+  - In automatic/no-graphics mode, it can proceed through the repair steps without rendering.
+- Useful for correcting inverted faces and reducing ordering artifacts after loading complex models.
+- Illustrated by `Screenshots/inspection_mode.png`, which shows the repair/inspection workflow in action.
+
+![Inspection Mode](Screenshots/inspection_mode.png)
+![Inspection Mode](Screenshots/inspection_mode2.png)
+![Inspection Mode](Screenshots/inspection_mode3.png)
 #### Navigation
 | Key | Action | Description |
 |-----|--------|-------------|
@@ -214,8 +247,6 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `ESC` | Quit | Exit application |
 
 ### Workflow Example
-
-![Inspection Mode](Screenshots/inspection_mode.png)
 
 **Typical Debugging Session:**
 
@@ -232,7 +263,6 @@ Observer-space culling eliminates faces oriented away from the viewer:
    - Press `V` to view individual faces
    - Use `D` to inspect faces before problematic face (in preview press `A` to move all or `O` to move overlaps)
    - Use `S` to inspect faces after (in preview press `A` to move all or `O` to move overlaps)
-   - Press `O` to check specific overlap conditions
 7. **Adjust View** with `E`/`R`/`T`/`Y` for precise framing
 8. **Export Data** with `F` for external analysis
 
@@ -273,19 +303,22 @@ Ci‑dessous un tableau récapitulatif des touches les plus utiles et des **fonc
 
 | Touche | Action (concis) | Fonctions C impliquées (point d'entrée) |
 |--------|-----------------|-----------------------------------------|
-| `1`..`5` | Changer le mode de painter | modifie `painter_mode` → appelle ensuite `painter_newell_sancha_fast`, `painter_newell_sancha`, `painter_newell_sanchaV2`, `painter_correct`, `painter_correctV2` selon le mode (note: `painter_newell_sancha_float` is archived in `chutier.txt`) |
-| `O` / `o` | Vérifier le recouvrement projeté entre deux faces | `inspect_polygons_overlap` → `projected_polygons_overlap` (strict) |
-| `A` | Scanner toutes les paires qui se recoupent en bbox (écrit CSV) | `/* A key handler */` → `projected_polygons_overlap` + `compute_intersection_centroid` (debug CSV) |
-| `>` | Inspecteur `ray_cast` interactif | `inspect_ray_cast` → `compute_intersection_centroid` (centroid) → `ray_cast_at` (utilise `faces->plane_*`) |
-| `V` | Afficher une face (overlay, détails) | `showFace` → `drawFace` (rend la face), sauvegarde via `Face<ID>.txt` |
-| `D` / `S` | Inspecter faces avant / après (diagnostic & moves) | `inspect_faces_before` / `inspect_faces_after` → utilise `projected_polygons_overlap`, `move_element_remove_and_insert_pos`, et tests plane (`pair_plane_after` / `pair_plane_before`) |
-| `I` | Basculer affichage des paires inconclusives | `frameInconclusivePairs` (affichage) |
-| `F` | Export CSV debug | `dumpFaceEquationsCSV` (export des plans/z_min/z_mean/bboxes) |
-| `J` | Toggle jitter (render) | affecte `drawPolygons_jitter` vs `drawPolygons` (impacte la reproductibilité des scans) |
-| Arrow keys | Navigation / caméra | modifie `ObserverParams` via `getObserverParams` (K key) et rafraîchit le rendu |
-| `N` | Charger nouveau modèle | `destroyModel3D` + `loadModel3D` (réinitialise `painter_mode`, `jitter`, etc.) |
+| `1`..`5` | Changer le mode de painter | modifie `painter_mode` → appelle ensuite `painter_newell_sancha_fast`, `painter_newell_sancha`, `painter_geo`, `painter_correct`, `painter_correctV2` selon le mode (note: `painter_newell_sancha_float` is archived in `chutier.txt`) |
+| `A` / `Z` | Ajuster la distance caméra | modifie `params.distance` et recharge le rendu |
+| `E` / `R` / `T` / `Y` | Panoramique 2D | modifie `pan_dx` / `pan_dy` et redessine |
+| `B` | Basculer culling back-face | `cull_back_faces` + reprocessus modèle |
+| `P` | Mode fil de fer | `framePolyOnly` + redraw / reprocess |
+| `C` | Palette couleurs | `colorpalette` toggle |
+| `J` | Jitter rendu | `jitter` toggle |
+| `K` | Édition angles/distance | `getObserverParams` |
+| `D` / `S` | Inspecter faces avant / après | `inspect_faces_before` / `inspect_faces_after` |
+| `M` | Débogage `pair_plane_before` | `pair_plane_before_debug_fixed` |
+| `F` | Export CSV debug | `dumpFaceEquationsCSV` + `dumpFace2DCoordinates` + `dumpSortedFaceIndices` |
+| `N` | Charger nouveau modèle | `destroyModel3D` + `loadModel3D` |
+| `H` | Aide paginée | `show_help_pager` |
+| `ESC` | Quitter | cleanup + exit |
 
-> Note : certaines commandes appellent plusieurs utilitaires (par ex. `A` construit `overlapall.csv` puis exécute des échantillonnages et des découpages via `compute_intersection_centroid` pour le debug). Pour investiguer un comportement précis, commencez par utiliser la touche correspondante dans l'interface, puis consultez les fichiers CSV de sortie (`overlap.csv`, `overlapall.csv`, `equ.csv`, `Face<ID>.txt`) pour reproduire/automatiser les tests.
+> Note : certaines commandes appellent plusieurs utilitaires (par ex. `F` écrit `Faces3D.csv`, `Faces2D.txt` et `FacesOrder.txt`). Pour investiguer un comportement précis, commencez par utiliser la touche correspondante dans l'interface, puis consultez les fichiers de sortie (`Faces3D.csv`, `Faces2D.txt`, `FacesOrder.txt`, `Face<ID>.txt`) pour reproduire/automatiser les tests.
 
 ---
 
