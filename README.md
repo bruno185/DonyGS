@@ -198,7 +198,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 #### Diagnostic Tools
 | Key | Action | Description |
 |-----|--------|-------------|
-| `V` | Show Face | Display single face (arrows to navigate); `Space` shows detailed textual info (ID, sorted position, vertices, transformed 3D and 2D coords, plane equation); `F` saves details to `Face<ID>.txt`; any other key exits |
+| `V` | Show Face | Display single face (arrows to navigate); `Space` shows detailed textual info (ID, sorted position, vertices, transformed 3D and 2D coords, plane equation); `R` reverses face vertex order; `F` saves details to `Face<ID>.txt`; any other key exits |
 | `D` | Inspect Before | Analyze faces before selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `S` | Inspect After | Analyze faces after selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `M` | Debug Pair Plane | Interactive `pair_plane_before` diagnostics for two faces, prompts separately for `f1` and `f2` |
