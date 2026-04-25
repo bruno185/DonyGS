@@ -8,6 +8,7 @@
         "/^python calc_bbox\\.py$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "tee": true
     }
 }

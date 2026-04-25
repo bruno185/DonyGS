@@ -13,7 +13,7 @@ from pathlib import Path
 #           Configuration Variables
 # ===============================================
 # Change these variables to your own configuration
-PRG = "DONYGS"  # Program name without extension
+PRG = "OBJExplorer"  # Program name without extension
 lang = ".cc"
 AppleDiskPath = "F:\\Bruno\\Dev\\AppleWin\\GS\\activeGS\\Live.Install.po"
 ProdosDir = "/LIVE.INSTALL/"

@@ -51,7 +51,8 @@
   - **New keys (recent additions):**
     - `D` / `d`: Inspect faces placed BEFORE a selected face in the painter order and report misplaced faces (previews in orange)
     - `S` / `s`: Inspect faces placed AFTER a selected face that should be BEFORE it (previews in pink)
-    - `O` / `o`: Interactive **projected polygon overlap** inspector — prompts for two face IDs, reports YES/NO if their 2D projections overlap, and optionally previews the two faces (green/orange)
+    - `Q` / `q`: Interactive face-pair inspector — compare two faces and display ordering diagnostics
+    - `M` / `m`: Interactive `pair_plane_before` debugger — prompts for two face IDs separately and reports detailed plane/vertex-sidedness diagnostics
     - `L` / `l`: Label mode — show the model with each face's ID drawn at its polygon center
 - `K` invokes `getObserverParams(&params, model)` interactively and applies new angles/distance without requiring a reload.
 - `+`/`-` behavior: if the model is not yet auto-scaled, these keys previously performed an **auto-fit** via `fitModelToView()`; auto-fit has been disabled (see `chutier.txt` for the archived implementation). They now only increase or decrease the current `params->distance` and update `model->auto_scale`. Automatic recomputation via bounding-sphere is disabled; distance adjustments are manual. The action prints a short message (e.g., "Distance increased" / "Distance decreased").
@@ -71,7 +72,7 @@
 - 🔧 **`projected_polygons_overlap(Model3D* model, int f1, int f2)`** — screen-space test that returns 1 if two faces' projected 2D polygons *overlap* (proper edge intersection or containment), **0 if disjoint**. Important: *touching-only* cases (shared edge or single-vertex contact) are considered **NON-overlap** and return 0. The algorithm uses integer segment intersection (proper intersection only) then ray-casting containment; points on edges are treated as outside.
 - 🔧 `void inspect_faces_before(Model3D* model, ObserverParams* params, const char* filename)` — `GS3Dp.cc:2032` — interactive wrapper bound to `D`/`d`: prints a compact per-face diagnostic and offers a wireframe preview that highlights faces placed BEFORE a selected face (misplaced faces highlighted).
 - 🔧 `void inspect_faces_after(Model3D* model, ObserverParams* params, const char* filename)` — `GS3Dp.cc:2219` — interactive wrapper bound to `S`/`s`: prints faces placed AFTER a selected face that should be BEFORE it and offers a wireframe preview with highlights.
-- 🔧 `void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char* filename)` — `GS3Dp.cc:2371` — interactive wrapper bound to `O`/`o`: prompts for two face IDs, reports overlap status (YES/NO), and optionally previews the two faces (green/orange); default on ENTER shows the entire model in wireframe with the two faces highlighted.
+- 🔧 **`inspect_polygons_overlap`** — archived interactive wrapper removed from the active build and retained only in `chutier.txt`; the active code uses `projected_polygons_overlap()` internally for overlap checks.
 - 🔧 `void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename)` — `GS3Dp.cc:2449` — label mode bound to `L`/`l`: draws the model in wireframe and overlays each face's ID centered on that face (uses `drawFace(..., show_index=1)`), useful for debugging face ordering and references.
 
 **Notes:** Automatic distance estimation has been disabled; distance adjustments are manual.
@@ -157,8 +158,8 @@ Below are per-function entries expanded with: signature, file:line (in this tree
   - Algorithm: AABB quick-reject → edge-vs-edge proper intersection (`segs_intersect_int`) → containment via `point_in_poly_int`.
   - Helpers: `segs_intersect_int()` (`DONYGS.cc:1784`), `point_in_poly_int()` (`DONYGS.cc:1797`), `orient_ll()`/`on_seg_ll()`.
 
-- **`void inspect_polygons_overlap(Model3D* model, ObserverParams* params, const char* filename)`** — `DONYGS.cc:2371` 🔧
-  - Purpose: interactive inspector (key `O`) prompting two face IDs, reports YES/NO from `projected_polygons_overlap()` and optionally renders a wireframe preview with the two faces highlighted.
+- **`static int projected_polygons_overlap(Model3D* model, int f1, int f2)`** — `DONYGS.cc:2935` 🔧
+  - Purpose: strict screen-space overlap test between two faces' projected polygons. Used by painter correction and inspection internals when evaluating whether faces actually overlap in 2D.
 
 - **`void inspect_faces_before/after(...)`** — `DONYGS.cc:2032` / `DONYGS.cc:2219` 🔧
   - Purpose: interactive wrappers bound to `D`/`S` keys to report faces misplaced BEFORE/AFTER a selected face and optionally preview them.
