@@ -9,7 +9,38 @@ A high-performance 3D model viewer implementing multiple painter's algorithms, s
 
 ## Overview
 
-3D Explorer is an interactive 3D rendering application that reads simplified Wavefront OBJ files and displays them with real-time manipulation capabilities. The project demonstrates advanced rendering techniques on resource-constrained hardware (Apple IIGS with 2.8 MHz 65C816 CPU) through careful optimization and multiple algorithm implementations.
+3D Explorer is an interactive 3D rendering application that reads simplified Wavefront OBJ files and displays them with real-time manipulation capabilities. The project demonstrates advanced rendering techniques on resource-constrained hardware (Apple IIGS with 2.8 MHz 65C816 CPU) through careful optimization and multiple algorithm implementations. It performs satisfactorily on a modern computer and in emulation mode, due to the large number of calculations it requires.
+
+It is built around the painter's algorithm: faces are sorted and drawn back-to-front so that nearer polygons naturally occlude farther ones without a Z-buffer. The application includes several painter variants, from fast z-mean ordering to more robust geometric correction passes for overlapping and intersecting faces.
+
+## Getting Started
+
+1. **Load a model**: Run the program and enter the path to a simplified OBJ file when prompted. After entering the file path, press `Enter` five times in a row to accept the default values for distance, horizontal angle, vertical angle, screen rotation, and any additional prompts. Those defaults can still be changed later through the application controls.
+2. **Set the camera**: Confirm or customize the default observer settings for distance, horizontal angle, vertical angle, and screen rotation if needed.
+3. **Use the controls**: Navigate the scene with the keyboard and switch rendering modes using keys `1` through `5`.
+4. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `R` to reverse the vertex winding of the selected face and update its front/back classification.
+5. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, and diagnose ordering anomalies using the face pair inspector.
+6. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
+7. **Repair ordering**: Press `;` to run the face order repair helper, which uses overlap tests and ray-cast checks to fix incorrect face sorting.
+
+### Why use this viewer?
+
+- It is optimized for the Apple IIGS hardware and demonstrates fixed-point 3D rendering techniques.
+- It includes advanced painter algorithms for difficult overlapping geometry.
+- It provides interactive inspection and debugging tools for face order, overlap, and visibility issues.
+
+### Quick start keys
+
+- `1`: FAST mode
+- `2`: NORMAL mode
+- `3`: GEO mode
+- `4`: CORRECT mode
+- `5`: CORRECT V2 mode
+- `B`: toggle back-face culling
+- `V`: inspect a face, arrow to navigate, 'space' for options (record face data in a file, revert vertex order)
+- `Q`: inspect a face pair and navigate between pairs
+- `H`: show full help screen
+- `;`: repair face order
 
 ### Key Features
 
