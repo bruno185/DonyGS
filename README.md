@@ -106,6 +106,18 @@ For each face, compute plane coefficients (a, b, c, d) where:
 - Normal vector computed via cross product of two edges
 - Used for sidedness tests in painter algorithm
 
+### Front Faces and Back Faces
+
+Face orientation is determined in observer space, after the model has been transformed relative to the camera.
+- A face is considered **front-facing** when its plane equation constant `d` is positive in observer space.
+- A face is considered **back-facing** when `d <= 0`.
+- The sign of `d` depends on the face normal direction relative to the camera, not just the original OBJ winding order.
+- Reversing the vertex order of a face flips its normal and therefore changes whether it is classified as front or back.
+
+In the application, the `showFace` inspector reports this directly using `faces->plane_d[target_face]`:
+- `plane_d > 0` => `FRONT`
+- `plane_d <= 0` => `BACK`
+
 ### Back-Face Culling
 
 Observer-space culling eliminates faces oriented away from the viewer:
