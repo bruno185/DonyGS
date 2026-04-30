@@ -3929,3 +3929,76 @@ static int compute_intersection_centroid_ordered(Model3D* model, int subj, int c
     return 0; 
 }
 
+
+
+
+/* Global non-interactive scanner (triggered by G/g) that writes ovscan.csv and ovscanrpt.txt */
+void scan_all_overlaps(Model3D* model, ObserverParams* params) {
+    if (!model) { printf("No model loaded\n"); return; }
+    FaceArrays3D* faces = &model->faces; VertexArrays3D* vtx = &model->vertices;
+
+    int saved_jitter = jitter; jitter = 0;
+    Fixed32 saved_scale = s_global_proj_scale_fixed;
+
+    /* gather bbox-intersecting pairs */
+    typedef struct { int a; int b; } Pair;
+    int pair_count = 0;
+    for (int i = 0; i < faces->face_count; ++i) for (int j = i+1; j < faces->face_count; ++j) {
+        if (cull_back_faces) { if (faces->plane_d[i] <= 0 || faces->plane_d[j] <= 0) continue; }
+        int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
+        int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
+        if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
+        pair_count++;
+    }
+    if (pair_count == 0) { printf("No bbox-intersecting pairs found.\n"); jitter = saved_jitter; return; }
+    Pair* pairs = (Pair*)malloc(sizeof(Pair) * pair_count); int pi = 0;
+    for (int i = 0; i < faces->face_count; ++i) for (int j = i+1; j < faces->face_count; ++j) {
+        if (cull_back_faces) { if (faces->plane_d[i] <= 0 || faces->plane_d[j] <= 0) continue; }
+        int minx1 = faces->minx[i], maxx1 = faces->maxx[i], miny1 = faces->miny[i], maxy1 = faces->maxy[i];
+        int minx2 = faces->minx[j], maxx2 = faces->maxx[j], miny2 = faces->miny[j], maxy2 = faces->maxy[j];
+        if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) continue;
+        pairs[pi].a = i; pairs[pi].b = j; pi++;
+    }
+
+    FILE *of = fopen("ovscan.csv","w");
+    if (!of) { printf("Error: cannot open ovscan.csv for writing\n"); free(pairs); jitter = saved_jitter; return; }
+    fprintf(of, "f1,f2,ov_current,ov_fixed,ov_float,ia1_fixed,ia2_fixed,ia1_float,ia2_float,bbox_area,cf1_fixed_v,cf1_float_v,cf2_fixed_v,cf2_float_v,cf1_raw_area2,cf2_raw_area2,cf1_float_over,cf2_float_over,notes\n");
+
+    int divergent_pairs = 0; int override_changed = 0;
+    for (int k = 0; k < pair_count; ++k) {
+        int f1 = pairs[k].a; int f2 = pairs[k].b;
+        compute2DFromObserver(model, params->angle_w);
+        int ov_current = projected_polygons_overlap(model, f1, f2);
+
+        int icx1=0,icy1=0; double ia1=0.0; debug_overlap_subj = f1; debug_overlap_clip = f2; long long _ia1tmp = 0; compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &icx1, &icy1, &_ia1tmp); ia1 = (double)_ia1tmp; debug_overlap_subj = -1; debug_overlap_clip = -1;
+        double ia1_fixed = debug_clip_fixed_area; double ia1_float = debug_clip_float_area; int cf1_fixed_v = debug_clip_fixed_vcount; int cf1_float_v = debug_clip_float_vcount; long long cf1_raw = debug_clip_raw_area2; int cf1_float_over = debug_clip_float_overridden;
+
+        int icx2=0,icy2=0; double ia2=0.0; debug_overlap_subj = f2; debug_overlap_clip = f1; long long _ia2tmp = 0; compute_intersection_centroid_ordered_qd_fixed(model, f2, f1, &icx2, &icy2, &_ia2tmp); ia2 = (double)_ia2tmp; debug_overlap_subj = -1; debug_overlap_clip = -1;
+        double ia2_fixed = debug_clip_fixed_area; double ia2_float = debug_clip_float_area; int cf2_fixed_v = debug_clip_fixed_vcount; int cf2_float_v = debug_clip_float_vcount; long long cf2_raw = debug_clip_raw_area2; int cf2_float_over = debug_clip_float_overridden;
+
+        int bx0 = faces->minx[f1] > faces->minx[f2] ? faces->minx[f1] : faces->minx[f2];
+        int bx1 = faces->maxx[f1] < faces->maxx[f2] ? faces->maxx[f1] : faces->maxx[f2];
+        int by0 = faces->miny[f1] > faces->miny[f2] ? faces->miny[f1] : faces->miny[f2];
+        int by1 = faces->maxy[f1] < faces->maxy[f2] ? faces->maxy[f1] : faces->maxy[f2];
+        double bbox_area = 0.0; if (bx0 <= bx1 && by0 <= by1) bbox_area = (double)(bx1 - bx0) * (double)(by1 - by0);
+        const double eps = 1e-9;
+        int valid1_fixed = (cf1_fixed_v >= 3 && ia1_fixed >= MIN_INTERSECTION_AREA_PIXELS && ia1_fixed <= bbox_area + eps);
+        int valid2_fixed = (cf2_fixed_v >= 3 && ia2_fixed >= MIN_INTERSECTION_AREA_PIXELS && ia2_fixed <= bbox_area + eps);
+        int ov_fixed = (valid1_fixed || valid2_fixed) ? 1 : 0;
+        int valid1_float = (cf1_float_v >= 3 && ia1_float >= MIN_INTERSECTION_AREA_PIXELS && ia1_float <= bbox_area + eps);
+        int valid2_float = (cf2_float_v >= 3 && ia2_float >= MIN_INTERSECTION_AREA_PIXELS && ia2_float <= bbox_area + eps);
+        int ov_float = (valid1_float || valid2_float) ? 1 : 0;
+        char notes[128] = "";
+        if (ov_fixed != ov_float) { divergent_pairs++; snprintf(notes, sizeof(notes), "ov_fixed!=ov_float"); }
+        if (ov_current != ov_fixed) { override_changed++; if (notes[0]) strncat(notes, ";cur!=fixed", sizeof(notes)-strlen(notes)-1); else snprintf(notes, sizeof(notes), "cur!=fixed"); }
+        fprintf(of, "%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%lld,%lld,%d,%d,%s\n",
+                f1, f2, ov_current, ov_fixed, ov_float, ia1_fixed, ia2_fixed, ia1_float, ia2_float, bbox_area,
+                cf1_fixed_v, cf1_float_v, cf2_fixed_v, cf2_float_v, cf1_raw, cf2_raw, cf1_float_over, cf2_float_over, notes);
+    }
+    fclose(of);
+    FILE *rf = fopen("ovscanrpt.txt","w");
+    if (rf) { fprintf(rf, "ovscan: total_pairs,%d,divergent_pairs,%d,override_changed,%d\n", pair_count, divergent_pairs, override_changed); fclose(rf); }
+    printf("Scan complete: %d pairs scanned, %d divergent, %d where current differs from fixed\n", pair_count, divergent_pairs, override_changed);
+    free(pairs);
+    jitter = saved_jitter; s_global_proj_scale_fixed = saved_scale;
+}

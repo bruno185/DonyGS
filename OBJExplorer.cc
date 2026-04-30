@@ -1099,9 +1099,9 @@ void painter_geo(Model3D* model, int face_count) {
         } // FIN de la boucle for int i=0; i<face_count-1; i++
 
     } while (swapped);
-    printf("inconclusive pairs: %d / %d (%.2f%%)\n", inconclusive_pairs_count, visible_count-1, (visible_count > 1) ? (100.0f * inconclusive_pairs_count / (visible_count-1)) : 0.0f);
-    printf("total swaps performed: %d\n", swap_count);
-    keypress();
+    // printf("inconclusive pairs: %d / %d (%.2f%%)\n", inconclusive_pairs_count, visible_count-1, (visible_count > 1) ? (100.0f * inconclusive_pairs_count / (visible_count-1)) : 0.0f);
+    // printf("total swaps performed: %d\n", swap_count);
+    // keypress();
     // Fin du tri à bulle
 
     
@@ -4872,6 +4872,7 @@ static void inspect_face_pair_ui(Model3D* model) {
         } else {
             printf("f%d do not overlap f%d", f1, f2);
         }
+        printf(" (Arrows to nav.)");
 
 
         /* Wait for key (same inline read used elsewhere) */
@@ -5072,6 +5073,8 @@ segment "code04";
  *              Up/Down arrows = next/prev position in sorted list
  *  - ESC to exit
  */
+void drawFaceIndex(Model3D* model, int face_id);
+
 void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     if (!model || !params) return;
     FaceArrays3D* faces = &model->faces;
@@ -5122,7 +5125,10 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
         // Overlay selected face in filled green (pen 10)
         faces->display_flag[target_face] = 1;
-        drawFace(model, target_face, COL_LIGHT_GREEN, 1);
+        drawFace(model, target_face, COL_LIGHT_GREEN, 0);
+
+        // Annotate only the selected face ID after the full model is drawn
+        drawFaceIndex(model, target_face);
 
         // Find position in sorted list for display
         int pos_in_sorted = -1;
@@ -8481,6 +8487,51 @@ void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
     }
 }
 
+// Draw only the face index label for a given face without rendering the polygon geometry.
+// This is used by the face inspector to overlay face numbers once all faces are visible.
+void drawFaceIndex(Model3D* model, int face_id) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    if (face_id < 0 || face_id >= faces->face_count) return;
+    if (faces->display_flag[face_id] == 0) return;
+    int vcount_face = faces->vertex_count[face_id];
+    if (vcount_face < 3) return;
+
+    int offset = faces->vertex_indices_ptr[face_id];
+    int *indices_base = &faces->vertex_indices_buffer[offset];
+    int min_x = 999999, max_x = -999999, min_y = 999999, max_y = -999999;
+    for (int j = 0; j < vcount_face; ++j) {
+        int vi = indices_base[j] - 1;
+        if (vi < 0 || vi >= vtx->vertex_count) return;
+        int x = vtx->x2d[vi];
+        int y = vtx->y2d[vi];
+        if (x < min_x) min_x = x;
+        if (x > max_x) max_x = x;
+        if (y < min_y) min_y = y;
+        if (y > max_y) max_y = y;
+    }
+
+    int screenScale = mode / 320;
+    int center_x = (min_x + max_x) / 2;
+    int center_y = (min_y + max_y) / 2;
+    int screenCx = screenScale * (center_x + pan_dx);
+    int screenCy = center_y + pan_dy;
+
+    char tmp[32];
+    int len = snprintf(tmp, sizeof(tmp), "%d", face_id);
+    if (len > 15) len = 15;
+    unsigned char pstr[16];
+    pstr[0] = (unsigned char)len;
+    memcpy(&pstr[1], tmp, len);
+
+    Pattern savedPat;
+    GetPenPat(savedPat);
+    SetSolidPenPat(COL_FRAME);
+    MoveTo(screenCx, screenCy);
+    DrawString(pstr);
+    SetPenPat(savedPat);
+}
 
 segment "code17";
 // Function to draw polygons with QuickDraw
