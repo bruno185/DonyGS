@@ -772,6 +772,22 @@ static unsigned long overlapClipAccept = 0;      // clipping accepted (area >= t
 static long long *clip_sx = NULL, *clip_sy = NULL, *clip_tx = NULL, *clip_ty = NULL; /* Fixed16.16 stored as 64-bit */
 static int clip_bufcap = 0;
 
+
+char getTypedChar()
+{
+        /* Wait for key (same inline read used elsewhere) */
+        asm {
+            lda #0
+            sep #0x20
+        waitkey2:
+            lda >0xC000
+            bpl waitkey2
+            and #0x007f
+            sta >0xC010
+            rep #0x30
+        }
+}
+
 /**
  * FAST PUBLISHABLE PASS (painter_newell_sancha_fast)
  * --------------------------------------------------
@@ -5028,9 +5044,44 @@ static void inspect_face_pair_ui(Model3D* model) {
                 } else printf("dist:N/A  -> undetermined\n");
             } else printf("\n3) QD KO rect=none\n");
 
-            /* Press any key to return to graphical inspector (verbose option removed) */
-            printf("\nPress any key to return to graphical inspector...\n");
-            keypress();
+
+            /* Press R to move the earlier face to just after the later face in sorted list, any other key to return */
+            printf("\nPress 'R' to reorder the sorted list, any other key to return to graphical inspector...\n");
+            //char cmd = getTypedChar();
+                    /* Wait for key (same inline read used elsewhere) */
+            char cmd = 0;
+            asm {
+                lda #0
+                sep #0x20
+            wait_key:
+                lda >0xC000
+                bpl wait_key
+                and #0x007f
+                sta >0xC010
+                sta cmd
+                rep #0x30
+            }
+
+            if (cmd == 'R' || cmd == 'r') {
+                int pos1 = -1, pos2 = -1;
+                for (int ii = 0; ii < faces->face_count; ++ii) {
+                    if (faces->sorted_face_indices[ii] == f1) pos1 = ii;
+                    if (faces->sorted_face_indices[ii] == f2) pos2 = ii;
+                    if (pos1 >= 0 && pos2 >= 0) break;
+                }
+                if (pos1 >= 0 && pos2 >= 0 && pos1 != pos2) {
+                    int minPos = pos1 < pos2 ? pos1 : pos2;
+                    int maxPos = pos1 < pos2 ? pos2 : pos1;
+                    int movedFace = faces->sorted_face_indices[minPos];
+                    int targetFace = faces->sorted_face_indices[maxPos];
+                    move_element_remove_and_insert(faces->sorted_face_indices, faces->face_count, minPos, maxPos);
+                    printf("Face %d has been placed before face %d in the sorted list.\n", movedFace, targetFace);
+                } else {
+                    printf("Unable to reorder sorted list for f1/f2.\n");
+                }
+                printf("Press any key to return to graphical inspector...\n");
+                keypress();
+            }
             continue; /* redraw graphical inspector */
         }
 
