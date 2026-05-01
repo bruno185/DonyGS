@@ -19,7 +19,7 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 2. **Set the camera**: Confirm or customize the default observer settings for distance, horizontal angle, vertical angle, and screen rotation if needed.
 3. **Use the controls**: Navigate the scene with the keyboard and switch rendering modes using keys `1` through `5`.
 4. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `R` to reverse the vertex winding of the selected face and update its front/back classification.
-5. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, and diagnose ordering anomalies using the face pair inspector.
+5. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the farther face in front of the nearer face in the sorted face list.
 6. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
 7. **Repair ordering**: Press `;` to run the face order repair helper, which uses overlap tests and ray-cast checks to fix incorrect face sorting.
 
