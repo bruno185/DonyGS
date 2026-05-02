@@ -2131,7 +2131,7 @@ int check_sort_repair(Model3D* model, int face_count) {
     }
 
     int repairs = 0;
-    const char* instructions = "\nWhen graphics is disabled  :\nESC=abort, RETURN=automatic mode (no graphics), N=skip, any other key = continue.\n\n";
+    const char* instructions = "\nWhen graphics is displayed  :\nESC=abort, RETURN=automatic mode (no graphics), N=skip, any other key = continue.\n\n";
     int automatic_mode = 0; /* 0=graphical inspect, 1=automatic (no graphics) */
 
     printf("%s", instructions);
@@ -5045,10 +5045,8 @@ static void inspect_face_pair_ui(Model3D* model) {
             } else printf("\n3) QD KO rect=none\n");
 
 
-            /* Press R to move the earlier face to just after the later face in sorted list, any other key to return */
-            printf("\nPress 'R' to reorder the sorted list, any other key to return to graphical inspector...\n");
-            //char cmd = getTypedChar();
-                    /* Wait for key (same inline read used elsewhere) */
+            /* Press R/E to reorder the sorted list, any other key to return */
+            printf("\nPress 'R' to move the back face in front, 'E' to move the front face behind, any other key to return to graphical inspector...\n");
             char cmd = 0;
             asm {
                 lda #0
@@ -5062,7 +5060,7 @@ static void inspect_face_pair_ui(Model3D* model) {
                 rep #0x30
             }
 
-            if (cmd == 'R' || cmd == 'r') {
+            if (cmd == 'R' || cmd == 'r' || cmd == 'E' || cmd == 'e') {
                 int pos1 = -1, pos2 = -1;
                 for (int ii = 0; ii < faces->face_count; ++ii) {
                     if (faces->sorted_face_indices[ii] == f1) pos1 = ii;
@@ -5072,10 +5070,19 @@ static void inspect_face_pair_ui(Model3D* model) {
                 if (pos1 >= 0 && pos2 >= 0 && pos1 != pos2) {
                     int minPos = pos1 < pos2 ? pos1 : pos2;
                     int maxPos = pos1 < pos2 ? pos2 : pos1;
-                    int movedFace = faces->sorted_face_indices[minPos];
-                    int targetFace = faces->sorted_face_indices[maxPos];
-                    move_element_remove_and_insert(faces->sorted_face_indices, faces->face_count, minPos, maxPos);
-                    printf("Face %d has been placed before face %d in the sorted list.\n", movedFace, targetFace);
+                    int movedFace;
+                    int targetFace;
+                    if (cmd == 'R' || cmd == 'r') {
+                        movedFace = faces->sorted_face_indices[minPos];
+                        targetFace = faces->sorted_face_indices[maxPos];
+                        move_element_remove_and_insert(faces->sorted_face_indices, faces->face_count, minPos, maxPos);
+                        printf("Face %d has been placed before face %d in the sorted list.\n", movedFace, targetFace);
+                    } else {
+                        movedFace = faces->sorted_face_indices[maxPos];
+                        targetFace = faces->sorted_face_indices[minPos];
+                        move_element_remove_and_insert(faces->sorted_face_indices, faces->face_count, maxPos, minPos);
+                        printf("Face %d has been placed after face %d in the sorted list.\n", movedFace, targetFace);
+                    }
                 } else {
                     printf("Unable to reorder sorted list for f1/f2.\n");
                 }

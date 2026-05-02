@@ -21,7 +21,7 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 4. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `R` to reverse the vertex winding of the selected face and update its front/back classification.
 5. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the farther face in front of the nearer face or `E` to move the nearer face behind the farther face in the sorted face list.
 6. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
-7. **Repair ordering**: Press `;` to run the face order repair helper, which uses overlap tests and ray-cast checks to fix incorrect face sorting.
+7. **Repair ordering**: Press `;` to run the face order repair helper, and press `.` to run `check_sort_repair_fast` for a faster QD-centroid-based minimal repair.
 
 ### Why use this viewer?
 
