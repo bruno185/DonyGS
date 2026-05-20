@@ -16,7 +16,7 @@ from pathlib import Path
 PRG = "OBJExplorer"  # Program name without extension
 lang = ".cc"
 AppleDiskPath = "F:\\Bruno\\Dev\\AppleWin\\GS\\activeGS\\Live.Install.po"
-ProdosDir = "/OBJ/"
+ProdosDir = "/LIVE.INSTALL/OBJ/"
 # Local workspace disk image
 LocalDiskPath = "OBJ.po"
 # ===============================================

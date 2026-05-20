@@ -4685,7 +4685,7 @@ static void inspect_face_pair_ui(Model3D* model) {
     if (face_count <= 0) { printf("No faces in model\n"); return; }
 
     /* Title / welcome (text-mode) */
-    printf("Inspector: face-pair full diagnostic (Q) (use arrows to navigate)\n\n");
+    printf("Inspector: face-pair full diagnostic.\nUse arrows to navigate, space for option\n\n");
 
     /* Step 1: prompt and validate face IDs */
     printf("Enter face id 1 (0..%d): ", face_count - 1);
