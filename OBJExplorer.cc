@@ -4,9 +4,8 @@
  * ============================================================================
  *
  * Purpose:
- *   High-performance Apple IIGS 3D viewer implementing the painter's family
+ *   High-performance Apple IIGS 3D OBJ viewer and explorer implementing the painter's family
  *   of algorithms with multiple painter modes (FAST / FIXED / CORRECT / CORRECTV2).
- *   (FLOAT mode is archived (see `chutier.txt`). 
  *   Reads simplified OBJ files (vertices "v" and faces "f"), transforms them into observer space,
  *   projects to 2D screen coordinates and renders filled polygons.
  *
@@ -7656,16 +7655,18 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
         Fixed32 term3 = FIXED_MUL_64(z, sin_v);
         zo = FIXED_ADD(FIXED_SUB(FIXED_SUB(FIXED_NEG(term1), term2), term3), distance);
         if (zo > 0) {
-            xo = FIXED_ADD(FIXED_NEG(FIXED_MUL_64(x, sin_h)), FIXED_MUL_64(y, cos_h));
-            yo = FIXED_ADD(FIXED_SUB(FIXED_NEG(FIXED_MUL_64(x, cos_h_sin_v)), FIXED_MUL_64(y, sin_h_sin_v)), FIXED_MUL_64(z, cos_v));
+            Fixed32 raw_xo = FIXED_ADD(FIXED_NEG(FIXED_MUL_64(x, sin_h)), FIXED_MUL_64(y, cos_h));
+            Fixed32 raw_yo = FIXED_ADD(FIXED_SUB(FIXED_NEG(FIXED_MUL_64(x, cos_h_sin_v)), FIXED_MUL_64(y, sin_h_sin_v)), FIXED_MUL_64(z, cos_v));
+            xo = FIXED_SUB(FIXED_MUL_64(cos_w, raw_xo), FIXED_MUL_64(sin_w, raw_yo));
+            yo = FIXED_ADD(FIXED_MUL_64(sin_w, raw_xo), FIXED_MUL_64(cos_w, raw_yo));
             zo_arr[i] = zo;
             xo_arr[i] = xo;
             yo_arr[i] = yo;
             inv_zo = FIXED_DIV_64(scale, zo);
             x2d_temp = FIXED_ADD(FIXED_MUL_64(xo, inv_zo), centre_x_f);
             y2d_temp = FIXED_SUB(centre_y_f, FIXED_MUL_64(yo, inv_zo));
-            x2d_arr[i] = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_SUB(FIXED_MUL_64(cos_w, FIXED_SUB(x2d_temp, centre_x_f)), FIXED_MUL_64(sin_w, FIXED_SUB(centre_y_f, y2d_temp))), centre_x_f));
-            y2d_arr[i] = FIXED_ROUND_TO_INT(FIXED_SUB(centre_y_f, FIXED_ADD(FIXED_MUL_64(sin_w, FIXED_SUB(x2d_temp, centre_x_f)), FIXED_MUL_64(cos_w, FIXED_SUB(centre_y_f, y2d_temp)))));
+            x2d_arr[i] = FIXED_ROUND_TO_INT(x2d_temp);
+            y2d_arr[i] = FIXED_ROUND_TO_INT(y2d_temp);
 
         } else {
             zo_arr[i] = zo;
@@ -8962,11 +8963,12 @@ static void updateFace2DBounds(Model3D* model) {
 
 // Simple helper: compute 2D projected coordinates from observer-space coords and a projection scale
 segment "code19";
-// Minimal version taking only Model3D* and angle_w (uses global projection scale)
+// Minimal version taking only Model3D* and angle_w (unused here)
 // - model: model containing vertices and x2d/y2d output arrays
-// - angle_w: final 2D rotation angle (degrees)
-// This function performs no checks and is purposely minimal as requested.
+// - angle_w: ignored because observer-space rotation is already applied in processModelFast()
+// This function projects xo/yo/zo to screen coordinates and keeps face bboxes in sync.
 void compute2DFromObserver(Model3D* model, int angle_w) {
+    (void)angle_w; // angle_w is ignored here; projection uses already-rotated observer coords
     VertexArrays3D* vtx = &model->vertices;
     int vcount = vtx->vertex_count;
     Fixed32* xo = vtx->xo; Fixed32* yo = vtx->yo; Fixed32* zo = vtx->zo;
@@ -8977,8 +8979,6 @@ void compute2DFromObserver(Model3D* model, int angle_w) {
 
     const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
     const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
-    Fixed32 cos_w = cos_deg_int(angle_w);
-    Fixed32 sin_w = sin_deg_int(angle_w);
     for (int i = 0; i < vcount; ++i) {
         Fixed32 xo_i = xo[i];
         Fixed32 yo_i = yo[i];
@@ -8986,10 +8986,8 @@ void compute2DFromObserver(Model3D* model, int angle_w) {
         Fixed32 inv_zo = FIXED_DIV_64(scale, zo_i);
         Fixed32 x2d_temp = FIXED_ADD(FIXED_MUL_64(xo_i, inv_zo), centre_x_f);
         Fixed32 y2d_temp = FIXED_SUB(centre_y_f, FIXED_MUL_64(yo_i, inv_zo));
-        Fixed32 rx = FIXED_ADD(FIXED_SUB(FIXED_MUL_64(cos_w, FIXED_SUB(x2d_temp, centre_x_f)), FIXED_MUL_64(sin_w, FIXED_SUB(centre_y_f, y2d_temp))), centre_x_f);
-        Fixed32 ry = FIXED_SUB(centre_y_f, FIXED_ADD(FIXED_MUL_64(sin_w, FIXED_SUB(x2d_temp, centre_x_f)), FIXED_MUL_64(cos_w, FIXED_SUB(centre_y_f, y2d_temp))));
-        x2d_out[i] = FIXED_ROUND_TO_INT(rx);
-        y2d_out[i] = FIXED_ROUND_TO_INT(ry);
+        x2d_out[i] = FIXED_ROUND_TO_INT(x2d_temp);
+        y2d_out[i] = FIXED_ROUND_TO_INT(y2d_temp);
     }
 
     /* Keep per-face 2D bounding boxes in sync with the newly computed x2d/y2d.
@@ -9660,6 +9658,8 @@ case 98:  // 'b'
             case 102: // 'f'
                 if (model != NULL) {
                     printf("Writing files...\n");
+                    // Ensure the current observer parameters are applied before dumping
+                    processModelFast(model, &params, filename);
                     // Use semicolon column separators and comma decimal separator
                     dumpFaceEquationsCSV(model, "Faces3D.csv", 1);
                     // Also dump 2D per-face vertex coordinates to Faces2D.txt
