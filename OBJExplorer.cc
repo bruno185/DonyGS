@@ -9659,13 +9659,15 @@ case 98:  // 'b'
                 if (model != NULL) {
                     printf("Writing files...\n");
                     // Ensure the current observer parameters are applied before dumping
-                    processModelFast(model, &params, filename);
+                    // processModelFast(model, &params, filename);
                     // Use semicolon column separators and comma decimal separator
                     dumpFaceEquationsCSV(model, "Faces3D.csv", 1);
                     // Also dump 2D per-face vertex coordinates to Faces2D.txt
                     dumpFace2DCoordinates(model, "Faces2D.txt");
                     // Dump sorted face indices in painter output order
                     dumpSortedFaceIndices(model, "FacesOrder.txt");
+                    printf("\nPress any key to continue...\n");
+                    keypress();
                 }
                 goto loopReDraw;
 

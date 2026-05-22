@@ -1,4 +1,3 @@
-
 #
 # Script Python to comile and deploy a program for Apple IIGS 
 # using Golden Gate and Cadius
@@ -142,7 +141,7 @@ def main():
                     has_resources = False
 
 
-    # --------------- Cadius Disk Operations ---------------
+    # --------------- Cadius Disk Operations on OBJ.po ---------------
     print("=" * 50)
     print("           Cadius Disk Operations")
     print("=" * 50)
