@@ -772,21 +772,6 @@ static long long *clip_sx = NULL, *clip_sy = NULL, *clip_tx = NULL, *clip_ty = N
 static int clip_bufcap = 0;
 
 
-char getTypedChar()
-{
-        /* Wait for key (same inline read used elsewhere) */
-        asm {
-            lda #0
-            sep #0x20
-        waitkey2:
-            lda >0xC000
-            bpl waitkey2
-            and #0x007f
-            sta >0xC010
-            rep #0x30
-        }
-}
-
 /**
  * FAST PUBLISHABLE PASS (painter_newell_sancha_fast)
  * --------------------------------------------------
@@ -1936,10 +1921,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                         float zff = FIXED_TO_FLOAT(faces->z_mean[ff]);
                         if (zbf < zff) { decision = 1; reason = "zmean"; } else { decision = -1; reason = "zmean"; }
                     }
-                    // printf("\ndecision=%d (%s)", decision, reason);
-                    // keypress();
-                    // printf("\n");
-                    // XXXX
 
                     /* Apply decision: if move needed, update snapshot and pos_of_face */
                     // Only move bf after ff if bf is currently before ff in the sorted order
@@ -4420,17 +4401,7 @@ static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const
     MoveTo(screenx, screeny);
     printf("%s", msg);
     // Wait for key
-    int key = 0;
-    asm {
-        sep #0x20
-    waitkey:
-        lda >0xC000
-        bpl waitkey
-        and #0x007f
-        sta >0xC010
-        sta key
-        rep #0x30
-    }
+    int key = getkeypress ();
 
     framePolyOnly = old_frame;
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
@@ -4887,17 +4858,7 @@ static void inspect_face_pair_ui(Model3D* model) {
 
 
         /* Wait for key (same inline read used elsewhere) */
-        int key = 0;
-        asm {
-            sep #0x20
-        waitkey2:
-            lda >0xC000
-            bpl waitkey2
-            and #0x007f
-            sta >0xC010
-            sta key
-            rep #0x30
-        }
+        int key = getkeypress ();
 
         /* Handle keys (simplified): ←/→ change face2 only, ↑/↓ change face1 only */
         if (key == 27) { /* ESC: exit inspector */
@@ -5042,18 +5003,7 @@ static void inspect_face_pair_ui(Model3D* model) {
 
             /* Press R/E to reorder the sorted list, any other key to return */
             printf("\nPress 'R' to move the back face in front, 'E' to move the front face behind, any other key to return to graphical inspector...\n");
-            char cmd = 0;
-            asm {
-                lda #0
-                sep #0x20
-            wait_key:
-                lda >0xC000
-                bpl wait_key
-                and #0x007f
-                sta >0xC010
-                sta cmd
-                rep #0x30
-            }
+            char cmd = getkeypress ();
 
             if (cmd == 'R' || cmd == 'r' || cmd == 'E' || cmd == 'e') {
                 int pos1 = -1, pos2 = -1;
@@ -5202,17 +5152,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         printf("\nArrows to navigate, SPACE for options");
         
         // Wait for key
-        int key = 0;
-        asm {
-            sep #0x20
-        waitkey:
-            lda >0xC000
-            bpl waitkey
-            and #0x007f
-            sta >0xC010
-            sta key
-            rep #0x30
-        }
+        int key = getkeypress ();
         
         endgraph();
         
@@ -5264,17 +5204,8 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
             printf("\nPress 'F' to save to file Face%d.txt, 'R' to reverse vertex order, any other key to return to graphics...\n", target_face);
             fflush(stdout);
-            int tkey = 0;
-            asm {
-                sep #0x20
-            waitkey2:
-                lda >0xC000
-                bpl waitkey2
-                and #0x007f
-                sta >0xC010
-                sta tkey
-                rep #0x30
-            }
+            int tkey = getkeypress ();
+
             if (tkey == 'F' || tkey == 'f') {
                 char fname[64]; sprintf(fname, "Face%d.txt", target_face);
                 FILE *out = fopen(fname, "w");
@@ -5305,17 +5236,8 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                     printf("Error: unable to open %s for writing\n", fname); fflush(stdout);
                 }
                 printf("Press any key to return to graphics...\n"); fflush(stdout);
-                int tmpk = 0;
-                asm {
-                    sep #0x20
-                waitkey3:
-                    lda >0xC000
-                    bpl waitkey3
-                    and #0x007f
-                    sta >0xC010
-                    sta tmpk
-                    rep #0x30
-                }
+                int tmpk = getkeypress ();
+
                 // Return to graphics (loop will redraw)
                 continue;
             } else if (tkey == 'R' || tkey == 'r') {
@@ -5323,17 +5245,9 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                 backup_flags[target_face] = faces->display_flag[target_face];
                 printf("Face %d vertex order reversed. Recomputing orientation...\n", target_face);
                 printf("Press any key to return to graphics...\n"); fflush(stdout);
-                int tmpk = 0;
-                asm {
-                    sep #0x20
-                waitkey4:
-                    lda >0xC000
-                    bpl waitkey4
-                    and #0x007f
-                    sta >0xC010
-                    sta tmpk
-                    rep #0x30
-                }
+                int tmpk = getkeypress ();
+
+                // Return to graphics (loop will redraw)
                 continue;
             } else {
                 // Any other key returns to graphics
@@ -5569,17 +5483,7 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     // If there are misplaced faces, offer to fix by moving target before the smallest index
     if (misplaced_count > 0) {
         printf("\nPress 'A' to move face %d considering ALL misplaced faces, 'O' for overlaps only, or any other key to skip: ", target_face);
-        int key = 0;
-        asm {
-            sep #0x20
-        waitkey:
-            lda >0xC000
-            bpl waitkey
-            and #0x007f
-            sta >0xC010
-            sta key
-            rep #0x30
-        }
+        int key = getkeypress ();
         
         if (key == 'A' || key == 'a' || key == 'O' || key == 'o') {
             int min_pos = face_count; // start with max possible
@@ -5810,17 +5714,7 @@ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* fil
     // If there are misplaced faces, offer to fix by moving target after the largest index
     if (misplaced_count > 0) {
         printf("\nPress 'A' to move face %d considering ALL misplaced faces, 'O' for overlaps only, or any other key to skip: ", target_face);
-        int key = 0;
-        asm {
-            sep #0x20
-        waitkey:
-            lda >0xC000
-            bpl waitkey
-            and #0x007f
-            sta >0xC010
-            sta key
-            rep #0x30
-        }
+        int key = getkeypress ();
         
         if (key == 'A' || key == 'a' || key == 'O' || key == 'o') {
             int max_pos = -1;
@@ -9098,18 +8992,7 @@ static void show_help_pager(void) {
 
         // Prompt for next action on every page.
         printf("\nPress ESC to quit, any other key to continue...\n");
-        char key;
-        asm 
-            {
-            sep #0x20
-        loop:
-            lda >0xC000     // Read the keyboard status from memory address 0xC000
-            bpl loop        // Wait until no key is pressed (= until bit 7 on)
-            and #0x007f     // Clear the high bit
-            sta >0xC010     // Clear the keypress by writing to 0xC010
-            sta key         // Store the key code in variable 'key'
-            rep #0x30
-            }
+        char key = getkeypress(); 
 
         if (key == 27) return; // ESC quits
 
@@ -9132,7 +9015,7 @@ static void show_help_pager(void) {
 // ==============================================================
 //
 segment "code22";
-    int main(int argc, char** argv) {
+    int main() {
         Model3D* model;
         ObserverParams params;
         char filename[100];
@@ -9142,11 +9025,6 @@ segment "code22";
         int last_process_time_end = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
-        /* Command-line test hook: --run-segs-test */
-        if (argc > 1 && strcmp(argv[1], "--run-segs-test") == 0) {
-            int failed = segs_intersect_unit_tests();
-            return (failed == 0) ? 0 : 1;
-        }
 
     newmodel:
         printf("===================================\n");
@@ -9269,18 +9147,8 @@ segment "code22";
                 }
                 
                 // Wait for key press and get key code
-        asm 
-            {
-            sep #0x20
-        loop:
-            lda >0xC000     // Read the keyboard status from memory address 0xC000
-            bpl loop        // Wait until no key is pressed (= until bit 7 on)
-            and #0x007f     // Clear the high bit
-            sta >0xC010     // Clear the keypress by writing to 0xC010
-            sta key         // Store the key code in variable 'key'
-            rep #0x30
-            }
 
+        key = getkeypress();
         endgraph();        // Close QuickDraw
         }
 

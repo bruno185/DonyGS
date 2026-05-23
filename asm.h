@@ -10,6 +10,17 @@ loop:
         rtl
         }
 
+asm char getkeypress ()
+        {
+loop:
+        lda >0xC000     // Read the keyboard status from memory address 0xC000
+        bit #0x0080     // Test only the pressed flag without destroying A
+        beq loop        // If not pressed, loop until a key is pressed
+        sta >0xC010     // Clear the keypress by writing back to 0xC010
+        and #0x007F     // Mask off the pressed flag, keep the character code
+        rtl
+        }
+
 // To use with an emulator
 // With Crossrunner, you can set a breakpoint to break when 
 // register A has the value 0xAAAA and register X has the value 0xBBBB.
