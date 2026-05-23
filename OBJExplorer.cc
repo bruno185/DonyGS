@@ -1031,11 +1031,7 @@ void painter_geo(Model3D* model, int face_count) {
                 if (geo2 == -1) goto do_swap; // swapped result means f2 before f1 -> swap
                 if (geo2 == 1) continue;     // f2 after f1 -> order correct
                 
-                /* both zero -> inconclusive */
-
-                if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) {
-                    inconclusive_pairs[inconclusive_pairs_count++] = (InconclusivePair){f1,f2};
-                }
+                /* both zero -> inconclusive, but defer recording until we know the raycast result */
                 /* try a QuickDraw-centric raycast if the projected polygons actually overlap */
                 if (projected_polygons_overlap(model, f1, f2)) {
                     int rc = ray_cast_hierarchical(model, f1, f2);
@@ -1863,7 +1859,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
      */
     if (old_cull == 0) {
         int *snapshot = (int*)malloc(n * sizeof(int));
-        if (!snapshot) { printf("Error: painter_correctV2 malloc snapshot failed\n"); return 0; }
+        if (!snapshot) { free(pos_of_face); free(min_allowed_pos); printf("Error: painter_correctV2 malloc snapshot failed\n"); return 0; }
         for (int i = 0; i < n; ++i) snapshot[i] = faces->sorted_face_indices[i];
 
         /* Z-only sort (fast) */
