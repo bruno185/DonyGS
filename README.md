@@ -3,9 +3,11 @@
 **A Tribute to Robert DONY**  
 *Author of "Calcul des parties cachées", Masson, 1986*
 
-A high-performance 3D model viewer implementing multiple painter's algorithms, specifically designed for the Apple IIGS computer using ORCA/C and the QuickDraw graphics API.
+A high-performance 3D model viewer an explorer implementing multiple painter's algorithms, specifically designed for the Apple IIGS computer using ORCA/C and the QuickDraw graphics API.
 
 ![Main Interface](Screenshots/main_interface.png)
+![crossSub_shaded](Screenshots/crossSub_shaded.png)
+![charpente_shaded](Screenshots/charpente_shaded.png)
 
 ## Overview
 
@@ -18,8 +20,10 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 1. **Load a model**: Run the program and enter the path to a simplified OBJ file when prompted. After entering the file path, press `Enter` five times in a row to accept the default values for distance, horizontal angle, vertical angle, screen rotation, and any additional prompts. Those defaults can still be changed later through the application controls.
 2. **Set the camera**: Confirm or customize the default observer settings for distance, horizontal angle, vertical angle, and screen rotation if needed.
 3. **Use the controls**: Navigate the scene with the keyboard and switch rendering modes using keys `1` through `5`.
-4. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `R` to reverse the vertex winding of the selected face and update its front/back classification.
-5. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the farther face in front of the nearer face or `E` to move the nearer face behind the farther face in the sorted face list.
+4. **Change the color palette**: Press `G` to cycle through the available color palettes.
+5. **Enable orientation shading**: Press `!` to toggle orientation-based shading on and off.
+6. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `R` to reverse the vertex winding of the selected face and update its front/back classification.
+7. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the farther face in front of the nearer face or `E` to move the nearer face behind the farther face in the sorted face list.
 6. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
 7. **Repair ordering**: Press `;` to run the face order repair helper, and press `.` to run `check_sort_repair_fast` for a faster QD-centroid-based minimal repair.
 
