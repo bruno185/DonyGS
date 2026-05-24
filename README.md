@@ -37,6 +37,10 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 - `4`: CORRECT mode
 - `5`: CORRECT V2 mode
 - `B`: toggle back-face culling
+- `C`: toggle palette display overlay
+- `G`: cycle through available color palettes
+- `!`: toggle orientation-based shading
+- `9`: reset colors to defaults, restore palette 0, and disable orientation shading
 - `V`: inspect a face, arrow to navigate, 'space' for options (record face data in a file, revert vertex order)
 - `Q`: inspect a face pair and navigate between pairs
 - `H`: show full help screen

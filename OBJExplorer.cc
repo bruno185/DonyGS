@@ -440,6 +440,9 @@ static inline int normalize_deg(int deg) {
 //#define mode 640              // Graphics mode 640x200 pixels
 #define mode 320                // Graphics mode 320x200 pixels
 
+static int shaded_by_orientation = 0;        // Toggle orientation-based face shading via '!'
+static int face_shade_color[MAX_FACES];
+
 // ============================================================================
 //                          DATA STRUCTURES
 // ============================================================================
@@ -7651,6 +7654,9 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     long t_start, t_end;
     t_start = GetTick();
     calculateFaceDepths(model, NULL, model->faces.face_count);
+    if (shaded_by_orientation) {
+        computeOrientationShading(model);
+    }
     t_end = GetTick();
 
 
@@ -8100,6 +8106,9 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
             face_arrays->plane_b[i] = 0;
             face_arrays->plane_c[i] = 0;
             face_arrays->plane_d[i] = 0;
+            if (shaded_by_orientation) {
+                face_shade_color[i] = COL_FILL_DEFAULT;
+            }
         } else {
             int idx0 = face_arrays->vertex_indices_buffer[offset] - 1;
             int idx1 = face_arrays->vertex_indices_buffer[offset + 1] - 1;
@@ -8109,6 +8118,9 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
                 face_arrays->plane_b[i] = 0;
                 face_arrays->plane_c[i] = 0;
                 face_arrays->plane_d[i] = 0;
+                if (shaded_by_orientation) {
+                    face_shade_color[i] = COL_FILL_DEFAULT;
+                }
             } else {
                 Fixed32 x1 = vtx->xo[idx0], y1 = vtx->yo[idx0], z1 = vtx->zo[idx0];
                 Fixed32 x2 = vtx->xo[idx1], y2 = vtx->yo[idx1], z2 = vtx->zo[idx1];
@@ -8200,6 +8212,28 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
     // if (cull_back_faces && !PERFORMANCE_MODE) {
     //     printf("[DEBUG] calculateFaceDepths: culled %d faces by back-face test\n", culled_count);
     // }
+}
+
+static void computeOrientationShading(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+
+    for (int i = 0; i < face_count; ++i) {
+        float a_f = (float)FIXED64_TO_FLOAT(faces->plane_a[i]);
+        float b_f = (float)FIXED64_TO_FLOAT(faces->plane_b[i]);
+        float c_f = (float)FIXED64_TO_FLOAT(faces->plane_c[i]);
+        float mag = sqrtf(a_f * a_f + b_f * b_f + c_f * c_f);
+        if (mag <= 0.0f) {
+            face_shade_color[i] = COL_FILL_DEFAULT;
+        } else {
+            float cosz = fabsf(c_f / mag);
+            int shade = (int)(cosz * 15.0f + 0.5f);
+            if (shade < 0) shade = 0;
+            else if (shade > 15) shade = 15;
+            face_shade_color[i] = shade;
+        }
+    }
 }
 
 
@@ -8698,7 +8732,9 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
                 } else {
                     // Fill color
                     int fill_color;
-                    if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
+                    if (shaded_by_orientation) {
+                        fill_color = face_shade_color[face_id];
+                    } else if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
                         fill_color = random_fill_colors[face_id];
                     } else if (user_fill_color >= 0) {
                         fill_color = user_fill_color;
@@ -9024,6 +9060,8 @@ static void show_help_pager(void) {
         "Arrow Up/Down: Change vertical angle",
         "W/X: Change screen rotation angle",
         "C: Toggle color palette display",
+        "G: Cycle palettes",
+        "!: Toggle orientation shading",
         "J: Toggle jittered rendering",
         ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
         ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
@@ -9035,7 +9073,7 @@ static void show_help_pager(void) {
         "6: Both colors RANDOM mode",
         "7: Choose fill color",
         "8: Choose frame color",
-        "9: Reset colors to defaults",
+        "9: Reset colors, palette 0, and shading OFF",
         "P: Toggle frame-only polygons",
         "B: Toggle back-face culling",
         "I: Toggle display of inconclusive pairs",
@@ -9322,6 +9360,7 @@ segment "code22";
                 else printf("    Painter mode: FLOAT (float-based)\n\n");
                 printf("    Back-face culling: %s\n", cull_back_faces ? "ON" : "OFF");
                 printf("    Pan offset: (%d, %d)\n", pan_dx, pan_dy);
+                if (shaded_by_orientation) printf("    Shading mode: orientation-based\n");
                 if (user_fill_color == 16) printf("    Fill color: Random\n");
                 else if (user_fill_color >= 0) printf("    Fill color: %d\n", user_fill_color);
                 else printf("    Fill color: Default (COL_FILL_DEFAULT /*14*/)\n");
@@ -9468,12 +9507,19 @@ segment "code22";
                 colorpalette ^= 1; // Toggle between 0 and 1
                 goto loopReDraw;
 
-            case 71:  // 'G' - toggle color palette display
+            case 71:  // 'G' - cycle the active QuickDraw palette
             case 103:  // 'g'
                 palette++;
                 if (palette >= 16) palette = 0; // Wrap around if exceeds available palettes
                 goto loopReDraw;
 
+            case 33:  // '!' - toggle orientation shading
+                shaded_by_orientation ^= 1;
+                printf("Orientation shading: %s\n", shaded_by_orientation ? "ON" : "OFF");
+                if (shaded_by_orientation && model != NULL) {
+                    computeOrientationShading(model);
+                }
+                goto loopReDraw;
 
             case 73:  // 'I' - toggle display of inconclusive face pairs
             case 105: // 'i'
@@ -9635,7 +9681,8 @@ segment "code22";
                 user_fill_color = -1;
                 user_frame_color = -1;
                 palette = 0; // reset to system palette
-                printf("Colors reset to defaults\n");
+                shaded_by_orientation = 0; // disable orientation shading
+                printf("Colors reset to defaults, palette reset to 0, shading OFF\n");
                 goto loopReDraw;
 
             case 54: // '6' - quick random mode for both colors
