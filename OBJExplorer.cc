@@ -85,6 +85,81 @@ static Handle globalPolyHandle = NULL;
 static int poly_handle_locked = 0;  // Track lock state
 static int framePolyOnly = 0; // Toggle: 1 = frame-only, 0 = fill+frame (default: filled polygons)
 
+int palette = 0; // Palette number to use
+typedef unsigned int GS_Color;
+
+/* palette = 16 colors */
+typedef struct {
+    GS_Color color[16];
+} GS_Palette;
+
+static GS_Color encodePaletteColor(int r, int g, int b)
+{
+    if (r < 0) r = 0; if (r > 15) r = 15;
+    if (g < 0) g = 0; if (g > 15) g = 15;
+    if (b < 0) b = 0; if (b > 15) b = 15;
+    return ((GS_Color)r << 8) | ((GS_Color)g << 4) | (GS_Color)b;
+}
+
+static GS_Color paletteGradientColor(int palette_num, int index)
+{
+    int r = 0, g = 0, b = 0;
+
+    if (palette_num == 1) {
+        /* Palette 1 = grayscale ramp from black to white */
+        return encodePaletteColor(index, index, index);
+    }
+
+    /* Define a saturated target color for palettes 2..15. */
+    int target_r = 0, target_g = 0, target_b = 0;
+    switch (palette_num) {
+        case 2:  target_r = 15; target_g = 0;  target_b = 0;  break; // red
+        case 3:  target_r = 0;  target_g = 15; target_b = 0;  break; // green
+        case 4:  target_r = 0;  target_g = 0;  target_b = 15; break; // blue
+        case 5:  target_r = 15; target_g = 15; target_b = 0;  break; // yellow
+        case 6:  target_r = 15; target_g = 0;  target_b = 15; break; // magenta
+        case 7:  target_r = 0;  target_g = 15; target_b = 15; break; // cyan
+        case 8:  target_r = 15; target_g = 8;  target_b = 0;  break; // orange
+        case 9:  target_r = 12; target_g = 0;  target_b = 15; break; // purple
+        case 10: target_r = 0;  target_g = 8;  target_b = 15; break; // sky blue
+        case 11: target_r = 8;  target_g = 15; target_b = 0;  break; // lime
+        case 12: target_r = 15; target_g = 6;  target_b = 11; break; // pink
+        case 13: target_r = 0;  target_g = 15; target_b = 8;  break; // teal
+        case 14: target_r = 12; target_g = 8;  target_b = 0;  break; // brown
+        case 15: target_r = 15; target_g = 0;  target_b = 8;  break; // rose
+        default: target_r = 15; target_g = 15; target_b = 15; break;
+    }
+
+    if (index <= 0) {
+        return encodePaletteColor(0, 0, 0);
+    }
+    if (index >= 15) {
+        return encodePaletteColor(15, 15, 15);
+    }
+
+    const int midpoint = 8;
+    if (index <= midpoint) {
+        /* Black -> saturated target at index 8 */
+        r = (target_r * index + midpoint / 2) / midpoint;
+        g = (target_g * index + midpoint / 2) / midpoint;
+        b = (target_b * index + midpoint / 2) / midpoint;
+    } else {
+        /* Saturated target at index 8 -> white at index 15 */
+        int step = index - midpoint;
+        int range = 15 - midpoint; /* 7 */
+        r = target_r + ((15 - target_r) * step + range / 2) / range;
+        g = target_g + ((15 - target_g) * step + range / 2) / range;
+        b = target_b + ((15 - target_b) * step + range / 2) / range;
+    }
+    return encodePaletteColor(r, g, b);
+}
+
+/* Global palette storage: 16 palettes indexed 0..15 */
+GS_Palette palettes[16];
+static int palette0_loaded = 0;
+
+void initPalettes(void);
+
 // Runtime back-face culling toggle
 // - When enabled (1): an **observer-space** back-face test is performed per face during
 //   `calculateFaceDepths()` using the face plane D term (observer-space d <= 0 => culled).
@@ -169,6 +244,10 @@ static int random_colors_capacity = 0;
 #define PAINTER_MODE_CORRECT 3
 #define PAINTER_MODE_CORRECTV2 6
 #define PAINTER_MODE_GEO 5
+
+
+#define PALETTE_BASE  ((unsigned int *)0xE19E00L) /* QuickDraw palette base address (256 entries × 3 bytes each) */
+
 
 static int painter_mode = PAINTER_MODE_FAST; // 0=fast,1=fixed,2=float,3=correct,5=geo,6=correctV2
 
@@ -9010,6 +9089,62 @@ static void show_help_pager(void) {
 }
 
 
+void SetColor(int palette_num, int color_index, 
+              int r, int g, int b)
+{
+    unsigned long offset;
+    unsigned int  color_word;
+    
+    /* Chaque palette = 16 couleurs × 2 octets = 32 octets */
+    offset = (long)palette_num * 32L + (long)color_index * 2L;
+    
+    /* Encoder R, G, B en nibbles (0-15 chacun) */
+    color_word = ((unsigned int)r << 8) | 
+                 ((unsigned int)g << 4) | 
+                 (unsigned int)b;
+    
+    /* Écrire dans la RAM vidéo (bank $E1) */
+    *((unsigned int *)(0xE19E00L + offset)) = color_word;
+}
+
+GS_Palette ReadPalette(int palette_num)
+{
+    GS_Palette  pal;
+    int         i;
+    unsigned int *src;
+
+    /* Chaque palette fait 16 × 2 octets = 32 octets */
+    src = (unsigned int *)(PALETTE_BASE + (long)palette_num * 32L);
+
+    for (i = 0; i < 16; i++)
+        pal.color[i] = src[i];
+
+    return pal;
+}
+
+void applyPalette(int palette_num)
+{
+    if (palette_num < 0 || palette_num >= 16) palette_num = 0;
+
+    Word color_table[16];
+    for (int color_index = 0; color_index < 16; ++color_index) {
+        color_table[color_index] = (Word)palettes[palette_num].color[color_index];
+    }
+
+    SetColorTable(0, color_table);
+}
+
+void initPalettes(void)
+{
+    palette0_loaded = 0;
+
+    for (int p = 1; p < 16; ++p) {
+        for (int i = 0; i < 16; ++i) {
+            palettes[p].color[i] = paletteGradientColor(p, i);
+        }
+    }
+}
+
 // ==============================================================
 // THIS IS THE MAIN PROGRAM
 // ==============================================================
@@ -9048,6 +9183,8 @@ segment "code22";
         // Initialize inconclusive pairs counter
         inconclusive_pairs_count = 0; // clear inconclusive pairs
 
+        // Initialize palettes and palette table storage
+        initPalettes();
 
         // Ask for filename (loop until a non-empty filename is entered and the model loads)
         while (1) {
@@ -9135,7 +9272,15 @@ segment "code22";
             if (model->faces.face_count > 0) {
                 // Initialize QuickDraw
                 startgraph(mode);
-                // Draw 3D object
+
+                // Load the system palette into palettes[0] on first startup
+                if (!palette0_loaded) {
+                    palettes[0] = ReadPalette(0);
+                    palette0_loaded = 1;
+                }
+
+                // Apply the selected palette and draw the 3D object
+                applyPalette(palette);
                 if (jitter) drawPolygons_jitter(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count); else drawPolygons(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count);
                 // display available colors
                 if (colorpalette == 1) { 
@@ -9323,6 +9468,13 @@ segment "code22";
                 colorpalette ^= 1; // Toggle between 0 and 1
                 goto loopReDraw;
 
+            case 71:  // 'G' - toggle color palette display
+            case 103:  // 'g'
+                palette++;
+                if (palette >= 16) palette = 0; // Wrap around if exceeds available palettes
+                goto loopReDraw;
+
+
             case 73:  // 'I' - toggle display of inconclusive face pairs
             case 105: // 'i'
                 show_inconclusive ^= 1;
@@ -9482,6 +9634,7 @@ segment "code22";
             case 57: // '9' - reset colors to default
                 user_fill_color = -1;
                 user_frame_color = -1;
+                palette = 0; // reset to system palette
                 printf("Colors reset to defaults\n");
                 goto loopReDraw;
 
