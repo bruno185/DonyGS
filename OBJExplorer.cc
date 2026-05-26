@@ -4038,12 +4038,9 @@ static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
 static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
+    int test1passed, test2passed, test3passed, test4passed = 0;
 
-    /* handle autopair/quiet similar to non-fixed debug */
-    if (autopair_f1 >= 0 && autopair_f2 >= 0) {
-        f1 = autopair_f1;
-        f2 = autopair_f2;
-    } else if (!pair_plane_before_debug_quiet) {
+
         printf("PAIR_DEBUG: enter face index f1: "); fflush(stdout);
         if (scanf("%d", &f1) != 1) {
             printf("invalid input\n"); keypress(); return 0;
@@ -4056,7 +4053,6 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
         }
         while ((c = getchar()) != '\n' && c != EOF) ;
         printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
-    }
 
     // Use cached plane normals and d terms computed in calculateFaceDepths
     int n1 = faces->vertex_count[f1];
@@ -4107,13 +4103,13 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
     int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
     int side;           // vertex side.
-    int all_same_side; // flag indicating whether all vertices are on the same side
-    int all_opposite_side; // flag indicating whether all vertices are on the opposite side
+    int all_same_side; // flag indicating whether all vertices are on the same side of the observer
+    int all_opposite_side; // flag indicating whether all vertices are on the opposite side of the observer
     /* test_value replaced by Fixed64 accumulators inside loops to avoid Fixed32 overflow */
 
-    // ********************* TEST 4 *********************
+    // ********************* TEST 1 *********************
 
-    // Test 4: Is f2 entirely on the same observer-side of f1's plane?
+    // Test 1: Is f2 entirely on the same observer-side of f1's plane?
     // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
     //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
     //   same side as the observer (within epsilon), then f2 is conclusively in front
@@ -4121,17 +4117,17 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     //   and we continue to stronger tests.
 
 
-    PDBG("\n**** Test 4 : Testing faces %d and %d\n", f1, f2);
-    PDBG("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", FIXED64_TO_FLOAT(a1), FIXED64_TO_FLOAT(b1), FIXED64_TO_FLOAT(c1), FIXED64_TO_FLOAT(d1));
+    PDBG("\n******** Test #1 : Testing if faces %d is in front of %d ********\n", f2, f1);
+    // PDBG("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", FIXED64_TO_FLOAT(a1), FIXED64_TO_FLOAT(b1), FIXED64_TO_FLOAT(c1), FIXED64_TO_FLOAT(d1));
     obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
     if (d1 > (Fixed64)epsilon) obs_side1 = 1; 
     else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
     else goto skipT4_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
     all_same_side = 1;
 
-    printf("FOR loop start\n");
-    printf("obs_side1 = %d\n", obs_side1);
-    printf("test_values for face %d must be of the same sign as obs_side1\n", f2);
+    printf("Observer side (obs_side1) = %d\n", obs_side1);
+    printf("If face %d entirely on the same observer-side of %d's plane, then\n", f2, f1);
+    printf("test_values for all vertices of face %d have the same sign as obs.side.\n", f2);
 
     for (k=0; k<n2; k++) {
             int v = faces->vertex_indices_buffer[offset2+k]-1;
@@ -4142,102 +4138,216 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
             acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d1; // d1 already Fixed32 scale
 
-            PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
-                   k, v+1,
-                   FIXED_TO_FLOAT(vtx->xo[v]),
-                   FIXED_TO_FLOAT(vtx->yo[v]),
-                   FIXED_TO_FLOAT(vtx->zo[v]));
+            // PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
+            //        k, v+1,
+            //        FIXED_TO_FLOAT(vtx->xo[v]),
+            //        FIXED_TO_FLOAT(vtx->yo[v]),
+            //        FIXED_TO_FLOAT(vtx->zo[v]));
+
             /* show raw fixed value, integer part (shifted) and float equivalent */
             // PDBG("test_value (fixed64 raw) = %lld\n", (long long)acc);
             // PDBG("test_value (fixed64 >>%d) = %lld\n", FIXED_SHIFT, (long long)(acc >> FIXED_SHIFT));
-            PDBG("test_value (float)        = %f\n", FIXED64_TO_FLOAT(acc));
+
+            PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
 
             if (acc > (Fixed64)epsilon) side = 1;
             else if (acc < -(Fixed64)epsilon) side = -1;
-            else continue; // ignore vertices that are effectively on the plane
+            else 
+            {
+                printf("==> ignored\n");   
+                continue; // ignore vertices that are effectively on the plane
+            }
+
+            if (obs_side1 == side) {
+                printf("==> OK\n");
+            }            
 
             if (obs_side1 != side) {
                 /* if a vertex of f2 is on the opposite side of f1's plane than the observer,
-                 * Test 4 cannot conclude the ordering; continue to later tests. */
+                 * Test #1 cannot conclude the ordering; continue to later tests. */
                 all_same_side = 0;
-                PDBG("Test 4 failed for faces %d and %d\n", f1, f2);
+                printf("==> KO\n");
+                PDBG("Test #1 failed for faces %d and %d\n", f1, f2);
                 PKEYP();
                 break;
             }
     }
-    PDBG("FOR loop stop\n");
-    // test 4 passed
+    // PDBG("FOR loop stop\n");
+    // test 1 passed
     if (all_same_side) { 
-        PDBG("Test 4 passed for Faces %d and %d\n", f1, f2);
+        PDBG("Test #1 passed for Faces %d and %d\n", f1, f2);
+        test1passed = 1;
         PKEYP();
-        // return 1; // faces are ordered correctly, move to next pair
     }
 
     skipT4_debug:
 
-    // ********************* TEST 5 ********************
-    // Test 5: Is f1 entirely on the opposite side of f2's plane relative to the observer?
-    // - This is symmetric to Test 4: if every vertex of f1 is strictly on the opposite
-    //   side of f2's plane from the observer, then f1 is behind f2 and no swap is needed.
-    // - Both Test 4 and Test 5 are relatively cheap and frequently decisive on planar geometry.
+    // ********************* TEST #2 ********************
+    // Test #2: Is f1 entirely on the opposite side of f2's plane relative to the observer?
+    // - This is symmetric to Test #1: if every vertex of f1 is strictly on the opposite
+    //   side of f2's plane from the observer, then f1 is behind f2 and the ordering is confirmed.
+    // - This test is performed only if the observer is clearly on one side of f2's plane.
 
+    PDBG("\n******** Test #2 : Testing if faces %d is behind %d ********\n", f1, f2);
+    //PDBG("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", FIXED64_TO_FLOAT(a2), FIXED64_TO_FLOAT(b2), FIXED64_TO_FLOAT(c2), FIXED64_TO_FLOAT(d2));
 
-    PDBG("\n**** Test 5 : Testing faces %d and %d\n", f1, f2);
-    PDBG("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", FIXED64_TO_FLOAT(a2), FIXED64_TO_FLOAT(b2), FIXED64_TO_FLOAT(c2), FIXED64_TO_FLOAT(d2) );
-
-
-    obs_side2 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
-    if (d2 > (Fixed64)epsilon) obs_side2 = 1; 
+    obs_side2 = 0;
+    if (d2 > (Fixed64)epsilon) obs_side2 = 1;
     else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
-    // else return 0; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    if (obs_side2 == 0) goto skipT5_debug;
     all_opposite_side = 1;
 
-    PDBG("FOR loop start\n");
-    PDBG("obs_side2 = %d\n", obs_side2);
-    PDBG("test_values for face %d must be of the opposite sign as obs_side2\n", f1);
+    printf("Observer side = %d\n", obs_side2);
+    PDBG("If face %d is entirely on the opposite side of %d's plane,\n", f1, f2);
+    PDBG("==> test_values for all vertices of face %d have opposite sign to obs. side.\n", f1);
 
-    for (k=0; k<n1; k++) {
-        int v = faces->vertex_indices_buffer[offset1+k]-1;
+    for (k = 0; k < n1; k++) {
+        int v = faces->vertex_indices_buffer[offset1+k] - 1;
         Fixed64 acc = 0;
         acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
         acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
         acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
         acc += (Fixed64)d2;
- 
-        /* vertex coords */
-        PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
-               k, v+1,
-               FIXED_TO_FLOAT(vtx->xo[v]),
-               FIXED_TO_FLOAT(vtx->yo[v]),
-               FIXED_TO_FLOAT(vtx->zo[v]));
-        /* report acc in three ways */
-        // PDBG("test_value (fixed64 raw)       = %lld\n", (long long)acc);
-        // PDBG("test_value (fixed64 >>%d)       = %lld\n", FIXED_SHIFT, (long long)(acc >> FIXED_SHIFT));
-        PDBG("test_value (float equiv)        = %f\n", FIXED64_TO_FLOAT(acc));
-        
 
-        
-        if  (acc > (Fixed64)epsilon) side = 1;
+        // PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
+        //      k, v+1,
+        //      FIXED_TO_FLOAT(vtx->xo[v]),
+        //      FIXED_TO_FLOAT(vtx->yo[v]),
+        //      FIXED_TO_FLOAT(vtx->zo[v]));
+
+        PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
+        // PDBG("test_value (float equiv)        = %f\n", FIXED64_TO_FLOAT(acc));
+
+        if (acc > (Fixed64)epsilon) side = 1;
         else if (acc < -(Fixed64)epsilon) side = -1;
-        else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
-        if (obs_side2 == side) {
-            /* if a vertex of f1 is on the same side of f2's plane as the observer,
-             * Test 5 cannot conclude the ordering and must fail. */
+        else 
+        {
+            printf("==> ignored\n");   
+            continue; // ignore vertices that are effectively on the plane
+        }
+
+        if (obs_side2 != side) {
+            printf("==> OK\n");
+        }
+         else {
+            printf("==> KO\n");
             all_opposite_side = 0;
-            PDBG("Test 5 failed for faces %d and %d\n", f1, f2);
+            PDBG("Test #2 failed for faces %d and %d\n", f1, f2);
+            PKEYP();
+            break;
+        }
+    }
+    // PDBG("FOR loop stop\n");
+
+    if (all_opposite_side) {
+        PDBG("Test #2 passed for Faces %d and %d\n", f1, f2);
+        test2passed = 1;
+        PKEYP();
+    }
+    skipT5_debug:
+
+    // ********************* TEST #3 ********************
+    // Test #3: Copy of Test #1 with faces swapped (check if f1 is in front of f2).
+    PDBG("\n******** Test #3 : Testing if faces %d is in front of %d ********\n", f1, f2);
+    obs_side1 = 0;
+    if (d2 > (Fixed64)epsilon) obs_side1 = 1;
+    else if (d2 < -(Fixed64)epsilon) obs_side1 = -1;
+    else goto skipT5_debug;
+    all_same_side = 1;
+
+    printf("Observer side (obs_side1) = %d\n", obs_side1);
+    printf("If face %d entirely on the same observer-side of %d's plane, then\n", f1, f2);
+    printf("test_values for all vertices of face %d have the same sign as obs.side.\n", f1);
+
+    for (k = 0; k < n1; k++) {
+        int v = faces->vertex_indices_buffer[offset1+k] - 1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d2;
+
+        PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
+        if (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else {
+            printf("==> ignored\n");
+            continue;
+        }
+
+        if (obs_side1 == side) {
+            printf("==> OK\n");
+        }
+
+        if (obs_side1 != side) {
+            printf("==> KO\n");
+            all_same_side = 0;
+            PDBG("Test #3 failed for faces %d and %d\n", f1, f2);
             PKEYP();
             break;
         }
     }
 
-    // test 5 passed
-    if (all_opposite_side) {
-        PDBG("Test 5 passed for Faces %d and %d\n", f1, f2);
+    if (all_same_side) {
+        PDBG("Test #3 passed for Faces %d and %d\n", f1, f2);
+        test3passed = 1;
         PKEYP();
-        return 1;
     }
-    // reached if neither test decided
-    return 0;
+
+    // ********************* TEST #4 ********************
+    // Test #4: Copy of Test #2 with faces swapped (check if f2 is behind f1).
+    PDBG("\n******** Test #4 : Testing if faces %d is behind %d ********\n", f2, f1);
+    obs_side2 = 0;
+    if (d1 > (Fixed64)epsilon) obs_side2 = 1;
+    else if (d1 < -(Fixed64)epsilon) obs_side2 = -1;
+    if (obs_side2 == 0) goto skipT5_debug;
+    all_opposite_side = 1;
+
+    printf("Observer side = %d\n", obs_side2);
+    PDBG("If face %d is entirely on the opposite side of %d's plane,\n", f2, f1);
+    PDBG("==> test_values for all vertices of face %d have opposite sign to obs. side.\n", f2);
+
+    for (k = 0; k < n2; k++) {
+        int v = faces->vertex_indices_buffer[offset2+k] - 1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d1;
+
+        PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
+        if (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else {
+            printf("==> ignored\n");
+            continue;
+        }
+
+        if (obs_side2 != side) {
+            printf("==> OK\n");
+        } else {
+            printf("==> KO\n");
+            all_opposite_side = 0;
+            PDBG("Test #4 failed for faces %d and %d\n", f2, f1);
+            PKEYP();
+            break;
+        }
+    }
+
+    if (all_opposite_side) {
+        PDBG("Test #4 passed for Faces %d and %d\n", f2, f1);
+        test4passed = 1;
+        PKEYP();
+    }
+
+
+    printf("\n**** SUMMARY for faces %d and %d: ****\n", f1, f2);
+    if (test1passed==1) printf("Test #1: face %d in front of %d => OK\n", f2, f1); else printf("Test #1: inconclusive or failed\n");
+    if (test2passed==1) printf("Test #2: face %d behind %d => OK\n", f1, f2); else printf("Test #2: inconclusive or failed\n");
+    if (test3passed==1) printf("Test #3: face %d in front of %d => OK\n", f1, f2); else printf("Test #3: inconclusive or failed\n");
+    if (test4passed==1) printf("Test #4: face %d behind %d => OK\n", f2, f1); else printf("Test #4: inconclusive or failed\n");
+    keypress();
+    if (test1passed || test2passed) return 1; else return 0;
 }
 
 static int pair_plane_before(Model3D* model, int f1, int f2) {
