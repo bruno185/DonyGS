@@ -4039,20 +4039,22 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
     int test1passed, test2passed, test3passed, test4passed = 0;
+    int c;
 
-
+    if (f1 == -1 && f2 == -1) {
         printf("PAIR_DEBUG: enter face index f1: "); fflush(stdout);
         if (scanf("%d", &f1) != 1) {
             printf("invalid input\n"); keypress(); return 0;
         }
-        int c; while ((c = getchar()) != '\n' && c != EOF) ;
+        while ((c = getchar()) != '\n' && c != EOF) ;
 
         printf("PAIR_DEBUG: enter face index f2: "); fflush(stdout);
         if (scanf("%d", &f2) != 1) {
             printf("invalid input\n"); keypress(); return 0;
         }
         while ((c = getchar()) != '\n' && c != EOF) ;
-        printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
+    }
+    printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
 
     // Use cached plane normals and d terms computed in calculateFaceDepths
     int n1 = faces->vertex_count[f1];
@@ -5151,10 +5153,10 @@ static void inspect_face_pair_ui(Model3D* model) {
                     printf("1) BBOX OK rect=%d,%d-%d,%d center=%d,%d dist:N/A", r.bbox_ix0, r.bbox_iy0, r.bbox_ix1, r.bbox_iy1, bcx, bcy);
                 }
                 /* verdict (one-line break before verdict) */
-                if (r.bbox_raycast == 1) printf("\n   => face %d is in front\n", f1);
-                else if (r.bbox_raycast == 2) printf("\n   => face %d is in front\n", f2);
-                else printf("\n  -> undetermined\n");
-            } else printf("1) BBOX KO rect=none center=none\n");
+                if (r.bbox_raycast == 1) printf("\n   => face %d is in front", f1);
+                else if (r.bbox_raycast == 2) printf("\n   => face %d is in front", f2);
+                else printf("\n  -> undetermined");
+            } else printf("1) BBOX KO rect=none center=none");
 
             /* 2) Centroid SH (single line) - prefix OK/KO */
             if (r.sh_centroid_ok && debug_clip_fixed_vcount >= 3) {
@@ -5172,10 +5174,10 @@ static void inspect_face_pair_ui(Model3D* model) {
                 } else {
                     printf("\n2) SH OK rect=%d,%d-%d,%d c=%d,%d dist:N/A", sminx, sminy, smaxx, smaxy, r.sh_cx, r.sh_cy);
                 }
-                if (r.sh_raycast == 1) printf("\n   => face %d is in front\n", f1);
-                else if (r.sh_raycast == 2) printf("\n   => face %d is in front\n", f2);
-                else printf("\n  -> undetermined\n");
-            } else printf("\n2) SH KO rect=none\n");
+                if (r.sh_raycast == 1) printf("\n   => face %d is in front", f1);
+                else if (r.sh_raycast == 2) printf("\n   => face %d is in front", f2);
+                else printf("\n  -> undetermined");
+            } else printf("\n2) SH KO rect=none");
 
             /* 3) Centroid QD (single line) - use region bbox when available; fallback to AABB; prefix OK/KO */
             if (r.qd_centroid_ok) {
@@ -5194,7 +5196,7 @@ static void inspect_face_pair_ui(Model3D* model) {
 
 
             /* Press R/E to reorder the sorted list, any other key to return */
-            printf("\nPress 'R' to move the back face in front, 'E' to move the front face behind, any other key to return to graphical inspector...\n");
+            printf("\nPress : \n'R' to move the back face in front\n'E' to move the front face behind\n'G' for advanced geometric details using plane equations\nAny other key to return to graphical inspector...\n");
             char cmd = getkeypress ();
 
             if (cmd == 'R' || cmd == 'r' || cmd == 'E' || cmd == 'e') {
@@ -5226,6 +5228,14 @@ static void inspect_face_pair_ui(Model3D* model) {
                 printf("Press any key to return to graphical inspector...\n");
                 keypress();
             }
+
+            if (cmd == 'G' || cmd == 'g') {
+
+                pair_plane_before_debug_fixed(model, f1, f2);
+            }
+
+
+
             continue; /* redraw graphical inspector */
         }
 
@@ -9665,7 +9675,7 @@ segment "code22";
             case 109: // 'm'
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 // pair_plane_before_debug(model, 0, 0);
-                pair_plane_before_debug_fixed(model, 0, 0);
+                pair_plane_before_debug_fixed(model, -1, -1);
                 goto loopReDraw;
 
 
