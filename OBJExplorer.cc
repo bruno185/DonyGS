@@ -1174,13 +1174,13 @@ void painter_geo(Model3D* model, int face_count) {
             }
         
         endfor: ;
-        } // FIN de la boucle for int i=0; i<face_count-1; i++
+        } // END of the for loop int i=0; i<face_count-1; i++
 
     } while (swapped);
     // printf("inconclusive pairs: %d / %d (%.2f%%)\n", inconclusive_pairs_count, visible_count-1, (visible_count > 1) ? (100.0f * inconclusive_pairs_count / (visible_count-1)) : 0.0f);
     // printf("total swaps performed: %d\n", swap_count);
     // keypress();
-    // Fin du tri à bulle
+    // End of bubble sort
 
     
     // Free the memory of the ordered pairs list
@@ -1368,10 +1368,10 @@ void painter_newell_sancha(Model3D* model, int face_count) {
             }
         
         endfor: ;
-        } // FIN de la boucle for int i=0; i<face_count-1; i++
+        } // END of the for loop int i=0; i<face_count-1; i++
 
     } while (swapped);
-    // Fin du tri à bulle
+    // End of bubble sort
 
     
     // Free the memory of the ordered pairs list
@@ -2049,7 +2049,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     cull_back_faces = old_cull;
     free(pos_of_face);
     free(min_allowed_pos);
-    // Affichage identique à painter_correct
+    // Display identical to painter_correct
     // printf("Faces:");
     // for (int i = 0; i < n; ++i) printf(" %d", faces->sorted_face_indices[i]);
     // printf("\n");
@@ -2110,16 +2110,14 @@ static int pair_order_relation(Model3D* model, int f1, int f2) {
 
 /* Helper: enforce mandatory after-relations.
  *
- * Ce mécanisme permet de conserver l'invariant simplement : après un
- * mouvement découvert par `check_sort_repair`, on mémorise la relation
- * 'a after b'.
- * Si un autre mouvement ultérieur modifie l'ordre global, on revalide
- * toutes les relations enregistrées et on ajuste la liste pour restaurer
- * explicitement `a` après `b`.
+ * This mechanism preserves the invariant simply: after a move discovered by
+ * `check_sort_repair`, it records the relation 'a after b'.
+ * If a later move changes the global order, it revalidates all recorded
+ * relations and adjusts the list to explicitly restore `a` after `b`.
  *
- * Par construction, ce code est conservatif : il applique les relations
- * une par une et redémarre la passe à chaque correction pour éviter
- * d'échapper une relation qui deviendrait invalide après un déplacement.
+ * By design, this code is conservative: it applies relations one by one and
+ * restarts the pass after each correction to avoid skipping a relation that
+ * would become invalid after a move.
  */
 static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of_face, int relation_count, const int (*relations)[2]) {
     if (!model || !pos_of_face || !relations) return;
@@ -2129,25 +2127,25 @@ static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of
         int a = relations[i][0];
         int b = relations[i][1];
 
-        // Skip relations invalides ou hors bornes
+        // Skip invalid or out-of-bounds relations
         if (a < 0 || a >= n || b < 0 || b >= n) continue;
 
         int pa = pos_of_face[a];
         int pb = pos_of_face[b];
 
-        // Si a n'est pas derrière b, décaler a immédiatement après b
+        // If a is not after b, move a immediately after b
         if (pa <= pb) {
             int tmp = faces->sorted_face_indices[pa];
             memmove(&faces->sorted_face_indices[pa], &faces->sorted_face_indices[pa + 1], sizeof(int) * (pb - pa));
             faces->sorted_face_indices[pb] = tmp;
 
-            // Réparer la table de positions en O(delta)
+            // Repair the position table in O(delta)
             for (int k = pa; k <= pb; ++k) {
                 pos_of_face[faces->sorted_face_indices[k]] = k;
             }
 
-            // On recommence à zéro pour s'assurer que la relation suivante est
-            // évaluée sur l'ordre mis à jour (garantie de convergence simple).
+            // Restart from zero to ensure the next relation is evaluated on the
+            // updated order (simple convergence guarantee).
             i = -1;
         }
     }
@@ -2172,13 +2170,13 @@ int check_sort_repair(Model3D* model, int face_count) {
     if (!pos_of_face) return 0;
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
 
-    /* Relations obligatoires enregistrées pendant le passage de réparation.
-     * Chaque entrée est [a,b] signifiant : a doit se trouver après b dans
+    /* Mandatory relations recorded during the repair pass.
+     * Each entry is [a,b] meaning: a must come after b in
      * faces->sorted_face_indices (pos[a] > pos[b]).
      *
-     * Ceci implémente le mécanisme demandé : si on a déplacé A après B, on garde
-     * cette contrainte et on la vérifie constamment quand d'autres mouvements peuvent
-     * ré-ordonner B.
+     * This implements the requested mechanism: if A was moved after B, the
+     * constraint is preserved and is continuously checked when other moves may
+     * reorder B.
      */
     int relation_capacity = n + 16;
     int relation_count = 0;
@@ -2322,9 +2320,9 @@ int check_sort_repair(Model3D* model, int face_count) {
                         ++repairs;
 
                         /* 
-                         * Enregistrer la contrainte “closer doit être après other”.
-                         * Cette relation devient une obligation à maintenir après
-                         * chaque modification qui affecte le tri.
+                         * Record the constraint "closer must be after other".
+                         * This relation becomes an obligation to maintain after
+                         * every change that affects the ordering.
                          */
                         if (relation_count >= relation_capacity) {
                             int new_cap = relation_capacity * 2;
@@ -2529,7 +2527,7 @@ static double segs_intersect_tol_px = 1.0;
  *    - Guard against near-parallel segments using a small epsilon on the
  *      determinant (fabs(denom) < 1e-12) to avoid numerical instability.
  *
- * 3) Proximity filtering (tolérance en pixels) :
+ * 3) Proximity filtering (pixel tolerance):
  *    - We consider a global tolerance `segs_intersect_tol_px` (in pixels).
  *    - If the computed intersection point lies within `tol` of any of the 4
  *      segment endpoints, we treat the intersection as spurious and return 0.
@@ -2842,28 +2840,28 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
 /*
  * projected_polygons_overlap(model, f1, f2)
  * -----------------------------------------
- * Détermine si les projections 2D des faces `f1` et `f2` se recouvrent (le simple contact = NON-recouvrement).
- * La décision est prise par une suite de tests de coût croissant afin d'être conservatif et rapide.
+ * Determines whether the 2D projections of faces `f1` and `f2` overlap (simple contact = NO overlap).
+ * The decision is made by a sequence of increasingly expensive tests to remain conservative and fast.
  *
- * Étapes (dans l'ordre) :
- *  1) Rejet rapide par AABB : si les boîtes entières sont disjointes ou seulement en contact -> NON-overlap.
- *  2) Règle d'acceptation précoce (heuristique) : si une arête d'un polygone présente **≥ 2** intersections propres
- *     avec l'autre polygone (entrée + sortie), on accepte immédiatement (recouvrement certain pour cette arête).
- *     Cette règle vise à éviter le clipping coûteux dans les cas évidents. Attention : le résultat dépend du
- *     comportement de `segs_intersect_int` (et de sa tolérance interne), donc la tolérance peut affecter ce test.
- *  3) Vérification arête‑contre‑arête (intersection propre) : pour chaque paire d'arêtes, AABB quick-reject puis
- *     test d'intersection entier ; une intersection propre marque la paire comme *candidate* (on n'accepte pas
- *     immédiatement mais on continue avec les tests d'échantillonnage et de clipping).
- *  4) Tests de contenance : vérifier si un sommet de l'un est strictement à l'intérieur de l'autre (points sur bord
- *     comptés comme extérieurs).
- *  5) Cas spécial : polygones identiques (mêmes séquences de sommets) sont considérés comme recouvrant.
- *  6) Gestion des candidats et échantillonnage : calculer la boîte d'intersection entière et tenter des échantillons
- *     rapides (centre puis grille 3×3) pour acceptation rapide.
- *  7) Si l'échantillonnage échoue, recours au clipping exact (Sutherland–Hodgman) dans les deux sens (f1→f2 et f2→f1).
- *  8) Test de validité sur l'aire de clipping : n'accepter que si aire >= MIN_INTERSECTION_AREA_PIXELS et <= aire bbox (+eps).
+ * Steps (in order):
+ *  1) Fast AABB rejection: if the whole boxes are disjoint or only touching -> NO overlap.
+ *  2) Early acceptance rule (heuristic): if an edge of one polygon has **≥ 2** proper intersections
+ *     with the other polygon (entry + exit), accept immediately (certain overlap for that edge).
+ *     This rule avoids expensive clipping in obvious cases. Note: the result depends on
+ *     `segs_intersect_int` behaviour (and its internal tolerance), so tolerance can affect this test.
+ *  3) Edge-to-edge check (proper intersection): for each edge pair, AABB quick-reject then
+ *     full intersection test; a proper intersection marks the pair as a *candidate* (do not accept
+ *     immediately but continue with sampling and clipping tests).
+ *  4) Containment tests: check whether a vertex of one polygon is strictly inside the other
+ *     (boundary points count as outside).
+ *  5) Special case: identical polygons (same vertex sequence) are considered overlapping.
+ *  6) Candidate handling and sampling: compute the full intersection bbox and try quick samples
+ *     (center then 3×3 grid) for fast acceptance.
+ *  7) If sampling fails, fall back to exact clipping (Sutherland–Hodgman) in both directions (f1→f2 and f2→f1).
+ *  8) Clipping area validity test: accept only if area >= MIN_INTERSECTION_AREA_PIXELS and <= bbox area (+eps).
  *
- * Lorsqu'un résultat de clipping est valide dans les deux sens, on préfère (f1 clipped by f2) pour conserver la sémantique
- * Python. Les hooks de débogage impriment des détails sur le clipping et les centroïdes quand activés.
+ * When a clipping result is valid in both directions, prefer (f1 clipped by f2) to preserve Python semantics.
+ * Debug hooks print clipping and centroid details when enabled.
  */
 segment "projected_polygons_overlap";
 static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
@@ -9256,12 +9254,12 @@ void SetColor(int palette_num, int color_index,
     /* Chaque palette = 16 couleurs × 2 octets = 32 octets */
     offset = (long)palette_num * 32L + (long)color_index * 2L;
     
-    /* Encoder R, G, B en nibbles (0-15 chacun) */
+    /* Encode R, G, B into nibbles (0-15 each) */
     color_word = ((unsigned int)r << 8) | 
                  ((unsigned int)g << 4) | 
                  (unsigned int)b;
     
-    /* Écrire dans la RAM vidéo (bank $E1) */
+    /* Write into video RAM (bank $E1) */
     *((unsigned int *)(0xE19E00L + offset)) = color_word;
 }
 
