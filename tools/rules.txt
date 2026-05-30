@@ -1,0 +1,9 @@
+Ne jamais me proposer un commit/push. C'est moi qui te demanderai.
+Toujours me dire ce que tu vas faire avant de modfier le code, avoir mon accord.
+
+Si tu dois créer un fichier, n'utilise pas de caractère _ et dans le nom du fichier et ce nom ne doit pas excéder 15 caractères.
+
+Me parler en français.
+
+PAr contre, les messages des commit sont en anglais.
+

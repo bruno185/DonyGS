@@ -5112,20 +5112,20 @@ static void inspect_face_pair_ui(Model3D* model) {
         }
 
         /* Polygons overlap indicator at bottom (graphical only) */
-        MoveTo(3, 198);
+        MoveTo(3, 188);
         if (r.poly_overlap) {
             printf("f%d overlaps f%d", f1, f2);
             /* Decide which face is in front with priority: QD -> SH -> BBOX */
-            if (r.qd_raycast == 1) printf("  f%d in front", f1);
-            else if (r.qd_raycast == 2) printf(" - f%d in front", f2);
-            else if (r.sh_raycast == 1) printf(" - f%d in front", f1);
-            else if (r.sh_raycast == 2) printf(" - f%d in front", f2);
-            else if (r.bbox_raycast == 1) printf(" - f%d in front", f1);
-            else if (r.bbox_raycast == 2) printf(" - f%d in front", f2);
+            if (r.qd_raycast == 1) printf(",  f%d in front", f1);
+            else if (r.qd_raycast == 2) printf(", f%d in front", f2);
+            else if (r.sh_raycast == 1) printf(", f%d in front", f1);
+            else if (r.sh_raycast == 2) printf(", f%d in front", f2);
+            else if (r.bbox_raycast == 1) printf(", f%d in front", f1);
+            else if (r.bbox_raycast == 2) printf(", f%d in front", f2);
         } else {
             printf("f%d do not overlap f%d", f1, f2);
         }
-        printf(" (Arrows to nav.)");
+        printf("\nArrows: nav. SPACE: text results, ESC: exit");
 
 
         /* Wait for key (same inline read used elsewhere) */
