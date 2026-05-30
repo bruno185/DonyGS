@@ -3761,7 +3761,7 @@ void plane_before_autotest(Model3D* model) {
             autopair_f1 = f1;
             autopair_f2 = f2;
             pair_plane_before_debug_quiet = 1;
-            int debug_res = pair_plane_before_debug_fixed(model, f1, f2);
+            int debug_res = pair_plane_geometric_tests(model, f1, f2);
             pair_plane_before_debug_quiet = 0;
             autopair_f1 = autopair_f2 = -1;
 

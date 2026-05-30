@@ -363,7 +363,7 @@ Ci‑dessous un tableau récapitulatif des touches les plus utiles et des **fonc
 | `J` | Jitter rendu | `jitter` toggle |
 | `K` | Édition angles/distance | `getObserverParams` |
 | `D` / `S` | Inspecter faces avant / après | `inspect_faces_before` / `inspect_faces_after` |
-| `M` | Débogage `pair_plane_before` | `pair_plane_before_debug_fixed` |
+| `M` | Débogage `pair_plane_before` | `pair_plane_geometric_tests` |
 | `F` | Export CSV debug | `dumpFaceEquationsCSV` + `dumpFace2DCoordinates` + `dumpSortedFaceIndices` |
 | `N` | Charger nouveau modèle | `destroyModel3D` + `loadModel3D` |
 | `H` | Aide paginée | `show_help_pager` |

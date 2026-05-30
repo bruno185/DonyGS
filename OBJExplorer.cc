@@ -3862,7 +3862,7 @@ static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
             PDBG("invalid input\n"); PKEYP(); return 0;
         }
         int c; while ((c = getchar()) != '\n' && c != EOF) ;
-        PDBG("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
+        PDBG("\n PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
     }
 
     // Use cached plane normals and d terms computed in calculateFaceDepths
@@ -4002,7 +4002,7 @@ static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
 }
 
 
-/* pair_plane_before_debug_fixed
+/* pair_plane_geometric_tests
  * --------------------------------
  * Fixed-point debug wrapper for the normal `pair_plane_before()` ordering test.
  *
@@ -4033,10 +4033,10 @@ static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
  * - It prints per-vertex values and pauses via `PKEYP()` so the developer can inspect
  *   intermediate results.
  */
-static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
+static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    int test1passed, test2passed, test3passed, test4passed = 0;
+    int test1state = 0, test2state = 0, test3state = 0, test4state = 0; /* 0=inconclusive, 1=passed, -1=failed */
     int c;
 
     if (f1 == -1 && f2 == -1) {
@@ -4052,7 +4052,7 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
         }
         while ((c = getchar()) != '\n' && c != EOF) ;
     }
-    printf("PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
+    printf("\n=== Geometric test (using plane equations) comparing %d vs %d ===\n", f1, f2);
 
     // Use cached plane normals and d terms computed in calculateFaceDepths
     int n1 = faces->vertex_count[f1];
@@ -4096,8 +4096,8 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
         if (epsf < 0.01) epsf = 0.01;
         epsilon = FLOAT_TO_FIXED((float)epsf);
         long t1 = GetTick();
-        PDBG("plane_norm epsilon = %f (fixed %ld) n1=%f n2=%f ticks=%ld\n",
-               epsf, (long)epsilon, norm1, norm2, t1 - t0);
+        PDBG("Epsilon (calculated from plane normals) = %f n1=%f n2=%f ticks=%ld\n",
+               epsf, norm1, norm2, t1 - t0);
     }
 
     int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
@@ -4122,8 +4122,12 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
     if (d1 > (Fixed64)epsilon) obs_side1 = 1; 
     else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
-    else goto skipT4_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    else {
+        test1state = 0;
+        goto skipT1_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    }
     all_same_side = 1;
+    int test1_effective_count = 0;
 
     printf("Observer side (obs_side1) = %d\n", obs_side1);
     printf("If face %d entirely on the same observer-side of %d's plane, then\n", f2, f1);
@@ -4158,6 +4162,7 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
                 continue; // ignore vertices that are effectively on the plane
             }
 
+            test1_effective_count++;
             if (obs_side1 == side) {
                 printf("==> OK\n");
             }            
@@ -4166,6 +4171,7 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
                 /* if a vertex of f2 is on the opposite side of f1's plane than the observer,
                  * Test #1 cannot conclude the ordering; continue to later tests. */
                 all_same_side = 0;
+                test1state = -1;
                 printf("==> KO\n");
                 PDBG("Test #1 failed for faces %d and %d\n", f1, f2);
                 PKEYP();
@@ -4173,14 +4179,24 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
             }
     }
     // PDBG("FOR loop stop\n");
-    // test 1 passed
-    if (all_same_side) { 
+    if (test1state != -1) {
+        if (test1_effective_count == 0) {
+            test1state = 0;
+        } else if (all_same_side) {
+            test1state = 1;
+        } else {
+            test1state = -1;
+        }
+    }
+    if (test1state == 1) {
         PDBG("Test #1 passed for Faces %d and %d\n", f1, f2);
-        test1passed = 1;
+        PKEYP();
+    } else if (test1state == 0) {
+        PDBG("Test #1 inconclusive (all vertices ignored or observer on plane)\n");
         PKEYP();
     }
 
-    skipT4_debug:
+    skipT1_debug:
 
     // ********************* TEST #2 ********************
     // Test #2: Is f1 entirely on the opposite side of f2's plane relative to the observer?
@@ -4194,12 +4210,16 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     obs_side2 = 0;
     if (d2 > (Fixed64)epsilon) obs_side2 = 1;
     else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
-    if (obs_side2 == 0) goto skipT5_debug;
+    if (obs_side2 == 0) {
+        test2state = 0;
+        goto skipT2_debug;
+    }
     all_opposite_side = 1;
+    int test2_effective_count = 0;
 
     printf("Observer side = %d\n", obs_side2);
-    PDBG("If face %d is entirely on the opposite side of %d's plane,\n", f1, f2);
-    PDBG("==> test_values for all vertices of face %d have opposite sign to obs. side.\n", f1);
+    PDBG("If face %d is entirely on the opposite side of %d's plane, then\n", f1, f2);
+    PDBG("test_values for all vertices of face %d have opposite sign to obs. side.\n", f1);
 
     for (k = 0; k < n1; k++) {
         int v = faces->vertex_indices_buffer[offset1+k] - 1;
@@ -4226,12 +4246,14 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
             continue; // ignore vertices that are effectively on the plane
         }
 
+        test2_effective_count++;
         if (obs_side2 != side) {
             printf("==> OK\n");
         }
          else {
             printf("==> KO\n");
             all_opposite_side = 0;
+            test2state = -1;
             PDBG("Test #2 failed for faces %d and %d\n", f1, f2);
             PKEYP();
             break;
@@ -4239,12 +4261,23 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     }
     // PDBG("FOR loop stop\n");
 
-    if (all_opposite_side) {
+    if (test2state != -1) {
+        if (test2_effective_count == 0) {
+            test2state = 0;
+        } else if (all_opposite_side) {
+            test2state = 1;
+        } else {
+            test2state = -1;
+        }
+    }
+    if (test2state == 1) {
         PDBG("Test #2 passed for Faces %d and %d\n", f1, f2);
-        test2passed = 1;
+        PKEYP();
+    } else if (test2state == 0) {
+        PDBG("Test #2 inconclusive (all vertices ignored or observer on plane)\n");
         PKEYP();
     }
-    skipT5_debug:
+    skipT2_debug:
 
     // ********************* TEST #3 ********************
     // Test #3: Copy of Test #1 with faces swapped (check if f1 is in front of f2).
@@ -4252,8 +4285,12 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     obs_side1 = 0;
     if (d2 > (Fixed64)epsilon) obs_side1 = 1;
     else if (d2 < -(Fixed64)epsilon) obs_side1 = -1;
-    else goto skipT5_debug;
+    else {
+        test3state = 0;
+        goto skipT3_debug;
+    }
     all_same_side = 1;
+    int test3_effective_count = 0;
 
     printf("Observer side (obs_side1) = %d\n", obs_side1);
     printf("If face %d entirely on the same observer-side of %d's plane, then\n", f1, f2);
@@ -4275,6 +4312,7 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
             continue;
         }
 
+        test3_effective_count++;
         if (obs_side1 == side) {
             printf("==> OK\n");
         }
@@ -4282,17 +4320,31 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
         if (obs_side1 != side) {
             printf("==> KO\n");
             all_same_side = 0;
+            test3state = -1;
             PDBG("Test #3 failed for faces %d and %d\n", f1, f2);
             PKEYP();
             break;
         }
     }
 
-    if (all_same_side) {
+    if (test3state != -1) {
+        if (test3_effective_count == 0) {
+            test3state = 0;
+        } else if (all_same_side) {
+            test3state = 1;
+        } else {
+            test3state = -1;
+        }
+    }
+    if (test3state == 1) {
         PDBG("Test #3 passed for Faces %d and %d\n", f1, f2);
-        test3passed = 1;
+        PKEYP();
+    } else if (test3state == 0) {
+        PDBG("Test #3 inconclusive (all vertices ignored or observer on plane)\n");
         PKEYP();
     }
+
+    skipT3_debug:
 
     // ********************* TEST #4 ********************
     // Test #4: Copy of Test #2 with faces swapped (check if f2 is behind f1).
@@ -4300,8 +4352,12 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
     obs_side2 = 0;
     if (d1 > (Fixed64)epsilon) obs_side2 = 1;
     else if (d1 < -(Fixed64)epsilon) obs_side2 = -1;
-    if (obs_side2 == 0) goto skipT5_debug;
+    if (obs_side2 == 0) {
+        test4state = 0;
+        goto skipT4_debug;
+    }
     all_opposite_side = 1;
+    int test4_effective_count = 0;
 
     printf("Observer side = %d\n", obs_side2);
     PDBG("If face %d is entirely on the opposite side of %d's plane,\n", f2, f1);
@@ -4323,31 +4379,54 @@ static int pair_plane_before_debug_fixed(Model3D* model, int f1, int f2) {
             continue;
         }
 
+        test4_effective_count++;
         if (obs_side2 != side) {
             printf("==> OK\n");
         } else {
             printf("==> KO\n");
             all_opposite_side = 0;
+            test4state = -1;
             PDBG("Test #4 failed for faces %d and %d\n", f2, f1);
             PKEYP();
             break;
         }
     }
 
-    if (all_opposite_side) {
+    if (test4state != -1) {
+        if (test4_effective_count == 0) {
+            test4state = 0;
+        } else if (all_opposite_side) {
+            test4state = 1;
+        } else {
+            test4state = -1;
+        }
+    }
+    if (test4state == 1) {
         PDBG("Test #4 passed for Faces %d and %d\n", f2, f1);
-        test4passed = 1;
+        PKEYP();
+    } else if (test4state == 0) {
+        PDBG("Test #4 inconclusive (all vertices ignored or observer on plane)\n");
         PKEYP();
     }
 
+    skipT4_debug:
+
 
     printf("\n**** SUMMARY for faces %d and %d: ****\n", f1, f2);
-    if (test1passed==1) printf("Test #1: face %d in front of %d => OK\n", f2, f1); else printf("Test #1: inconclusive or failed\n");
-    if (test2passed==1) printf("Test #2: face %d behind %d => OK\n", f1, f2); else printf("Test #2: inconclusive or failed\n");
-    if (test3passed==1) printf("Test #3: face %d in front of %d => OK\n", f1, f2); else printf("Test #3: inconclusive or failed\n");
-    if (test4passed==1) printf("Test #4: face %d behind %d => OK\n", f2, f1); else printf("Test #4: inconclusive or failed\n");
+    if (test1state == 1) printf("Test #1: face %d in front of %d => OK\n", f2, f1);
+    else if (test1state == -1) printf("Test #1: failed\n");
+    else printf("Test #1: inconclusive\n");
+    if (test2state == 1) printf("Test #2: face %d behind %d => OK\n", f1, f2);
+    else if (test2state == -1) printf("Test #2: failed\n");
+    else printf("Test #2: inconclusive\n");
+    if (test3state == 1) printf("Test #3: face %d in front of %d => OK\n", f1, f2);
+    else if (test3state == -1) printf("Test #3: failed\n");
+    else printf("Test #3: inconclusive\n");
+    if (test4state == 1) printf("Test #4: face %d behind %d => OK\n", f2, f1);
+    else if (test4state == -1) printf("Test #4: failed\n");
+    else printf("Test #4: inconclusive\n");
     keypress();
-    if (test1passed || test2passed) return 1; else return 0;
+    if (test1state == 1 || test2state == 1) return 1; else return 0;
 }
 
 static int pair_plane_before(Model3D* model, int f1, int f2) {
@@ -5228,14 +5307,10 @@ static void inspect_face_pair_ui(Model3D* model) {
             }
 
             if (cmd == 'G' || cmd == 'g') {
-
-                pair_plane_before_debug_fixed(model, f1, f2);
+                pair_plane_geometric_tests(model, f1, f2);
             }
-
-
-
-            continue; /* redraw graphical inspector */
-        }
+                continue; /* redraw graphical inspector */
+            }
 
         /* restore and loop to redraw with updated IDs */
         framePolyOnly = old_frame;
@@ -9673,7 +9748,7 @@ segment "code22";
             case 109: // 'm'
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 // pair_plane_before_debug(model, 0, 0);
-                pair_plane_before_debug_fixed(model, -1, -1);
+                pair_plane_geometric_tests(model, -1, -1); // force type pair numbers
                 goto loopReDraw;
 
 
