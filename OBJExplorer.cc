@@ -7794,6 +7794,13 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
     const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
     const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
+
+    // XXX
+    /* Matrice de rotation précalculée - 9 coefficients */
+    Fixed32 M00, M01, M02;
+    Fixed32 M10, M11, M12;
+    Fixed32 M20, M21, M22;
+
     // Use global projection scale, which is synced with auto-fit when applied
     Fixed32 scale = s_global_proj_scale_fixed;
     const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
@@ -7810,29 +7817,59 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     int vcount = vtx->vertex_count;
 
     long t_loop_start = GetTick();
+    // XXX
+    M20 = FIXED_NEG(cos_h_cos_v);
+    M21 = FIXED_NEG(sin_h_cos_v);
+    M22 = FIXED_NEG(sin_v);
+
+    if (params->angle_w == 0) {
+        M00 = FIXED_NEG(sin_h);
+        M01 = cos_h;
+        M02 = 0;
+        M10 = FIXED_NEG(cos_h_sin_v);
+        M11 = FIXED_NEG(sin_h_sin_v);
+        M12 = cos_v;
+    } else {
+        M00 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(cos_w), sin_h),
+                        FIXED_MUL_64(sin_w, cos_h_sin_v));
+        M01 = FIXED_SUB(FIXED_MUL_64(cos_w, cos_h),
+                        FIXED_MUL_64(sin_w, FIXED_NEG(sin_h_sin_v)));
+        M02 = FIXED_MUL_64(FIXED_NEG(sin_w), cos_v);
+        M10 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(sin_w), sin_h),
+                        FIXED_MUL_64(FIXED_NEG(cos_w), cos_h_sin_v));
+        M11 = FIXED_ADD(FIXED_MUL_64(sin_w, cos_h),
+                        FIXED_MUL_64(FIXED_NEG(cos_w), sin_h_sin_v));
+        M12 = FIXED_MUL_64(cos_w, cos_v);
+    }
+
+
     for (i = 0; i < vcount; i++) {
         x = x_arr[i];
         y = y_arr[i];
         z = z_arr[i];
-        // 3D transformation in pure Fixed32 (64-bit multiply)
-        Fixed32 term1 = FIXED_MUL_64(x, cos_h_cos_v);
-        Fixed32 term2 = FIXED_MUL_64(y, sin_h_cos_v);
-        Fixed32 term3 = FIXED_MUL_64(z, sin_v);
-        zo = FIXED_ADD(FIXED_SUB(FIXED_SUB(FIXED_NEG(term1), term2), term3), distance);
+
+        zo = FIXED_ADD(
+                FIXED_ADD(
+                    FIXED_ADD(FIXED_MUL_64(M20, x),
+                            FIXED_MUL_64(M21, y)),
+                    FIXED_MUL_64(M22, z)),
+                distance);
+
         if (zo > 0) {
-            Fixed32 raw_xo = FIXED_ADD(FIXED_NEG(FIXED_MUL_64(x, sin_h)), FIXED_MUL_64(y, cos_h));
-            Fixed32 raw_yo = FIXED_ADD(FIXED_SUB(FIXED_NEG(FIXED_MUL_64(x, cos_h_sin_v)), FIXED_MUL_64(y, sin_h_sin_v)), FIXED_MUL_64(z, cos_v));
-            xo = FIXED_SUB(FIXED_MUL_64(cos_w, raw_xo), FIXED_MUL_64(sin_w, raw_yo));
-            yo = FIXED_ADD(FIXED_MUL_64(sin_w, raw_xo), FIXED_MUL_64(cos_w, raw_yo));
+            xo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M00, x),
+                                    FIXED_MUL_64(M01, y)),
+                        FIXED_MUL_64(M02, z));
+            yo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M10, x),
+                                    FIXED_MUL_64(M11, y)),
+                        FIXED_MUL_64(M12, z));
             zo_arr[i] = zo;
             xo_arr[i] = xo;
             yo_arr[i] = yo;
             inv_zo = FIXED_DIV_64(scale, zo);
-            x2d_temp = FIXED_ADD(FIXED_MUL_64(xo, inv_zo), centre_x_f);
-            y2d_temp = FIXED_SUB(centre_y_f, FIXED_MUL_64(yo, inv_zo));
-            x2d_arr[i] = FIXED_ROUND_TO_INT(x2d_temp);
-            y2d_arr[i] = FIXED_ROUND_TO_INT(y2d_temp);
-
+            x2d_arr[i] = FIXED_ROUND_TO_INT(
+                            FIXED_ADD(FIXED_MUL_64(xo, inv_zo), centre_x_f));
+            y2d_arr[i] = FIXED_ROUND_TO_INT(
+                            FIXED_SUB(centre_y_f, FIXED_MUL_64(yo, inv_zo)));
         } else {
             zo_arr[i] = zo;
             xo_arr[i] = 0;
@@ -7841,6 +7878,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
             y2d_arr[i] = -1;
         }
     }
+
     long t_loop_end = GetTick();
 
     // Face sorting after transformation
