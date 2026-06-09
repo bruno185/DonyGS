@@ -7772,6 +7772,8 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
  *  - The painter may only sort the visible faces when back-face culling is enabled. Culled
  *    faces are appended after visible faces to preserve index stability.
  *  - Timing instrumentation prints per-stage costs when not in PERFORMANCE_MODE.
+ *  - OPTIMISATION : pre calculate matrix coefficients and use direct table access 
+ *   for trig functions to avoid function call overhead. 100% Fixed32 loop with no conversions for maximum speed.
  */
 segment "code10";
 void processModelFast(Model3D* model, ObserverParams* params, const char* filename) {
@@ -8297,6 +8299,11 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
     int culled_count = 0; // diagnostic: number of faces culled by back-face test (observer-space)
     VertexArrays3D* vtx = &model->vertices;
     FaceArrays3D* face_arrays = &model->faces;
+
+    Fixed32 x1, y1, z1_p;
+    Fixed32 x2, y2, z2_p;
+    Fixed32 x3, y3, z3_p;
+    int got_plane_verts;
     
     for (i = 0; i < face_count; i++) {
         Fixed32 z_min = FLOAT_TO_FIXED(9999.0);  // Initialize to very large value (closest)
@@ -8308,13 +8315,18 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
         
         // Access indices from the packed buffer using the offset
         int offset = face_arrays->vertex_indices_ptr[i];
+        got_plane_verts = 0;
+        x1=0; y1=0; z1_p=0;
+        x2=0; y2=0; z2_p=0;
+        x3=0; y3=0; z3_p=0;
+
         for (j = 0; j < n; j++) {
             int vertex_idx = face_arrays->vertex_indices_buffer[offset + j] - 1;
             if (vertex_idx >= 0) {
                 Fixed32 zo = vtx->zo[vertex_idx];
-                if (zo < 0) display_flag = 0; // strictly behind camera
-                if (zo < z_min) z_min = zo;  // Find minimum (closest)
-                if (zo > z_max) z_max = zo;  // Find maximum (farthest)
+                if (zo < 0) display_flag = 0;
+                if (zo < z_min) z_min = zo;
+                if (zo > z_max) z_max = zo;
                 sum += zo;
                 int x2d = vtx->x2d[vertex_idx];
                 int y2d = vtx->y2d[vertex_idx];
@@ -8322,6 +8334,22 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
                 if (x2d > maxx) maxx = x2d;
                 if (y2d < miny) miny = y2d;
                 if (y2d > maxy) maxy = y2d;
+                if (got_plane_verts == 0) {
+                    x1 = vtx->xo[vertex_idx];
+                    y1 = vtx->yo[vertex_idx];
+                    z1_p = zo;
+                    got_plane_verts = 1;
+                } else if (got_plane_verts == 1) {
+                    x2 = vtx->xo[vertex_idx];
+                    y2 = vtx->yo[vertex_idx];
+                    z2_p = zo;
+                    got_plane_verts = 2;
+                } else if (got_plane_verts == 2) {
+                    x3 = vtx->xo[vertex_idx];
+                    y3 = vtx->yo[vertex_idx];
+                    z3_p = zo;
+                    got_plane_verts = 3;
+                }
             }
         }
         // Compute plane coefficients (a,b,c,d) using only the first 3 vertices (observer space)
@@ -8341,54 +8369,32 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
                 face_shade_color[i] = COL_FILL_DEFAULT;
             }
         } else {
-            int idx0 = face_arrays->vertex_indices_buffer[offset] - 1;
-            int idx1 = face_arrays->vertex_indices_buffer[offset + 1] - 1;
-            int idx2 = face_arrays->vertex_indices_buffer[offset + 2] - 1;
-            if (idx0 < 0 || idx1 < 0 || idx2 < 0) {
-                face_arrays->plane_a[i] = 0;
-                face_arrays->plane_b[i] = 0;
-                face_arrays->plane_c[i] = 0;
-                face_arrays->plane_d[i] = 0;
-                if (shaded_by_orientation) {
-                    face_shade_color[i] = COL_FILL_DEFAULT;
-                }
-            } else {
-                Fixed32 x1 = vtx->xo[idx0], y1 = vtx->yo[idx0], z1 = vtx->zo[idx0];
-                Fixed32 x2 = vtx->xo[idx1], y2 = vtx->yo[idx1], z2 = vtx->zo[idx1];
-                Fixed32 x3 = vtx->xo[idx2], y3 = vtx->yo[idx2], z3 = vtx->zo[idx2];
+            if (got_plane_verts >= 3) {
+                Fixed32 dz23 = FIXED_SUB(z2_p, z3_p);
+                Fixed32 dz31 = FIXED_SUB(z3_p, z1_p);
+                Fixed32 dz12 = FIXED_SUB(z1_p, z2_p);
+                Fixed32 dy23 = FIXED_SUB(y2, y3);
+                Fixed32 dy13 = FIXED_SUB(y1, y3);
+                Fixed32 dy12 = FIXED_SUB(y1, y2);
 
-                // Compute a = y1*(z2-z3) + y2*(z3-z1) + y3*(z1-z2) in Fixed64
-                Fixed64 term_a1 = (((Fixed64)y1 * (Fixed64)FIXED_SUB(z2, z3)) >> FIXED_SHIFT);
-                Fixed64 term_a2 = (((Fixed64)y2 * (Fixed64)FIXED_SUB(z3, z1)) >> FIXED_SHIFT);
-                Fixed64 term_a3 = (((Fixed64)y3 * (Fixed64)FIXED_SUB(z1, z2)) >> FIXED_SHIFT);
-                a64 = FIXED_ADD(FIXED_ADD(term_a1, term_a2), term_a3);
+                a64 = (((Fixed64)y1 * dz23) + ((Fixed64)y2 * dz31) + ((Fixed64)y3 * dz12)) >> FIXED_SHIFT;
+                b64 = (-(Fixed64)x1 * dz23 + (Fixed64)x2 * FIXED_SUB(z1_p, z3_p) - (Fixed64)x3 * dz12) >> FIXED_SHIFT;
+                c64 = (((Fixed64)x1 * dy23) - ((Fixed64)x2 * dy13) + ((Fixed64)x3 * dy12)) >> FIXED_SHIFT;
 
-                // b = -x1*(z2-z3) + x2*(z1-z3) - x3*(z1-z2)
-                Fixed64 term_b1 = (((Fixed64)x1 * (Fixed64)FIXED_SUB(z2, z3)) >> FIXED_SHIFT);
-                Fixed64 term_b2 = (((Fixed64)x2 * (Fixed64)FIXED_SUB(z1, z3)) >> FIXED_SHIFT);
-                Fixed64 term_b3 = (((Fixed64)x3 * (Fixed64)FIXED_SUB(z1, z2)) >> FIXED_SHIFT);
-                // b = -term_b1 + term_b2 - term_b3
-                b64 = FIXED_SUB(FIXED_ADD(FIXED_NEG(term_b1), term_b2), term_b3);
-
-                // c = x1*(y2-y3) - x2*(y1-y3) + x3*(y1-y2)
-                Fixed64 term_c1 = (((Fixed64)x1 * (Fixed64)FIXED_SUB(y2, y3)) >> FIXED_SHIFT);
-                Fixed64 term_c2 = (((Fixed64)x2 * (Fixed64)FIXED_SUB(y1, y3)) >> FIXED_SHIFT);
-                Fixed64 term_c3 = (((Fixed64)x3 * (Fixed64)FIXED_SUB(y1, y2)) >> FIXED_SHIFT);
-                c64 = FIXED_ADD(FIXED_SUB(term_c1, term_c2), term_c3);
-
-                // d = -x1*(y2*z3 - y3*z2) + x2*(y1*z3 - y3*z1) - x3*(y1*z2 - y2*z1)
-                Fixed64 t1 = ((((Fixed64)y2 * (Fixed64)z3) - ((Fixed64)y3 * (Fixed64)z2)) >> FIXED_SHIFT);
-                Fixed64 t2 = ((((Fixed64)y1 * (Fixed64)z3) - ((Fixed64)y3 * (Fixed64)z1)) >> FIXED_SHIFT);
-                Fixed64 t3 = ((((Fixed64)y1 * (Fixed64)z2) - ((Fixed64)y2 * (Fixed64)z1)) >> FIXED_SHIFT);
-                Fixed64 term_d1 = (((Fixed64)x1 * t1) >> FIXED_SHIFT);
-                Fixed64 term_d2 = (((Fixed64)x2 * t2) >> FIXED_SHIFT);
-                Fixed64 term_d3 = (((Fixed64)x3 * t3) >> FIXED_SHIFT);
-                d64 = FIXED_SUB(FIXED_ADD(FIXED_NEG(term_d1), term_d2), term_d3);
+                Fixed64 t1 = (((Fixed64)y2 * z3_p) - ((Fixed64)y3 * z2_p)) >> FIXED_SHIFT;
+                Fixed64 t2 = (((Fixed64)y1 * z3_p) - ((Fixed64)y3 * z1_p)) >> FIXED_SHIFT;
+                Fixed64 t3 = (((Fixed64)y1 * z2_p) - ((Fixed64)y2 * z1_p)) >> FIXED_SHIFT;
+                d64 = (-(Fixed64)x1 * t1 + (Fixed64)x2 * t2 - (Fixed64)x3 * t3) >> FIXED_SHIFT;
 
                 face_arrays->plane_a[i] = a64;
                 face_arrays->plane_b[i] = b64;
                 face_arrays->plane_c[i] = c64;
                 face_arrays->plane_d[i] = d64;
+
+                // face_arrays->plane_a[i] = a64;
+                // face_arrays->plane_b[i] = b64;
+                // face_arrays->plane_c[i] = c64;
+                // face_arrays->plane_d[i] = d64;
 
                 // Optional back-face culling in observer-space: if the plane D term is <= 0,
                 // the plane faces away from the observer (origin), so cull the face when enabled.
@@ -8424,7 +8430,9 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
         face_arrays->z_max[i] = z_max;  // Store maximum depth for this face (farthest)
         face_arrays->display_flag[i] = display_flag;
         if (n > 0) {
-            face_arrays->z_mean[i] = sum / n;
+            if (n == 4)      face_arrays->z_mean[i] = sum >> 2;
+            else if (n == 3) face_arrays->z_mean[i] = sum / 3;
+            else             face_arrays->z_mean[i] = sum / n;
             face_arrays->minx[i] = minx;
             face_arrays->maxx[i] = maxx;
             face_arrays->miny[i] = miny;
