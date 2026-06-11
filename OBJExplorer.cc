@@ -999,7 +999,7 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
 }
 
 
-void painter_geo(Model3D* model, int face_count) {
+void painter_geoV1(Model3D* model, int face_count) {
     // ...existing code...
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -1009,7 +1009,7 @@ void painter_geo(Model3D* model, int face_count) {
     if (!face_zmean) return; // safety
 
 
-    printf("Running painter_geo with %d faces (cull_back_faces=%d)...\n", face_count, cull_back_faces);
+    printf("Running painter_geoV1 with %d faces (cull_back_faces=%d)...\n", face_count, cull_back_faces);
 
     // delegate initial ordering to the fast variant which already implements
     // visible-face filtering and the stable z-mean sort.
@@ -1059,9 +1059,18 @@ void painter_geo(Model3D* model, int face_count) {
     }
     inconclusive_pairs_count = 0;
 
+    int pass = 0;
+    int max_passes = visible_count * 2; // heuristic limit to prevent infinite loops in pathological cases
     // Bubble-like correction passes (iterate until stable)
     do {
         swapped = 0;
+        swapped = 0;
+        pass++;
+
+        if (pass > max_passes) {
+            printf("WARNING: painter_geo cycle detected, stopping at pass %d\n", pass);
+            break;
+        }
    
         // Iterate consecutive pairs (only over visible faces if culling is enabled)
         for (i = 0; i < visible_count-1; i++) {
@@ -1190,6 +1199,173 @@ void painter_geo(Model3D* model, int face_count) {
 }
 
 
+
+// XXX
+// Hash set pour lookup O(1)
+typedef struct {
+    int face1;
+    int face2;
+    int8_t relation;  // 1 = f1 avant f2, -1 = f2 avant f1
+    int8_t occupied;  // 1 = slot utilisé, 0 = vide
+} PairCacheEntry;
+
+typedef struct {
+    PairCacheEntry* slots;
+    int capacity;
+} PairCache;
+
+static PairCache* pair_cache_create(int capacity) {
+    PairCache* c = (PairCache*)malloc(sizeof(PairCache));
+    if (!c) return NULL;
+    c->capacity = capacity;
+    c->slots = (PairCacheEntry*)calloc(capacity, sizeof(PairCacheEntry));
+    if (!c->slots) { free(c); return NULL; }
+    return c;
+}
+
+static void pair_cache_destroy(PairCache* c) {
+    if (c) { free(c->slots); free(c); }
+}
+
+static int pair_cache_slot(PairCache* c, int f1, int f2) {
+    // Clé canonique indépendante de l'ordre
+    int a = (f1 < f2) ? f1 : f2;
+    int b = (f1 < f2) ? f2 : f1;
+    unsigned int h = (unsigned int)(a * 2654435761u ^ b * 2246822519u);
+    return (int)(h % (unsigned int)c->capacity);
+}
+
+static int pair_cache_find(PairCache* c, int f1, int f2) {
+    int slot, i;
+    if (!c) return 0;
+    slot = pair_cache_slot(c, f1, f2);
+    for (i = 0; i < 8; i++) {
+        int pos = (slot + i) % c->capacity;
+        PairCacheEntry* e = &c->slots[pos];
+        if (!e->occupied) return 0;  // slot vide -> paire inconnue
+        if ((e->face1 == f1 && e->face2 == f2)) return  e->relation;
+        if ((e->face1 == f2 && e->face2 == f1)) return -e->relation;
+    }
+    return 0;
+}
+
+static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation) {
+    int slot, i;
+    if (!c) return;
+    slot = pair_cache_slot(c, f1, f2);
+    for (i = 0; i < 8; i++) {
+        int pos = (slot + i) % c->capacity;
+        PairCacheEntry* e = &c->slots[pos];
+        if (!e->occupied ||
+            (e->face1 == f1 && e->face2 == f2) ||
+            (e->face1 == f2 && e->face2 == f1)) {
+            e->face1    = f1;
+            e->face2    = f2;
+            e->relation = relation;
+            e->occupied = 1;
+            return;
+        }
+    }
+}
+
+void painter_geoV2(Model3D* model, int face_count) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int i;
+
+    Fixed32* face_zmean = faces->z_mean;
+    if (!face_zmean) return;
+
+    printf("Running painter_geoV2 with %d faces (cull_back_faces=%d)...\n", face_count, cull_back_faces);
+
+    painter_newell_sancha_fast(model, face_count);
+
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i]) ++visible_count;
+        }
+    }
+
+    int swap_count = 0;
+    int swapped = 0;
+
+    /* Hash set pour lookup O(1) — remplace la liste lineaire ordered_pairs */
+    PairCache* cache = pair_cache_create(face_count * 16);
+
+    if (inconclusive_pairs) {
+        free(inconclusive_pairs);
+        inconclusive_pairs = NULL;
+    }
+    inconclusive_pairs_capacity = face_count * 4;
+    if (inconclusive_pairs_capacity > 0) {
+        inconclusive_pairs = (InconclusivePair*)malloc(inconclusive_pairs_capacity * sizeof(InconclusivePair));
+        if (!inconclusive_pairs) inconclusive_pairs_capacity = 0;
+    }
+    inconclusive_pairs_count = 0;
+
+    do {
+        swapped = 0;
+
+        for (i = 0; i < visible_count - 1; i++) {
+            int f1 = faces->sorted_face_indices[i];
+            int f2 = faces->sorted_face_indices[i+1];
+
+            /* Lookup O(1) au lieu de O(n) */
+            if (pair_cache_find(cache, f1, f2) != 0) continue;
+
+            {
+                int geo = geometric_face_relation(model, f1, f2);
+                if (geo == -1) continue;
+                if (geo == 1) goto do_swap;
+
+                int geo2 = geometric_face_relation(model, f2, f1);
+                if (geo2 == -1) goto do_swap;
+                if (geo2 == 1) continue;
+
+                if (projected_polygons_overlap(model, f1, f2)) {
+                    int rc = ray_cast_hierarchical(model, f1, f2);
+                    if (rc < 0) {
+                        goto do_swap;
+                    } else if (rc > 0) {
+                        pair_cache_insert(cache, f1, f2, 1);
+                        continue;
+                    }
+                }
+                /* inconclusive */
+                pair_cache_insert(cache, f2, f1, 1);
+                continue;
+            }
+
+            do_swap: {
+                int tmp = faces->sorted_face_indices[i];
+                faces->sorted_face_indices[i]   = faces->sorted_face_indices[i+1];
+                faces->sorted_face_indices[i+1] = tmp;
+                swapped = 1;
+                swap_count++;
+                pair_cache_insert(cache, f2, f1, 1);
+                goto endfor;
+            }
+
+            if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) {
+                inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
+                inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
+                inconclusive_pairs_count++;
+            }
+            pair_cache_insert(cache, f2, f1, 1);
+
+            endfor: ;
+        }
+
+    } while (swapped);
+
+    pair_cache_destroy(cache);
+
+    printf("Total swaps: %d\n", swap_count);
+}
+
+// XXXX
 void painter_newell_sancha(Model3D* model, int face_count) {
     // ...existing code...
     FaceArrays3D* faces = &model->faces;
@@ -1946,11 +2122,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
             if (faces->plane_d[bf] > 0) {
                 break;
             }
-
-            // /* It's abreak-face: log detailed info */
-            // printf(" %d",idx);
-            // // XXXX
-            // printf("\nface=%d", bf);
 
             total_logged++;
             int orig_pos = pos_of_face[bf];
@@ -7797,7 +7968,6 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
     const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
 
-    // XXX
     /* Matrice de rotation précalculée - 9 coefficients */
     Fixed32 M00, M01, M02;
     Fixed32 M10, M11, M12;
@@ -7819,7 +7989,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     int vcount = vtx->vertex_count;
 
     long t_loop_start = GetTick();
-    // XXX
+    
     M20 = FIXED_NEG(cos_h_cos_v);
     M21 = FIXED_NEG(sin_h_cos_v);
     M22 = FIXED_NEG(sin_v);
@@ -7909,7 +8079,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
         /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
         painter_correct(model, model->faces.face_count, 0);
     } else if (painter_mode == PAINTER_MODE_GEO) {
-        painter_geo(model, model->faces.face_count);
+        painter_geoV2(model, model->faces.face_count);
     } else if (painter_mode == PAINTER_MODE_CORRECTV2) {
         /* painter_correctV2: experimental face splitting version */
         painter_correctV2(model, model->faces.face_count, 0);
@@ -10004,6 +10174,14 @@ case 98:  // 'b'
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 inspect_face_pair_ui(model);
                 goto loopReDraw;
+
+             // letter 'U'
+            case 85:  // 'U' - toggle user-defined fill color mode (random if enabled)
+            case 117: // 'u'
+                printf("Painter geo V1: toggle geometry-only painter mode for testing\n");
+                painter_geoV1(model, model->faces.face_count);
+                goto loopReDraw;
+
 
             case 27:  // ESC - quit
                 goto end;
