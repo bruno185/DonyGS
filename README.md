@@ -99,15 +99,12 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 - Fixed32 (16.16) and Fixed64 (32.32) arithmetic throughout
 - Most robust for complex geometry
 
-#### GEO Mode (Key: `3`)
+#### GEO Mode (Key: `3`) — ⚠️ VERY SLOW
 - Geometry-only painter mode that uses plane-based ordering heuristics
-- Uses `painter_geo` rather than the full Newell/Sancha pairwise correction path
-- Recommended for certain pathological meshes where the V2 heuristic helps reduce inconclusive pairs
-
-#### FLOAT Mode (Key: `U`) — Archived
-- Archived: implementation moved to `chutier.txt`.
-- To re-enable, restore the implementation from `chutier.txt` and uncomment calls in `DONYGS.cc`.
-- Removed from active build by default.
+- Uses `painter_geoV2` with ray-casting for depth ordering
+- **WARNING**: This mode is significantly slower than other painters due to intensive geometric calculations
+- Recommended ONLY for small models or diagnostic purposes
+- Not suitable for interactive work on larger meshes
 
 #### CORRECT Mode (Key: `4`)
 - Extends NORMAL mode with local face reordering after separating faces into FRONT and BACK groups
@@ -226,8 +223,6 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `3` | GEO | Geometry-only mode with plane-based ordering heuristics |
 | `4` | CORRECT     | Advanced ordering correction |
 | `5` | CORRECT V2  | Experimental local correction (painter_correctV2) |
-
-> Note: `FLOAT` mode (Key: `U`) is archived — implementation moved to `chutier.txt` and is not part of the active numeric 1..5 painter mapping.
 
 #### Color Management
 | Key | Action | Description |
@@ -354,22 +349,22 @@ Ci‑dessous un tableau récapitulatif des touches les plus utiles et des **fonc
 
 | Touche | Action (concis) | Fonctions C impliquées (point d'entrée) |
 |--------|-----------------|-----------------------------------------|
-| `1`..`5` | Changer le mode de painter | modifie `painter_mode` → appelle ensuite `painter_newell_sancha_fast`, `painter_newell_sancha`, `painter_geo`, `painter_correct`, `painter_correctV2` selon le mode (note: `painter_newell_sancha_float` is archived in `chutier.txt`) |
+| `1`..`5` | Changer le mode de painter | modifie `painter_mode` → appelle ensuite `painter_newell_sancha_fast`, `painter_newell_sancha`, `painter_geo`, `painter_correct`, `painter_correctV2` selon le mode |
 | `A` / `Z` | Ajuster la distance caméra | modifie `params.distance` et recharge le rendu |
 | `E` / `R` / `T` / `Y` | Panoramique 2D | modifie `pan_dx` / `pan_dy` et redessine |
-| `B` | Basculer culling back-face | `cull_back_faces` + reprocessus modèle |
-| `P` | Mode fil de fer | `framePolyOnly` + redraw / reprocess |
-| `C` | Palette couleurs | `colorpalette` toggle |
-| `J` | Jitter rendu | `jitter` toggle |
-| `K` | Édition angles/distance | `getObserverParams` |
-| `D` / `S` | Inspecter faces avant / après | `inspect_faces_before` / `inspect_faces_after` |
-| `M` | Débogage `pair_plane_before` | `pair_plane_geometric_tests` |
-| `F` | Export CSV debug | `dumpFaceEquationsCSV` + `dumpFace2DCoordinates` + `dumpSortedFaceIndices` |
-| `N` | Charger nouveau modèle | `destroyModel3D` + `loadModel3D` |
-| `H` | Aide paginée | `show_help_pager` |
-| `ESC` | Quitter | cleanup + exit |
+| `B` | Toggle back-face culling | `cull_back_faces` + reprocess model |
+| `P` | Wireframe mode | `framePolyOnly` + redraw / reprocess |
+| `C` | Color palette | `colorpalette` toggle |
+| `J` | Render jitter | `jitter` toggle |
+| `K` | Edit angles/distance | `getObserverParams` |
+| `D` / `S` | Inspect faces before / after | `inspect_faces_before` / `inspect_faces_after` |
+| `M` | Debug `pair_plane_before` | `pair_plane_geometric_tests` |
+| `F` | Debug CSV export | `dumpFaceEquationsCSV` + `dumpFace2DCoordinates` + `dumpSortedFaceIndices` |
+| `N` | Load new model | `destroyModel3D` + `loadModel3D` |
+| `H` | Paged help | `show_help_pager` |
+| `ESC` | Exit | cleanup + exit |
 
-> Note : certaines commandes appellent plusieurs utilitaires (par ex. `F` écrit `Faces3D.csv`, `Faces2D.txt` et `FacesOrder.txt`). Pour investiguer un comportement précis, commencez par utiliser la touche correspondante dans l'interface, puis consultez les fichiers de sortie (`Faces3D.csv`, `Faces2D.txt`, `FacesOrder.txt`, `Face<ID>.txt`) pour reproduire/automatiser les tests.
+> Note: Some commands invoke multiple utilities (e.g., `F` writes `Faces3D.csv`, `Faces2D.txt`, and `FacesOrder.txt`). To investigate specific behavior, start by using the corresponding key in the interface, then consult the output files (`Faces3D.csv`, `Faces2D.txt`, `FacesOrder.txt`, `Face<ID>.txt`) to reproduce/automate tests.
 
 ---
 

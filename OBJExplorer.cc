@@ -1205,8 +1205,8 @@ void painter_geoV1(Model3D* model, int face_count) {
 typedef struct {
     int face1;
     int face2;
-    int8_t relation;  // 1 = f1 avant f2, -1 = f2 avant f1
-    int8_t occupied;  // 1 = slot utilisé, 0 = vide
+    int8_t relation;  // 1 = f1 before f2, -1 = f2 before f1
+    int8_t occupied;  // 1 = slot used, 0 = empty
 } PairCacheEntry;
 
 typedef struct {
@@ -1228,7 +1228,7 @@ static void pair_cache_destroy(PairCache* c) {
 }
 
 static int pair_cache_slot(PairCache* c, int f1, int f2) {
-    // Clé canonique indépendante de l'ordre
+    // Canonical key independent of order
     int a = (f1 < f2) ? f1 : f2;
     int b = (f1 < f2) ? f2 : f1;
     unsigned int h = (unsigned int)(a * 2654435761u ^ b * 2246822519u);
@@ -1928,7 +1928,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
      * of increased CPU work compared to a lightweight 'fast' seed.
      */
     // painter_newell_sancha(model, face_count);
-    // Faster, but ???
     painter_newell_sancha_fast(model, face_count); 
     int moves = 0;
     int n = face_count;
@@ -7968,7 +7967,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
     const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
 
-    /* Matrice de rotation précalculée - 9 coefficients */
+    /* Precomputed rotation matrix - 9 coefficients */
     Fixed32 M00, M01, M02;
     Fixed32 M10, M11, M12;
     Fixed32 M20, M21, M22;
@@ -9476,7 +9475,7 @@ static void show_help_pager(void) {
         ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
         "1: Painter = FAST (simple sort only)",
         "2: Painter = NORMAL (Fixed32/64)",
-        "3: Painter = GEO (geometry-only)",
+        "3: Painter = GEO (geometry-only - VERY SLOW when many faces, use with caution)",
         "4: Painter = CORRECT (painter_correct)",
         "5: Painter = CORRECTV2",
         "6: Both colors RANDOM mode",
@@ -9764,7 +9763,7 @@ segment "code22";
                 if (painter_mode == PAINTER_MODE_FAST) printf("    Painter mode: FAST (simple face sorting only)\n");
                 else if (painter_mode == PAINTER_MODE_FIXED) printf("    Painter mode: NORMAL (Fixed32/64)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECT) printf("    Painter mode: CORRECT (painter_correct)\n");
-                else if (painter_mode == PAINTER_MODE_GEO) printf("    Painter mode: GEO (geometry-only)\n");
+                else if (painter_mode == PAINTER_MODE_GEO) printf("    Painter mode: GEO (geometry-only - VERY SLOW)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECTV2) printf("    Painter mode: CORRECT V2 (painter_correctV2 with face splitting detection)\n");
                 else printf("    Painter mode: FLOAT (float-based)\n\n");
                 printf("    Back-face culling: %s\n", cull_back_faces ? "ON" : "OFF");
@@ -9988,6 +9987,7 @@ segment "code22";
             case 51: // '3' - set GEO painter
                 painter_mode = PAINTER_MODE_GEO;
                 printf("Painter mode: GEO (geometry-only)\n");
+                printf("WARNING: This mode is significantly slower than others.\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
             case 52: // '4' - set CORRECT painter (runs painter_correct)

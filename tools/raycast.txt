@@ -1,25 +1,25 @@
-ray_cast doit avoir les constantes suivantes, qui peuvent être calculées à l'avance (dans le code) : 
+ray_cast must have the following constants that can be computed in advance (in the code):
 const aspect = 320 / 200
-const facteur_x = 2.0 * aspect / 320
-const facteur_y = 2.0 / 200
+const factor_x = 2.0 * aspect / 320
+const factor_y = 2.0 / 200
 
-Ensuite il faut faire :
+Then we must do:
 
-float Dx = (float)cx * facteur_x - aspect;
-float Dy = 1.0f - (float)cy * facteur_y;
+float Dx = (float)cx * factor_x - aspect;
+float Dy = 1.0f - (float)cy * factor_y;
 float Dz = -1.0f;
 
 if (fabsf(denom1) > 0.0001f) { 
 float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;}
 else {
-            printf(" (parallèle)");
+            printf(" (parallel)");
 			return 0
         }
 
 if (fabsf(denom2) > 0.0001f) { 
 float denom1 = A2 * Dx + B2* Dy + C2 * Dz;}
 else {
-            printf(" (parallèle)");
+            printf(" (parallel)");
 			return 0
         }
 
@@ -27,23 +27,23 @@ else {
 float t1 = -D1 / denom1;
 float t2 = -D2 / denom2;
 
-NB : A1 B1 C1 D1 sont les coef des plans de f1, A2 B2 C2 D2 sont les coef des plans de f2
+NOTE: A1 B1 C1 D1 are the plane coefficients of f1, A2 B2 C2 D2 are the plane coefficients of f2
 
-Si t1 > t2 return 1 else retun -1
+If t1 > t2 return 1 else return -1
 
-derive : 13 (front)/ 14 (back)
-aileron g : 17 (back) / 18 (front)
-aileron d : 15 (front)/ 16 (back)
+fuselage wing: 13 (front)/ 14 (back)
+left aileron: 17 (back) / 18 (front)
+right aileron: 15 (front)/ 16 (back)
 
 12/ 11 => 50
 
-on va complètement réécrire painter_newell_sanchaV2. 
-On commence par faire un tri par Z (painter_newell_sancha_fast).
-Esuite un tri à bulle : 
-soit 2 faces f1 et f2. On vérifie d'abord que la paire n'a pas été déjà testée. Si déjà testée, on continue.
-Si pas d'overlap entre f1 et f2, continue
-Si overlap, on fait un ray_cast(f1,f2): si 0 : continue ; si 1 : on marque la paire comme état testée et on continue ; si -1 : on place f1 juste au dessus de f2 dans la sorted list pour que indice(f1) = indice (f2)+1, et on met un flag pour indiquer qu'il y a eu un movement.
-Répatétion jusqu'à plus de mouvement.
+We will completely rewrite painter_newell_sanchaV2.
+We start by doing a Z-sort (painter_newell_sancha_fast).
+Then a bubble sort:
+Given 2 faces f1 and f2. We first verify that the pair has not already been tested. If already tested, we continue.
+If no overlap between f1 and f2, continue.
+If overlap, we perform ray_cast(f1,f2): if 0: continue; if 1: we mark the pair as tested and continue; if -1: we place f1 just above f2 in the sorted list so that index(f1) = index(f2)+1, and we set a flag to indicate that there was a movement.
+Repetition until no more movement.
 
 bb.obj : 160/0 ==> 
 
