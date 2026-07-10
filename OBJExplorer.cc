@@ -9608,9 +9608,21 @@ segment "code22";
 
 
     newmodel:
-        printf("===================================\n");
-        printf("       3D OBJ file explorer\n");
-        printf("===================================\n\n");
+        {
+            const char* title = "3D OBJ file explorer (version 0.9)";
+            int title_len = sizeof("3D OBJ file explorer (version 0.9)") - 1;
+            int total_width = 80;
+            int border_len = title_len + 6;
+            if (border_len > total_width) border_len = total_width;
+            int border_pad = (total_width - border_len) / 2;
+            int title_pad = (total_width - title_len) / 2;
+            char border[81];
+            for (int i = 0; i < border_len; ++i) border[i] = '=';
+            border[border_len] = '\0';
+            printf("%*s%s\n", border_pad, "", border);
+            printf("%*s%s\n", title_pad, "", title);
+            printf("%*s%s\n\n", border_pad, "", border);
+        }
         printf("A tribute to Robert DONY\n");
         printf("Author of \"Calcul des parties cachees\" (Masson, 1986)\n\n");
 
@@ -9987,7 +9999,7 @@ segment "code22";
             case 51: // '3' - set GEO painter
                 painter_mode = PAINTER_MODE_GEO;
                 printf("Painter mode: GEO (geometry-only)\n");
-                printf("WARNING: This mode is significantly slower than others.\n");
+                printf("WARNING: This mode can be significantly slower than others.\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
             case 52: // '4' - set CORRECT painter (runs painter_correct)
