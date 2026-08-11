@@ -1,4 +1,4 @@
-# 3D Explorer for Apple IIGS
+# 3D OBJ Explorer for Apple IIGS
 
 **A Tribute to Robert DONY**  
 *Author of "Calcul des parties cachées", Masson, 1986*
@@ -11,43 +11,49 @@ A high-performance 3D model viewer an explorer implementing multiple painter's a
 
 ## Overview
 
-3D Explorer is an interactive 3D rendering application that reads simplified Wavefront OBJ files and displays them with real-time manipulation capabilities. The project demonstrates advanced rendering techniques on resource-constrained hardware (Apple IIGS with 2.8 MHz 65C816 CPU) through careful optimization and multiple algorithm implementations. It performs satisfactorily on a modern computer and in emulation mode, due to the large number of calculations it requires.
+3D Explorer is an interactive 3D rendering application that reads simplified Wavefront OBJ files and displays them with manipulation capabilities. The project demonstrates advanced rendering techniques on resource-constrained hardware (Apple IIGS with 2.8 MHz 65C816 CPU) through careful optimization and multiple algorithm implementations. It performs satisfactorily on a modern computer and in emulation mode, due to the large number of calculations it requires.
 
 It is built around the painter's algorithm: faces are sorted and drawn back-to-front so that nearer polygons naturally occlude farther ones without a Z-buffer. The application includes several painter variants, from fast z-mean ordering to more robust geometric correction passes for overlapping and intersecting faces.
 
 ## Getting Started
 
 1. **Load a model**: Run the program and enter the path to a simplified OBJ file when prompted. After entering the file path, press `Enter` five times in a row to accept the default values for distance, horizontal angle, vertical angle, screen rotation, and any additional prompts. Those defaults can still be changed later through the application controls.
-2. **Set the camera**: Confirm or customize the default observer settings for distance, horizontal angle, vertical angle, and screen rotation if needed.
+2. **Now you see the 3D object centred on the screen**
 3. **Use the controls**: Navigate the scene with the keyboard and switch rendering modes using keys `1` through `5`.
 4. **Change the color palette**: Press `G` to cycle through the available color palettes.
 5. **Enable orientation shading**: Press `!` to toggle orientation-based shading on and off.
 6. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `R` to reverse the vertex winding of the selected face and update its front/back classification.
 7. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the farther face in front of the nearer face or `E` to move the nearer face behind the farther face in the sorted face list.
 6. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
-7. **Repair ordering**: Press `;` to run the face order repair helper, and press `.` to run `check_sort_repair_fast` for a faster QD-centroid-based minimal repair.
+7. **Repair ordering**: Press `;` to run the face order repair helper, and press `.` to run `check_sort_repair_fast` for a QuickDraw-centroid-based minimal repair.
 
-### Why use this viewer?
+### Why use this explorer/viewer?
 
 - It is optimized for the Apple IIGS hardware and demonstrates fixed-point 3D rendering techniques.
 - It includes advanced painter algorithms for difficult overlapping geometry.
 - It provides interactive inspection and debugging tools for face order, overlap, and visibility issues.
 
+## Limitations 
+However, it has many limitations, including: speed (requires a graphics accelerator or emulator), the number of vertices and faces, the number of vertices per face, very limited handling of intersecting faces, and no handling of the case of cyclic overlap.
+
 ### Quick start keys
 
+- `H`: show full help screen
 - `1`: FAST mode
 - `2`: NORMAL mode
 - `3`: GEO mode
 - `4`: CORRECT mode
 - `5`: CORRECT V2 mode
+- `6`: random colors
+- `7`: choose face colors
+- `6`: choose border colors (including "same as fill color" = no border)
+- `9`: reset colors to defaults, restore palette 0, and disable orientation shading
 - `B`: toggle back-face culling
 - `C`: toggle palette display overlay
 - `G`: cycle through available color palettes
 - `!`: toggle orientation-based shading
-- `9`: reset colors to defaults, restore palette 0, and disable orientation shading
 - `V`: inspect a face, arrow to navigate, 'space' for options (record face data in a file, revert vertex order)
 - `Q`: inspect a face pair and navigate between pairs
-- `H`: show full help screen
 - `;`: repair face order
 
 ### Key Features
@@ -63,7 +69,7 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 - **3D Manipulation**: Interactive camera controls with adjustable distance, rotation angles, and 2D panning
 - **Advanced Culling**: Observer-space back-face culling to eliminate hidden polygons
 - **Diagnostic Tools**: Face inspection, overlap detection, and visual debugging capabilities
-- **Fixed-Point Arithmetic**: Optimized 16.16 fixed-point math for efficient 3D transformations
+- **Fixed-Point Arithmetic**: Optimized 16.16 and 32.32 fixed-point math for efficient 3D transformations
 - **Performance Optimization**: Precomputed trigonometric tables and memory buffer reuse
 
 ## Technical Architecture
@@ -84,7 +90,7 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 - Best for high frame rates on simple geometry
 - Limitations: May produce artifacts on complex overlapping polygons
 
-#### NORMAL Mode (Key: `2`) — NEWELL_SANCHAV1
+#### NORMAL Mode (Key: `2`) — NEWELL_SANCHA
 - Full Newell-Sancha (V1) pairwise comparison algorithm (implemented as `painter_newell_sancha`)
 - Comprehensive geometric tests per face pair:
   1. **Test 1**: Z-extents overlap check (cheap rejection)
@@ -99,10 +105,10 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 - Fixed32 (16.16) and Fixed64 (32.32) arithmetic throughout
 - Most robust for complex geometry
 
-#### GEO Mode (Key: `3`) — ⚠️ VERY SLOW
+#### GEO Mode (Key: `3`) — ⚠️ CAN BE VERY SLOW
 - Geometry-only painter mode that uses plane-based ordering heuristics
 - Uses `painter_geoV2` with ray-casting for depth ordering
-- **WARNING**: This mode is significantly slower than other painters due to intensive geometric calculations
+- **WARNING**: This mode is significantly slower than other painters for large models due to intensive geometric calculations
 - Recommended ONLY for small models or diagnostic purposes
 - Not suitable for interactive work on larger meshes
 
@@ -110,13 +116,13 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 - Extends NORMAL mode with local face reordering after separating faces into FRONT and BACK groups
 - Attempts to resolve ordering conflicts through strategic swaps between those groups
 - Best for geometries with many inconclusive pairs
-- Much slower
+- Slower
 
 #### CORRECT V2 Mode (Key: `5`)
 - Experimental variant: `painter_correctV2`
 - Separates faces into FRONT and BACK groups before applying local corrections
 - Improves robustness of face sorting when culling is OFF
-- Locally corrects cases where a BACK face appears in front and overlaps a FRONT face
+- Locally corrects cases where a BACK face appears in front and overlaps a FRONT face (need to be improved)
 - Uses geometric plane tests for overlapping faces, with zmean as a deterministic fallback (no global reordering)
 - Diagnostic/log code is present but disabled by default (file output commented out, can be re-enabled for analysis)
 - Slower, mainly for pathological models or advanced debugging
@@ -150,7 +156,7 @@ Face orientation is determined in observer space, after the model has been trans
 - The sign of `d` depends on the face normal direction relative to the camera, not just the original OBJ winding order.
 - Reversing the vertex order of a face flips its normal and therefore changes whether it is classified as front or back.
 
-In the application, the `showFace` inspector reports this directly using `faces->plane_d[target_face]`:
+In the application, the `showFace` inspector (commande 'V') reports this directly using `faces->plane_d[target_face]`:
 - `plane_d > 0` => `FRONT`
 - `plane_d <= 0` => `BACK`
 
