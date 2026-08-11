@@ -2388,36 +2388,32 @@ int check_sort_repair(Model3D* model, int face_count) {
              * inspector's behaviour but is slightly more tolerant (tries multiple
              * candidates) to avoid missing detectable inversions.
              */
-            long long a1 = 0, a2 = 0;
-            int cx1 = 0, cy1 = 0, cx2 = 0, cy2 = 0;
-            int have1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &cx1, &cy1, &a1) && a1 > 0;
-            int have2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &cx2, &cy2, &a2) && a2 > 0;
-
             int cx = 0, cy = 0;
             int point_source = 0; /* 1=cent1, 2=cent2, 3=bbox */
             int rc = 0;
 
-            /* Prefer the larger centroid area when available */
-            if (have1 || have2) {
-                if (have1 && (!have2 || a1 >= a2)) { cx = cx1; cy = cy1; point_source = 1; }
-                else { cx = cx2; cy = cy2; point_source = 2; }
-                {
-                    float _tf1 = 0.0f, _tf2 = 0.0f;
-                    if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
-                        if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
-                    } else rc = 0; /* indeterminate — ray_cast_at would also be indeterminate */
-                    
+            /* Try a lightweight geometry test first, before running SH clipping. */
+            {
+                int geo = geo_face_order(model, f1, f2);
+                if (geo != 0) {
+                    /* geo_face_order returns -1 if f1 is before f2, 1 if f1 is after f2.
+                     * check_sort_repair uses rc == -1 to mean f1 is in front.
+                     * Invert the sign to match raycast semantics.
+                     */
+                    rc = (geo == -1) ? 1 : -1;
+                    point_source = 4; /* geo */
                 }
-                /* If indeterminate, try the other centroid if present */
-                if (rc == 0 && have1 && have2 && point_source == 1) {
-                    cx = cx2; cy = cy2; point_source = 2;
-                    {
-                        float _tf1 = 0.0f, _tf2 = 0.0f;
-                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
-                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
-                        } else rc = 0;
-                    }
-                } else if (rc == 0 && have1 && have2 && point_source == 2) {
+            }
+
+            long long a1 = 0, a2 = 0;
+            int cx1 = 0, cy1 = 0, cx2 = 0, cy2 = 0;
+            int have1 = 0;
+            int have2 = 0;
+
+            /* Only perform SH centroid clipping if the geometry test is inconclusive. */
+            if (rc == 0) {
+                have1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &cx1, &cy1, &a1) && a1 > 0;
+                if (have1) {
                     cx = cx1; cy = cy1; point_source = 1;
                     {
                         float _tf1 = 0.0f, _tf2 = 0.0f;
@@ -2428,16 +2424,24 @@ int check_sort_repair(Model3D* model, int face_count) {
                 }
             }
 
-            /* If SH-centroid raycast is still indeterminate, try the geometry test */
             if (rc == 0) {
-                int geo = geo_face_order(model, f1, f2);
-                if (geo != 0) {
-                    /* geo_face_order returns -1 if f1 is before f2, 1 if f1 is after f2.
-                     * check_sort_repair uses rc == -1 to mean f1 is in front.
-                     * Invert the sign to match raycast semantics.
-                     */
-                    rc = (geo == -1) ? 1 : -1;
-                    point_source = 4; /* geo */
+                have2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &cx2, &cy2, &a2) && a2 > 0;
+                if (!have1 && have2) {
+                    cx = cx2; cy = cy2; point_source = 2;
+                    {
+                        float _tf1 = 0.0f, _tf2 = 0.0f;
+                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                        } else rc = 0;
+                    }
+                } else if (have1 && have2 && rc == 0) {
+                    cx = cx2; cy = cy2; point_source = 2;
+                    {
+                        float _tf1 = 0.0f, _tf2 = 0.0f;
+                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                        } else rc = 0;
+                    }
                 }
             }
 
