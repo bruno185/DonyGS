@@ -2441,6 +2441,26 @@ int check_sort_repair(Model3D* model, int face_count) {
                 }
             }
 
+            // Potential extension: if geo is also indeterminate, we could try a
+            // QuickDraw-based centroid raycast here using the QD intersection
+            // centroid computed by compute_intersection_centroid_ordered_qd_fixed.
+            // That would look something like:
+            //
+            //   if (rc == 0 && use_qd) {
+            //       int qd_cx = 0, qd_cy = 0;
+            //       long long qd_area2 = 0;
+            //       if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &qd_cx, &qd_cy, &qd_area2) && qd_area2 != 0) {
+            //           float _tf1 = 0.0f, _tf2 = 0.0f;
+            //           if (ray_cast_distances(model, f1, f2, qd_cx, qd_cy, &_tf1, &_tf2)) {
+            //               if (_tf1 < _tf2) rc = -1;
+            //               else if (_tf1 > _tf2) rc = 1;
+            //               else rc = 0;
+            //           }
+            //       }
+            //   }
+            //
+            // We leave it commented because it may slow down check_sort_repair too much.
+
             /* Last resort: bbox center */
             if (rc == 0) {
                 int ix0 = _ix0; int ix1 = _ix1; int iy0 = _iy0; int iy1 = _iy1;
