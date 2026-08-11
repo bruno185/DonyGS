@@ -479,6 +479,7 @@ This copies the compiled binary to a bootable disk image for use with emulators 
 **Development Tools**: ORCA/C 2.2.1, Golden Gate, iix
 
 **Algorithm References**:
+- "Calcul des parties cachées", Robert DONY, Masson, 1986*
 - Newell, M.E., Newell, R.G., and Sancha, T.L. (1972). "A solution to the hidden surface problem"
 - Painter's algorithm theory and implementation techniques
 
@@ -491,7 +492,7 @@ You are free to:
 - **Adapt**: Remix, transform, and build upon the material for any purpose, even commercially
 
 Under the following terms:
-- **Attribution**: You must give appropriate credit to the original author
+- **Attribution**: You must give appropriate credit to the original author and a link to this repository.
 
 ### Disclaimer
 
