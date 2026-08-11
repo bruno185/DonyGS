@@ -2428,6 +2428,19 @@ int check_sort_repair(Model3D* model, int face_count) {
                 }
             }
 
+            /* If SH-centroid raycast is still indeterminate, try the geometry test */
+            if (rc == 0) {
+                int geo = geo_face_order(model, f1, f2);
+                if (geo != 0) {
+                    /* geo_face_order returns -1 if f1 is before f2, 1 if f1 is after f2.
+                     * check_sort_repair uses rc == -1 to mean f1 is in front.
+                     * Invert the sign to match raycast semantics.
+                     */
+                    rc = (geo == -1) ? 1 : -1;
+                    point_source = 4; /* geo */
+                }
+            }
+
             /* Last resort: bbox center */
             if (rc == 0) {
                 int ix0 = _ix0; int ix1 = _ix1; int iy0 = _iy0; int iy1 = _iy1;
@@ -2444,6 +2457,7 @@ int check_sort_repair(Model3D* model, int face_count) {
             if (debug_overlap_subj == f1 && debug_overlap_clip == f2) {
                 if (point_source == 1) printf("check_sort_repair: using centroid f1->f2 (%d,%d) area1=%lld\n", cx, cy, a1);
                 else if (point_source == 2) printf("check_sort_repair: using centroid f2->f1 (%d,%d) area2=%lld\n", cx, cy, a2);
+                else if (point_source == 4) printf("check_sort_repair: using geo_face_order decision (%d,%d)\n", cx, cy);
                 else printf("check_sort_repair: using bbox-center (%d,%d)\n", cx, cy);
             }
             if (rc == 0) continue; // undetermined
