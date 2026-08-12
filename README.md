@@ -3,11 +3,12 @@
 **A Tribute to Robert DONY**  
 *Author of "Calcul des parties cachées", Masson, 1986*
 
-A high-performance 3D model viewer an explorer implementing multiple painter's algorithms, specifically designed for the Apple IIGS computer using ORCA/C and the QuickDraw graphics API.
+A 3D model viewer an explorer implementing multiple painter's algorithms, specifically designed for the Apple IIGS computer using ORCA/C and the QuickDraw graphics API.
 
 ![Main Interface](Screenshots/main_interface.png)
 ![crossSub_shaded](Screenshots/crossSub_shaded.png)
 ![charpente_shaded](Screenshots/charpente_shaded.png)
+![charpente_shaded](Screenshots/monkey.png)
 
 ## Overview
 
@@ -38,7 +39,7 @@ However, it has many limitations, including: speed (requires a graphics accelera
 
 ### Quick start keys
 
-- `H`: show full help screen
+- `H`: show full help screens
 - `1`: FAST mode
 - `2`: NORMAL mode
 - `3`: GEO mode
