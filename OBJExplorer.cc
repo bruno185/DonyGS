@@ -475,6 +475,7 @@ typedef struct {
     Fixed32 *xo, *yo, *zo;
     int *x2d, *y2d;
     int vertex_count;
+    int saved_vertex_count;
 } VertexArrays3D;
 
 /**
@@ -507,6 +508,7 @@ typedef struct {
     Handle sorted_face_indicesHandle;    // 1 array: face numbers sorted by depth
     
     int *vertex_count;                   // Points to: [3, 3, 4, 3, 4, ...]
+    int *saved_vertex_count;
     int *vertex_indices_buffer;          // Points to: [v1, v2, v3, v1, v2, v3, v4, v1, v2, v3, ...]
     int *vertex_indices_ptr;             // Points to: [offset0, offset3, offset6, offset10, ...]
     Fixed32 *z_min;
@@ -5581,6 +5583,39 @@ segment "code04";
  */
 void drawFaceIndex(Model3D* model, int face_id);
 
+// Nécessite un champ supplémentaire dans FaceArrays3D :
+// int saved_vertex_count[MAX_FACES];  // 0 = jamais masquée, sinon = vertex_count d'origine
+
+void hideFace(Model3D* model, int face_idx) {
+    FaceArrays3D* faces = &model->faces;
+    if (faces->vertex_count[face_idx] > 0) {
+        faces->saved_vertex_count[face_idx] = faces->vertex_count[face_idx];
+    }
+    faces->display_flag[face_idx] = 0;
+    faces->vertex_count[face_idx] = 0;
+}
+
+void restoreFace(Model3D* model, int face_idx) {
+    FaceArrays3D* faces = &model->faces;
+    if (faces->saved_vertex_count[face_idx] > 0) {
+        faces->vertex_count[face_idx] = faces->saved_vertex_count[face_idx];
+        faces->saved_vertex_count[face_idx] = 0;
+    }
+    // display_flag / plane_a..d restent à recalculer -> appeler
+    // calculateFaceDepths ensuite (le modèle a pu tourner entre-temps)
+}
+
+void restoreAllFaces(Model3D* model) {
+    FaceArrays3D* faces = &model->faces;
+    int i;
+    for (i = 0; i < faces->face_count; ++i) {
+        if (faces->saved_vertex_count[i] > 0) {
+            faces->vertex_count[i] = faces->saved_vertex_count[i];
+            faces->saved_vertex_count[i] = 0;
+        }
+    }
+    // un seul recalcul global, pas un par face
+}
 void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     if (!model || !params) return;
     FaceArrays3D* faces = &model->faces;
@@ -5608,7 +5643,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
     printf("=> Face %d\n\n", target_face);
     printf("Use arrow keys to navigate (Left/Right: face ID, Up/Down: sorted list)\n");
-    printf("Press SPACE to show detailed info about the selected face.\n");
+    printf("Press SPACE to show detailed info about the selected face (hide/restore/restoreAll are there).\n");
     printf("Use any other key to exit.\n\n");
 
     printf("Press any key to show model...\n");
@@ -5630,8 +5665,11 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
 
         // Overlay selected face in filled green (pen 10)
-        faces->display_flag[target_face] = 1;
-        drawFace(model, target_face, COL_LIGHT_GREEN, 0);
+        // guard: skip if the face has been hidden (vertex_count == 0)
+        if (faces->vertex_count[target_face] > 0) {
+            faces->display_flag[target_face] = 1;
+            drawFace(model, target_face, COL_LIGHT_GREEN, 0);
+        }
 
         // Annotate only the selected face ID after the full model is drawn
         drawFaceIndex(model, target_face);
@@ -5652,7 +5690,10 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         } else {
             printf("Face %d [%s]", target_face, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
         }
-        printf("\nArrows to navigate, SPACE for options");
+        if (faces->vertex_count[target_face] == 0) {
+            printf(" [HIDDEN]");
+        }
+        printf("\nArrows : navigate, SPACE : details/options");
         
         // Wait for key
         int key = getkeypress ();
@@ -5692,6 +5733,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             printf("Z mean: %.6f   ;   ", FIXED_TO_FLOAT(faces->z_mean[target_face]));
             printf("Z max: %.6f\n\n", FIXED_TO_FLOAT(faces->z_max[target_face]));
             if (pos_in_sorted >= 0) printf("Position in sorted list: %d\n", pos_in_sorted);
+            if (vn == 0) printf("[HIDDEN]\n");
 
             printf("Vertex count: %d\n\n", vn);
             int offt = faces->vertex_indices_ptr[target_face];
@@ -5705,7 +5747,8 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                        model->vertices.x2d[vid], model->vertices.y2d[vid]);
             }
 
-            printf("\nPress 'F' to save to file Face%d.txt, 'R' to reverse vertex order, any other key to return to graphics...\n", target_face);
+            printf("\nPress 'F' to save to file Face%d.txt, 'V' to reverse vertex order,\n", target_face);
+            printf("'H' to hide, 'R' to restore, 'A' to restore all, any other key to return to graphics...\n");
             fflush(stdout);
             int tkey = getkeypress ();
 
@@ -5743,7 +5786,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
                 // Return to graphics (loop will redraw)
                 continue;
-            } else if (tkey == 'R' || tkey == 'r') {
+            } else if (tkey == 'V' || tkey == 'v') {
                 // printf("Reversing vertex order...\n"); // useless since now face order reversing is instantaneous.
                 reverseFaceVertexOrder(model, target_face);
                 backup_flags[target_face] = faces->display_flag[target_face];
@@ -5751,6 +5794,33 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                 printf("Press any key to return to graphics...\n"); fflush(stdout);
                 int tmpk = getkeypress ();
                 // Return to graphics (loop will redraw)
+                continue;
+            } else if (tkey == 'H' || tkey == 'h') {
+                // Hide the currently selected face (vertex_count saved for later restore)
+                hideFace(model, target_face);
+                backup_flags[target_face] = faces->display_flag[target_face];
+                printf("Face %d hidden.\n\n", target_face);
+                printf("Press any key to return to graphics...\n"); fflush(stdout);
+                int tmpk = getkeypress ();
+                continue;
+            } else if (tkey == 'R' || tkey == 'r') {
+                // Restore the currently selected face and recompute its plane/display_flag
+                // (the model may have rotated since it was hidden)
+                restoreFace(model, target_face);
+                calculateFaceDepths(model, NULL, faces->face_count);
+                backup_flags[target_face] = faces->display_flag[target_face];
+                printf("Face %d restored.\n\n", target_face);
+                printf("Press any key to return to graphics...\n"); fflush(stdout);
+                int tmpk = getkeypress ();
+                continue;
+            } else if (tkey == 'A' || tkey == 'a') {
+                // Restore every hidden face, then a single global recompute
+                restoreAllFaces(model);
+                calculateFaceDepths(model, NULL, faces->face_count);
+                for (int k2 = 0; k2 < faces->face_count; ++k2) backup_flags[k2] = faces->display_flag[k2];
+                printf("All faces restored.\n\n");
+                printf("Press any key to return to graphics...\n"); fflush(stdout);
+                int tmpk = getkeypress ();
                 continue;
             } else {
                 // Any other key returns to graphics
@@ -8387,6 +8457,7 @@ int readFaces_model(const char* filename, Model3D* model) {
                 // Initialize face data
                 model->faces.vertex_count[face_count] = 0;
                 model->faces.display_flag[face_count] = 1;  // Displayable by default
+                model->faces.saved_vertex_count[face_count] = 0;  // no hide/restore backup yet
                 model->faces.vertex_indices_ptr[face_count] = buffer_pos;  // Store offset to this face's indices
                 
                 // Parse vertices from this face
@@ -8468,7 +8539,6 @@ int readFaces_model(const char* filename, Model3D* model) {
     printf("\nReading faces finished : %d faces read.\n", face_count);
     return face_count;
 }
-
 
 /**
  * CALCULATING MINIMUM FACE DEPTHS AND VISIBILITY FLAGS
