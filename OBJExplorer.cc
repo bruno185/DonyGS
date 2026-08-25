@@ -5616,6 +5616,7 @@ void restoreAllFaces(Model3D* model) {
     }
     // un seul recalcul global, pas un par face
 }
+
 void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     if (!model || !params) return;
     FaceArrays3D* faces = &model->faces;
@@ -5665,10 +5666,24 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
 
         // Overlay selected face in filled green (pen 10)
-        // guard: skip if the face has been hidden (vertex_count == 0)
+        // If the face is currently hidden, draw it in gray instead using its
+        // saved vertex count, without permanently restoring it (geometry itself
+        // was never modified by hideFace, only vertex_count was zeroed).
         if (faces->vertex_count[target_face] > 0) {
             faces->display_flag[target_face] = 1;
             drawFace(model, target_face, COL_LIGHT_GREEN, 0);
+        } else if (faces->saved_vertex_count[target_face] > 0) {
+            int saved_vc = faces->saved_vertex_count[target_face];
+            int saved_df = faces->display_flag[target_face];
+
+            faces->vertex_count[target_face] = saved_vc;
+            faces->display_flag[target_face] = 1;
+            int COL_GRAY = 1;
+            drawFace(model, target_face, COL_GRAY, 0);
+
+            // revert: keep the face hidden, saved_vertex_count untouched
+            faces->vertex_count[target_face] = 0;
+            faces->display_flag[target_face] = saved_df;
         }
 
         // Annotate only the selected face ID after the full model is drawn
@@ -5693,7 +5708,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         if (faces->vertex_count[target_face] == 0) {
             printf(" [HIDDEN]");
         }
-        printf("\nArrows : navigate, SPACE : details/options");
+        printf("\nArrows to navigate, SPACE for options (hide/restore/restoreAll)");
         
         // Wait for key
         int key = getkeypress ();
