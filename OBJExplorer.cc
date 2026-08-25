@@ -5597,25 +5597,26 @@ void hideFace(Model3D* model, int face_idx) {
 
 void restoreFace(Model3D* model, int face_idx) {
     FaceArrays3D* faces = &model->faces;
-    if (faces->saved_vertex_count[face_idx] > 0) {
+    // double condition : la face doit être ACTUELLEMENT masquée (vertex_count==0)
+    // ET avoir une sauvegarde valide — empêche d'écraser une face jamais masquée
+    // si saved_vertex_count contenait une valeur garbage
+    if (faces->vertex_count[face_idx] == 0 && faces->saved_vertex_count[face_idx] > 0) {
         faces->vertex_count[face_idx] = faces->saved_vertex_count[face_idx];
         faces->saved_vertex_count[face_idx] = 0;
     }
-    // display_flag / plane_a..d restent à recalculer -> appeler
-    // calculateFaceDepths ensuite (le modèle a pu tourner entre-temps)
 }
 
 void restoreAllFaces(Model3D* model) {
     FaceArrays3D* faces = &model->faces;
     int i;
     for (i = 0; i < faces->face_count; ++i) {
-        if (faces->saved_vertex_count[i] > 0) {
+        if (faces->vertex_count[i] == 0 && faces->saved_vertex_count[i] > 0) {
             faces->vertex_count[i] = faces->saved_vertex_count[i];
             faces->saved_vertex_count[i] = 0;
         }
     }
-    // un seul recalcul global, pas un par face
 }
+
 
 void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     if (!model || !params) return;
