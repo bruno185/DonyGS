@@ -5550,9 +5550,16 @@ static void reverseFaceVertexOrder(Model3D* model, int face_idx) {
     faces->plane_d[face_idx] = -faces->plane_d[face_idx];
     
     // set display_flag accordingly
-    if (faces->plane_d[face_idx] > 0 ) 
-        {faces->display_flag[face_idx] = 1;}
-        else faces->display_flag[face_idx]= 0;
+    {
+        int behind_camera = (faces->z_min[face_idx] < 0);
+        if (behind_camera) {
+            faces->display_flag[face_idx] = 0;
+        } else if (cull_back_faces && faces->plane_d[face_idx] <= 0) {
+            faces->display_flag[face_idx] = 0;
+        } else {
+            faces->display_flag[face_idx] = 1;
+        }
+    }
     
     // XXXX useless since new calculateFaceDepths using all vertices to calculte orientation.
         // calculateFaceDepths(model, NULL, faces->face_count);
