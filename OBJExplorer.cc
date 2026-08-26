@@ -6646,6 +6646,25 @@ Model3D* createModel3D(void) {
         free(model);
         return NULL;
     }
+
+    // Allocate saved_vertex_count array (hide/restore backup), zero-initialized:
+    // 0 means "not currently hidden / no backup" for every face by default.
+    model->faces.saved_vertex_count = (int*)calloc(nf, sizeof(int));
+    if (!model->faces.saved_vertex_count) {
+        printf("Error: Unable to allocate memory for face saved_vertex_count array\n");
+        keypress();
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model);
+        return NULL;
+    }
     
     // Allocate SINGLE packed buffer for all vertex indices
     // Estimate: average 3.5 indices per face (mix of triangles and quads)
