@@ -5693,9 +5693,13 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         // only need the observer->screen projection step from
         // processModelFast (rotation is already applied), not the full
         // rotation matrix.
-        if (show_normal && faces->vertex_count[target_face] >= 3) {
+        if (show_normal) {
             int offt2 = faces->vertex_indices_ptr[target_face];
             int vn2 = faces->vertex_count[target_face];
+            // if face is hidden, use saved_vertex_count
+            if ((vn2 == 0) && (faces->saved_vertex_count[target_face] > 0)) {vn2 = faces->saved_vertex_count[target_face]; }
+            if (vn2 < 3) {continue;} // skip degenerate faces
+
             int k2;
             Fixed64 sx64 = 0, sy64 = 0, sz64 = 0;
 
