@@ -5680,7 +5680,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
             faces->vertex_count[target_face] = saved_vc;
             faces->display_flag[target_face] = 1;
-            drawFace(model, target_face, 1, 0);
+            drawFace(model, target_face, COL_GREY, 0);
 
             // revert: keep the face hidden, saved_vertex_count untouched
             faces->vertex_count[target_face] = 0;
@@ -5747,8 +5747,8 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                  {
                     SetSolidPenPat(COL_YELLOW);
                     // SetSolidPenPat(15); // White
-                    MoveTo(c_x2d, c_y2d);
-                    LineTo(e_x2d, e_y2d);
+                    MoveTo(c_x2d + pan_dx, c_y2d + pan_dy);
+                    LineTo(e_x2d + pan_dx, e_y2d + pan_dy);
                 }
             }
         }
@@ -5775,7 +5775,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         if (faces->vertex_count[target_face] == 0) {
             printf(" [HIDDEN]");
         }
-        printf("\nArrows: navigate,  N: normal, SPACE: options,");
+        printf("\nArrows: navigate,  N: normal, SPACE: options");
         
         // Wait for key
         int key = getkeypress ();
@@ -5805,8 +5805,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             DoText();
             int vn = faces->vertex_count[target_face];
             printf("\n=== Face detail (ID=%d) ===\n\n", target_face);
-            printf("Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",
-                   (vn == 0) ? "HIDDEN" : "NOT HIDDEN");
+            // printf("Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",
             // Plane equation (float)
             {
                 float a = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
@@ -5857,7 +5856,11 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                     float c = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
                     float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
                     fprintf(out, "Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
-                    fprintf(out, "Orientation: %s\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+                    // fprintf(out, "Orientation: %s\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+                    fprintf(out, "Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",(vn == 0) ? "HIDDEN" : "NOT HIDDEN");
+                    if (vn == 0) {
+                        fprintf(out, "Saved vertex count (before hide): %d\n", faces->saved_vertex_count[target_face]);
+                    }
                     fprintf(out, "Z min: %.6f\n", FIXED_TO_FLOAT(faces->z_min[target_face]));
                     fprintf(out, "Z mean: %.6f\n", FIXED_TO_FLOAT(faces->z_mean[target_face]));
                     fprintf(out, "Z max: %.6f\n", FIXED_TO_FLOAT(faces->z_max[target_face]));
