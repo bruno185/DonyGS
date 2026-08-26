@@ -5808,6 +5808,8 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             // Switch to text mode and print detailed info, then return to graphics on keypress
             DoText();
             int vn = faces->vertex_count[target_face];
+            int effective_vn = (vn == 0 && faces->saved_vertex_count[target_face] > 0)
+                    ? faces->saved_vertex_count[target_face] : vn;
             printf("\n=== Face detail (ID=%d) ===\n\n", target_face);
             // printf("Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",
             // Plane equation (float)
@@ -5823,10 +5825,14 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             printf("Z max: %.6f\n\n", FIXED_TO_FLOAT(faces->z_max[target_face]));
             if (pos_in_sorted >= 0) printf("Position in sorted list: %d\n", pos_in_sorted);
 
-            printf("Vertex count: %d\n\n", vn);
+            if (vn == 0) {
+                printf("Vertex count: %d (hidden - showing %d saved vertices)\n\n", vn, effective_vn);
+            } else {
+                printf("Vertex count: %d\n\n", vn);
+            }
             int offt = faces->vertex_indices_ptr[target_face];
 
-            for (int k = 0; k < vn; ++k) {
+            for (int k = 0; k < effective_vn; ++k) {
                 int vid = faces->vertex_indices_buffer[offt + k] - 1;
                 printf("vertex[%d] idx=%d model=(%f,%f,%f) obs=(%f,%f,%f) x2d=%d y2d=%d\n",
                        k, vid,
@@ -5846,8 +5852,12 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                 if (out) {
                     fprintf(out, "Face %d\n", target_face);
                     if (pos_in_sorted >= 0) fprintf(out, "Position in sorted list: %d\n", pos_in_sorted);
-                    fprintf(out, "Vertex count: %d\n", vn);
-                    for (int k = 0; k < vn; ++k) {
+                    if (vn == 0) {
+                        fprintf(out, "Vertex count: %d (hidden - showing %d saved vertices)\n", vn, effective_vn);
+                    } else {
+                        fprintf(out, "Vertex count: %d\n", vn);
+                    }
+                    for (int k = 0; k < effective_vn; ++k) {
                         int vid = faces->vertex_indices_buffer[offt + k] - 1;
                         fprintf(out, "v[%d] idx=%d model=(%f,%f,%f) obs=(%f,%f,%f) x2d=%d y2d=%d\n",
                                 k, vid,
@@ -5860,8 +5870,8 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                     float c = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
                     float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
                     fprintf(out, "Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
-                    // fprintf(out, "Orientation: %s\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
-                    fprintf(out, "Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",(vn == 0) ? "HIDDEN" : "NOT HIDDEN");
+                    fprintf(out, "Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",
+                            (vn == 0) ? "HIDDEN" : "NOT HIDDEN");
                     if (vn == 0) {
                         fprintf(out, "Saved vertex count (before hide): %d\n", faces->saved_vertex_count[target_face]);
                     }
@@ -5878,7 +5888,8 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
                 // Return to graphics (loop will redraw)
                 continue;
-            } else if (tkey == 'V' || tkey == 'v') {
+            }  
+            else if (tkey == 'V' || tkey == 'v') {
                 // printf("Reversing vertex order...\n"); // useless since now face order reversing is instantaneous.
                 reverseFaceVertexOrder(model, target_face);
                 backup_flags[target_face] = faces->display_flag[target_face];
@@ -6648,6 +6659,7 @@ Model3D* createModel3D(void) {
         free(model->vertices.x2d);
         free(model->vertices.y2d);
         free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
         free(model);
         return NULL;
     }
@@ -6896,6 +6908,7 @@ void destroyModel3D(Model3D* model) {
         if (model->faces.maxz3) free(model->faces.maxz3);
         if (model->faces.display_flag) free(model->faces.display_flag);
         if (model->faces.sorted_face_indices) free(model->faces.sorted_face_indices);
+        if (model->faces.saved_vertex_count) free(model->faces.saved_vertex_count);
 
         // Free optional buffers and backups
         if (model->orig_x) free(model->orig_x);
