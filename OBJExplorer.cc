@@ -5617,7 +5617,6 @@ void restoreAllFaces(Model3D* model) {
     }
 }
 
-
 void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     if (!model || !params) return;
     FaceArrays3D* faces = &model->faces;
@@ -5646,6 +5645,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     printf("=> Face %d\n\n", target_face);
     printf("Use arrow keys to navigate (Left/Right: face ID, Up/Down: sorted list)\n");
     printf("Press SPACE to show detailed info about the selected face (hide/restore/restoreAll are there).\n");
+    printf("Press N to toggle the face normal display.\n");
     printf("Use any other key to exit.\n\n");
 
     printf("Press any key to show model...\n");
@@ -5657,6 +5657,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
     int old_frame = framePolyOnly;
     framePolyOnly = 1; // wireframe mode
+    int show_normal = 0; // toggled by N/n
     
     // Navigation loop
     int quit = 0;
@@ -5679,12 +5680,77 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
 
             faces->vertex_count[target_face] = saved_vc;
             faces->display_flag[target_face] = 1;
-            int COL_GRAY = 1;
-            drawFace(model, target_face, COL_GRAY, 0);
+            drawFace(model, target_face, 1, 0);
 
             // revert: keep the face hidden, saved_vertex_count untouched
             faces->vertex_count[target_face] = 0;
             faces->display_flag[target_face] = saved_df;
+        }
+
+        // --- Draw the face normal (toggle: N/n) ---
+        // Centroid and plane coefficients (A,B,C) are already in observer
+        // space (computed from vtx->xo/yo/zo in calculateFaceDepths), so we
+        // only need the observer->screen projection step from
+        // processModelFast (rotation is already applied), not the full
+        // rotation matrix.
+        if (show_normal && faces->vertex_count[target_face] >= 3) {
+            int offt2 = faces->vertex_indices_ptr[target_face];
+            int vn2 = faces->vertex_count[target_face];
+            int k2;
+            Fixed64 sx64 = 0, sy64 = 0, sz64 = 0;
+
+            for (k2 = 0; k2 < vn2; ++k2) {
+                int vid2 = faces->vertex_indices_buffer[offt2 + k2] - 1;
+                sx64 += (Fixed64)model->vertices.xo[vid2];
+                sy64 += (Fixed64)model->vertices.yo[vid2];
+                sz64 += (Fixed64)model->vertices.zo[vid2];
+            }
+
+            float cxo = FIXED_TO_FLOAT((Fixed32)(sx64 / vn2));
+            float cyo = FIXED_TO_FLOAT((Fixed32)(sy64 / vn2));
+            float czo = FIXED_TO_FLOAT((Fixed32)(sz64 / vn2));
+
+            float na = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
+            float nb = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
+            float nc = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
+            float nlen = (float)sqrt((double)(na * na + nb * nb + nc * nc));
+
+            if (nlen > 0.0001f) {
+                // visual length of the normal arrow, in observer-space units
+                // -- tune to your model's typical scale
+                const float NORMAL_VISUAL_LENGTH = 50.0f;
+                float ex = cxo + (na / nlen) * NORMAL_VISUAL_LENGTH;
+                float ey = cyo + (nb / nlen) * NORMAL_VISUAL_LENGTH;
+                float ez = czo + (nc / nlen) * NORMAL_VISUAL_LENGTH;
+
+                Fixed32 cxo_fx = FLOAT_TO_FIXED(cxo);
+                Fixed32 cyo_fx = FLOAT_TO_FIXED(cyo);
+                Fixed32 czo_fx = FLOAT_TO_FIXED(czo);
+                Fixed32 exo_fx = FLOAT_TO_FIXED(ex);
+                Fixed32 eyo_fx = FLOAT_TO_FIXED(ey);
+                Fixed32 ezo_fx = FLOAT_TO_FIXED(ez);
+
+                int c_x2d = -1, c_y2d = -1, e_x2d = -1, e_y2d = -1;
+
+                if (czo_fx > 0) {
+                    Fixed32 inv_zo_c = FIXED_DIV_64(s_global_proj_scale_fixed, czo_fx);
+                    c_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(cxo_fx, inv_zo_c), INT_TO_FIXED(CENTRE_X)));
+                    c_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(cyo_fx, inv_zo_c)));
+                }
+                if (ezo_fx > 0) {
+                    Fixed32 inv_zo_e = FIXED_DIV_64(s_global_proj_scale_fixed, ezo_fx);
+                    e_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(exo_fx, inv_zo_e), INT_TO_FIXED(CENTRE_X)));
+                    e_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(eyo_fx, inv_zo_e)));
+                }
+
+                // Draw face nomal
+                 {
+                    SetSolidPenPat(COL_YELLOW);
+                    // SetSolidPenPat(15); // White
+                    MoveTo(c_x2d, c_y2d);
+                    LineTo(e_x2d, e_y2d);
+                }
+            }
         }
 
         // Annotate only the selected face ID after the full model is drawn
@@ -5709,7 +5775,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         if (faces->vertex_count[target_face] == 0) {
             printf(" [HIDDEN]");
         }
-        printf("\nArrows to navigate, SPACE for options (hide/restore/restoreAll)");
+        printf("\nArrows: navigate,  N: normal, SPACE: options,");
         
         // Wait for key
         int key = getkeypress ();
@@ -5731,12 +5797,16 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             if (pos_in_sorted > 0) {
                 target_face = faces->sorted_face_indices[pos_in_sorted - 1];
             }
+        } else if (key == 'N' || key == 'n') {
+            show_normal = !show_normal;
+            continue;
         } else if (key == 32) { // Space - show textual details about the face
             // Switch to text mode and print detailed info, then return to graphics on keypress
             DoText();
             int vn = faces->vertex_count[target_face];
             printf("\n=== Face detail (ID=%d) ===\n\n", target_face);
-            printf("Orientation: %s\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+            printf("Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",
+                   (vn == 0) ? "HIDDEN" : "NOT HIDDEN");
             // Plane equation (float)
             {
                 float a = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
@@ -5749,7 +5819,6 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             printf("Z mean: %.6f   ;   ", FIXED_TO_FLOAT(faces->z_mean[target_face]));
             printf("Z max: %.6f\n\n", FIXED_TO_FLOAT(faces->z_max[target_face]));
             if (pos_in_sorted >= 0) printf("Position in sorted list: %d\n", pos_in_sorted);
-            if (vn == 0) printf("[HIDDEN]\n");
 
             printf("Vertex count: %d\n\n", vn);
             int offt = faces->vertex_indices_ptr[target_face];
@@ -5855,6 +5924,7 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
 }
+
 
 /* inspect_faces_before
  * --------------------
