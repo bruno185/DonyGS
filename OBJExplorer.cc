@@ -5698,61 +5698,67 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             int vn2 = faces->vertex_count[target_face];
             // if face is hidden, use saved_vertex_count
             if ((vn2 == 0) && (faces->saved_vertex_count[target_face] > 0)) {vn2 = faces->saved_vertex_count[target_face]; }
-            if (vn2 < 3) {continue;} // skip degenerate faces
 
-            int k2;
-            Fixed64 sx64 = 0, sy64 = 0, sz64 = 0;
+            // NOTE: fixed - a bare "continue" here would skip endgraph()/getkeypress()
+            // for the rest of this loop iteration (main while(!quit) loop, not a
+            // sub-loop), leaving the graphics context unbalanced and the loop
+            // spinning without ever waiting for a key. Wrap the rest of the
+            // normal-drawing logic in "if (vn2 >= 3)" instead.
+            if (vn2 >= 3) {
+                int k2;
+                Fixed64 sx64 = 0, sy64 = 0, sz64 = 0;
 
-            for (k2 = 0; k2 < vn2; ++k2) {
-                int vid2 = faces->vertex_indices_buffer[offt2 + k2] - 1;
-                sx64 += (Fixed64)model->vertices.xo[vid2];
-                sy64 += (Fixed64)model->vertices.yo[vid2];
-                sz64 += (Fixed64)model->vertices.zo[vid2];
-            }
-
-            float cxo = FIXED_TO_FLOAT((Fixed32)(sx64 / vn2));
-            float cyo = FIXED_TO_FLOAT((Fixed32)(sy64 / vn2));
-            float czo = FIXED_TO_FLOAT((Fixed32)(sz64 / vn2));
-
-            float na = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
-            float nb = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
-            float nc = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
-            float nlen = (float)sqrt((double)(na * na + nb * nb + nc * nc));
-
-            if (nlen > 0.0001f) {
-                // visual length of the normal arrow, in observer-space units
-                // -- tune to your model's typical scale
-                const float NORMAL_VISUAL_LENGTH = 50.0f;
-                float ex = cxo + (na / nlen) * NORMAL_VISUAL_LENGTH;
-                float ey = cyo + (nb / nlen) * NORMAL_VISUAL_LENGTH;
-                float ez = czo + (nc / nlen) * NORMAL_VISUAL_LENGTH;
-
-                Fixed32 cxo_fx = FLOAT_TO_FIXED(cxo);
-                Fixed32 cyo_fx = FLOAT_TO_FIXED(cyo);
-                Fixed32 czo_fx = FLOAT_TO_FIXED(czo);
-                Fixed32 exo_fx = FLOAT_TO_FIXED(ex);
-                Fixed32 eyo_fx = FLOAT_TO_FIXED(ey);
-                Fixed32 ezo_fx = FLOAT_TO_FIXED(ez);
-
-                int c_x2d = -1, c_y2d = -1, e_x2d = -1, e_y2d = -1;
-
-                if (czo_fx > 0) {
-                    Fixed32 inv_zo_c = FIXED_DIV_64(s_global_proj_scale_fixed, czo_fx);
-                    c_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(cxo_fx, inv_zo_c), INT_TO_FIXED(CENTRE_X)));
-                    c_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(cyo_fx, inv_zo_c)));
-                }
-                if (ezo_fx > 0) {
-                    Fixed32 inv_zo_e = FIXED_DIV_64(s_global_proj_scale_fixed, ezo_fx);
-                    e_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(exo_fx, inv_zo_e), INT_TO_FIXED(CENTRE_X)));
-                    e_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(eyo_fx, inv_zo_e)));
+                for (k2 = 0; k2 < vn2; ++k2) {
+                    int vid2 = faces->vertex_indices_buffer[offt2 + k2] - 1;
+                    sx64 += (Fixed64)model->vertices.xo[vid2];
+                    sy64 += (Fixed64)model->vertices.yo[vid2];
+                    sz64 += (Fixed64)model->vertices.zo[vid2];
                 }
 
-                // Draw face nomal
-                 {
-                    SetSolidPenPat(COL_YELLOW);
-                    // SetSolidPenPat(15); // White
-                    MoveTo(c_x2d + pan_dx, c_y2d + pan_dy);
-                    LineTo(e_x2d + pan_dx, e_y2d + pan_dy);
+                float cxo = FIXED_TO_FLOAT((Fixed32)(sx64 / vn2));
+                float cyo = FIXED_TO_FLOAT((Fixed32)(sy64 / vn2));
+                float czo = FIXED_TO_FLOAT((Fixed32)(sz64 / vn2));
+
+                float na = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
+                float nb = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
+                float nc = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
+                float nlen = (float)sqrt((double)(na * na + nb * nb + nc * nc));
+
+                if (nlen > 0.0001f) {
+                    // visual length of the normal arrow, in observer-space units
+                    // -- tune to your model's typical scale
+                    const float NORMAL_VISUAL_LENGTH = 50.0f;
+                    float ex = cxo + (na / nlen) * NORMAL_VISUAL_LENGTH;
+                    float ey = cyo + (nb / nlen) * NORMAL_VISUAL_LENGTH;
+                    float ez = czo + (nc / nlen) * NORMAL_VISUAL_LENGTH;
+
+                    Fixed32 cxo_fx = FLOAT_TO_FIXED(cxo);
+                    Fixed32 cyo_fx = FLOAT_TO_FIXED(cyo);
+                    Fixed32 czo_fx = FLOAT_TO_FIXED(czo);
+                    Fixed32 exo_fx = FLOAT_TO_FIXED(ex);
+                    Fixed32 eyo_fx = FLOAT_TO_FIXED(ey);
+                    Fixed32 ezo_fx = FLOAT_TO_FIXED(ez);
+
+                    int c_x2d = -1, c_y2d = -1, e_x2d = -1, e_y2d = -1;
+
+                    if (czo_fx > 0) {
+                        Fixed32 inv_zo_c = FIXED_DIV_64(s_global_proj_scale_fixed, czo_fx);
+                        c_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(cxo_fx, inv_zo_c), INT_TO_FIXED(CENTRE_X)));
+                        c_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(cyo_fx, inv_zo_c)));
+                    }
+                    if (ezo_fx > 0) {
+                        Fixed32 inv_zo_e = FIXED_DIV_64(s_global_proj_scale_fixed, ezo_fx);
+                        e_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(exo_fx, inv_zo_e), INT_TO_FIXED(CENTRE_X)));
+                        e_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(eyo_fx, inv_zo_e)));
+                    }
+
+                    // Draw face nomal
+                     {
+                        SetSolidPenPat(COL_YELLOW);
+                        // SetSolidPenPat(15); // White
+                        MoveTo(c_x2d + pan_dx, c_y2d + pan_dy);
+                        LineTo(e_x2d + pan_dx, e_y2d + pan_dy);
+                    }
                 }
             }
         }
@@ -5942,7 +5948,6 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
 }
-
 
 /* inspect_faces_before
  * --------------------
