@@ -6702,6 +6702,7 @@ Model3D* createModel3D(void) {
         free(model->vertices.x2d);
         free(model->vertices.y2d);
         free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
         free(model->faces.vertex_indices_buffer);
         free(model);
         return NULL;
@@ -6724,6 +6725,7 @@ Model3D* createModel3D(void) {
         free(model->vertices.x2d);
         free(model->vertices.y2d);
         free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
         free(model->faces.vertex_indices_buffer);
         free(model->faces.vertex_indices_ptr);
         free(model);
@@ -6744,6 +6746,7 @@ Model3D* createModel3D(void) {
         free(model->vertices.x2d);
         free(model->vertices.y2d);
         free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
         free(model->faces.vertex_indices_buffer);
         free(model->faces.vertex_indices_ptr);
         if (model->faces.z_min) free(model->faces.z_min);
@@ -6776,6 +6779,7 @@ Model3D* createModel3D(void) {
         free(model->vertices.x2d);
         free(model->vertices.y2d);
         free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
         free(model->faces.vertex_indices_buffer);
         free(model->faces.vertex_indices_ptr);
         free(model->faces.z_max);
@@ -6811,6 +6815,7 @@ Model3D* createModel3D(void) {
         free(model->vertices.x2d);
         free(model->vertices.y2d);
         free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
         free(model->faces.vertex_indices_buffer);
         free(model->faces.vertex_indices_ptr);
         free(model->faces.z_max);
@@ -6832,9 +6837,11 @@ Model3D* createModel3D(void) {
         free(model->vertices.x2d);
         free(model->vertices.y2d);
         free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
         free(model->faces.vertex_indices_buffer);
         free(model->faces.vertex_indices_ptr);
-        free(model->faces.z_max);
+        if (model->faces.z_min) free(model->faces.z_min);
+        if (model->faces.z_max) free(model->faces.z_max);
         if (model->faces.z_mean) free(model->faces.z_mean);
         free(model);
         return NULL;
@@ -6862,6 +6869,7 @@ Model3D* createModel3D(void) {
         free(model->vertices.x2d);
         free(model->vertices.y2d);
         free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
         free(model->faces.vertex_indices_buffer);
         free(model->faces.vertex_indices_ptr);
         if (model->faces.z_min) free(model->faces.z_min);
