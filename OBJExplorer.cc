@@ -6847,13 +6847,7 @@ Model3D* createModel3D(void) {
         return NULL;
     }
     
-    // Initialize structure
-    model->faces.vertex_countHandle = NULL;
-    model->faces.vertex_indicesBufferHandle = NULL;
-    model->faces.vertex_indicesPtrHandle = NULL;
-    model->faces.z_maxHandle = NULL;
-    model->faces.display_flagHandle = NULL;
-    model->faces.sorted_face_indicesHandle = NULL;
+
     
     // Allocate sorted_face_indices array: nf * 4 bytes = 24KB max
     model->faces.sorted_face_indices = (int*)malloc(nf * sizeof(int));
@@ -6889,6 +6883,7 @@ Model3D* createModel3D(void) {
     model->faces.sorted_face_indicesHandle = NULL;
     model->faces.total_indices = 0;
     
+
     return model;
 }
 
@@ -8393,8 +8388,6 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
     // Open file in read mode
     file = fopen(filename, "r");
     if (file == NULL) {
-        printf("Error: Unable to open file '%s'\n", filename);
-        printf("Check that the file exists.\n\n");
         return -1;  // Return -1 on error
     }
     
@@ -9917,17 +9910,43 @@ segment "code22";
 
             // Try to load the model; if it fails, inform the user, reset model state, and re-prompt
             if (loadModel3D(model, filename) < 0) {
-                // printf("\nError loading file '%s'. Please try again.\n", filename);
-                // Destroy and recreate model to ensure clean state for next attempt
-                destroyModel3D(model);
-                model = createModel3D();
-                if (model == NULL) {
-                    printf("Error: Unable to allocate memory for 3D model after failed load. Exiting.\n");
-                    printf("Press any key to quit...\n");
-                    keypress();
-                    return 1;
+                // Retry once with a ".obj" extension appended, so the user
+                // can type the filename without the extension
+                size_t flen = strlen(filename);
+                int already_has_ext = (flen >= 4 && strcmp(filename + flen - 4, ".obj") == 0);
+                int retry_failed = 1;
+
+                if (!already_has_ext) {
+                    char filename_ext[256];
+                    if (flen + 4 < sizeof(filename_ext)) {
+                        snprintf(filename_ext, sizeof(filename_ext), "%s.obj", filename);
+                        destroyModel3D(model);
+                        model = createModel3D();
+                        if (model == NULL) {
+                            printf("Error: Unable to allocate memory for 3D model after failed load. Exiting.\n");
+                            printf("Press any key to quit...\n");
+                            keypress();
+                            return 1;
+                        }
+                        if (loadModel3D(model, filename_ext) >= 0) {
+                            retry_failed = 0;
+                        }
+                    }
                 }
-                continue;
+
+                if (retry_failed) {
+                    printf("\nError loading file '%s'. Please try again.\n", filename);
+                    // Destroy and recreate model to ensure clean state for next attempt
+                    destroyModel3D(model);
+                    model = createModel3D();
+                    if (model == NULL) {
+                        printf("Error: Unable to allocate memory for 3D model after failed load. Exiting.\n");
+                        printf("Press any key to quit...\n");
+                        keypress();
+                        return 1;
+                    }
+                    continue;
+                }
             }
             // Successfully loaded; ask the user about the overlap scan
             printf("\nPerform 3D face intersection check? (y/N) ");
