@@ -9833,6 +9833,192 @@ void initPalettes(void)
         }
     }
 }
+// Alternative renderer, triggered by a dedicated key (e.g. Z/z) in the main
+// viewer loop. Entirely additive: does not touch processModelFast,
+// calculateFaceDepths, or the existing painter's-algorithm pipeline. Consumes
+// the same already-computed vtx->x2d/y2d/zo and faces->vertex_indices_buffer.
+//
+// PIXEL PLOT: for now, MoveTo(x,y)+LineTo(x,y) (QuickDraw II, same point =
+// single pixel). This is the #1 candidate to replace with inline 65816
+// assembly later (direct SHR nibble read-modify-write), once this scanline
+// logic is validated. Marked below with "PLOT PIXEL HERE".
+//
+// DEPTH PRECISION: this Z-buffer is kept entirely in native float (NOT
+// Fixed32) on purpose. Diagnosed with a real case (two perpendicular faces
+// of the model, ids 13 and 18, whose observer-space depths interleave within
+// less than 1% of each other in their screen overlap region) - a Fixed32
+// round-trip for inv_z was not resolving such close depth conflicts
+// correctly, causing consistently wrong occlusion between those faces
+// regardless of rotation. Float32 has far more usable relative precision at
+// this magnitude, so all inv_z math below stays in float from vertex
+// computation through to the buffer comparison itself.
+//
+// Adapt SCREEN_WIDTH/SCREEN_HEIGHT and MAX_SPAN_INTERSECTIONS to your
+// actual constants/limits.
+
+#define SCREEN_WIDTH 320
+#define SCREEN_HEIGHT 200
+#define MAX_SPAN_INTERSECTIONS 16   // generous for concave faces (e.g. a star)
+
+// Debug-only: cycle through a handful of distinct SHR colors per face index,
+// so overlapping faces are visually distinguishable and Z-buffer occlusion
+// can actually be verified on screen. Replace with real per-face shading
+// (orientation-based, texture, etc.) once depth correctness is confirmed.
+static const int debug_face_palette[] = {
+    COL_LIGHT_GREEN, COL_YELLOW, COL_RED, COL_LIGHT_BLUE,
+    COL_ORANGE, COL_WHITE, COL_LIGHT_GREY, COL_PURPLE
+};
+#define DEBUG_FACE_PALETTE_SIZE (sizeof(debug_face_palette) / sizeof(debug_face_palette[0]))
+
+typedef struct {
+    int x;        // screen-space x of the intersection
+    float inv_z;  // interpolated 1/z at that intersection (native float)
+} ScanIntersection;
+
+void renderModelScanlineZBuffer(Model3D* model) {
+    VertexArrays3D* vtx = &model->vertices;
+    FaceArrays3D* faces = &model->faces;
+    int vcount = vtx->vertex_count;
+    int fcount = faces->face_count;
+    int y, f, i;
+
+    // --- 1/z per vertex, recomputed locally once per call (not stored
+    // elsewhere; existing pipeline untouched). Perspective-correct depth
+    // interpolation needs 1/z, which is linear in screen space - z itself
+    // is not. Kept in float (see header comment on precision). ---
+    static float* inv_z = NULL;
+    static int inv_z_capacity = 0;
+    if (inv_z_capacity < vcount) {
+        if (inv_z) free(inv_z);
+        inv_z = (float*)malloc(vcount * sizeof(float));
+        inv_z_capacity = vcount;
+    }
+    for (i = 0; i < vcount; i++) {
+        float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
+        inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
+    }
+
+    // --- One-scanline Z-buffer, reused every line (320 floats only,
+    // not a full-screen buffer) ---
+    static float zbuffer_line[SCREEN_WIDTH];
+
+    ScanIntersection hits[MAX_SPAN_INTERSECTIONS];
+
+    for (y = 0; y < SCREEN_HEIGHT; y++) {
+        for (i = 0; i < SCREEN_WIDTH; i++) zbuffer_line[i] = -1.0f; // nothing drawn yet
+
+        for (f = 0; f < fcount; f++) {
+            int n, offt, k, hit_count;
+
+            if (!faces->display_flag[f]) continue;
+            n = faces->vertex_count[f];
+            if (n < 3) continue;
+            if (y < faces->miny[f] || y > faces->maxy[f]) continue;
+
+            offt = faces->vertex_indices_ptr[f];
+            hit_count = 0;
+
+            // --- Gather all edge/scanline intersections for this face ---
+            // Standard scan-conversion rule (y1 <= y < y2, taking edge
+            // direction into account) avoids double-counting a vertex that
+            // sits exactly on the scanline - this also makes concave faces
+            // (e.g. the star) work correctly via pair-wise (even-odd) fill,
+            // same principle as the Newell/shoelace robustness discussed
+            // earlier for orientation.
+            for (k = 0; k < n; k++) {
+                int k2 = (k + 1) % n;
+                int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
+                int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
+
+                int y1 = vtx->y2d[vid1];
+                int y2 = vtx->y2d[vid2];
+                int x1 = vtx->x2d[vid1];
+                int x2 = vtx->x2d[vid2];
+
+                int ylo = (y1 < y2) ? y1 : y2;
+                int yhi = (y1 < y2) ? y2 : y1;
+                if (y < ylo || y >= yhi) continue; // half-open range, skips horizontal edges too
+
+                // linear interpolation fraction along the edge in screen space
+                float t = (float)(y - y1) / (float)(y2 - y1);
+                int xi = x1 + (int)((x2 - x1) * t + 0.5f);
+
+                // 1/z is linear in screen space along this edge (perspective-
+                // correct interpolation) - plain float lerp, no Fixed32
+                // round-trip (see header comment).
+                float izf = inv_z[vid1] + (inv_z[vid2] - inv_z[vid1]) * t;
+
+                if (hit_count < MAX_SPAN_INTERSECTIONS) {
+                    hits[hit_count].x = xi;
+                    hits[hit_count].inv_z = izf;
+                    hit_count++;
+                }
+            }
+
+            if (hit_count < 2) continue;
+
+            // --- Sort intersections by x (simple insertion sort - hit_count
+            // is small, typically <= number of face vertices) ---
+            {
+                int a, b;
+                for (a = 1; a < hit_count; a++) {
+                    ScanIntersection key = hits[a];
+                    b = a - 1;
+                    while (b >= 0 && hits[b].x > key.x) {
+                        hits[b + 1] = hits[b];
+                        b--;
+                    }
+                    hits[b + 1] = key;
+                }
+            }
+
+            // --- Pair up consecutive intersections (even-odd rule) and
+            // fill each span with a Z-test per pixel ---
+            {
+                int p;
+                for (p = 0; p + 1 < hit_count; p += 2) {
+                    int xa = hits[p].x;
+                    int xb = hits[p + 1].x;
+                    float iza = hits[p].inv_z;
+                    float izb = hits[p + 1].inv_z;
+                    int x;
+
+                    if (xa == xb) continue; // degenerate span
+
+                    for (x = xa; x <= xb; x++) {
+                        if (x < 0 || x >= SCREEN_WIDTH) continue;
+
+                        float tx = (float)(x - xa) / (float)(xb - xa);
+                        float iz_here = iza + (izb - iza) * tx;
+
+                        if (iz_here > zbuffer_line[x]) {
+                            zbuffer_line[x] = iz_here;
+
+                            // --- PLOT PIXEL HERE ---
+                            // Prototype via QuickDraw II (single point).
+                            // TODO: replace with inline 65816 asm doing a
+                            // direct SHR nibble read-modify-write once this
+                            // scanline logic is validated and profiled.
+                            //
+                            // Span edges (x==xa or x==xb) are the face's
+                            // border at this scanline - free byproduct of
+                            // the scan-conversion, no separate outline pass
+                            // needed. Same Z-test applies, so a border pixel
+                            // occluded by a nearer face still gets skipped.
+                            if (x == xa || x == xb) {
+                                SetSolidPenPat(COL_BLACK); // TODO: pick your outline color
+                            } else {
+                                SetSolidPenPat(debug_face_palette[f % DEBUG_FACE_PALETTE_SIZE]); // debug: color by face index
+                            }
+                            MoveTo(x, y);
+                            LineTo(x, y);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 // ==============================================================
 // THIS IS THE MAIN PROGRAM
@@ -10403,8 +10589,8 @@ segment "code22";
                     goto loopReDraw;
                 }
 
-case 66:  // 'B' - toggle back-face culling (observer-space d<=0 test)
-case 98:  // 'b'
+            case 66:  // 'B' - toggle back-face culling (observer-space d<=0 test)
+            case 98:  // 'b'
                 cull_back_faces ^= 1;
                 printf("Back-face culling: %s\n", cull_back_faces ? "ON" : "OFF");
                 if (model != NULL) {
@@ -10471,6 +10657,20 @@ case 98:  // 'b'
 
             case 27:  // ESC - quit
                 goto end;
+            
+            
+            // 'O' - some functionality for the 'O' key
+            case 79:  // 'O'
+            case 111: // 'o'
+                printf("scale=%f centre_x=%d centre_y=%d\n", FIXED_TO_FLOAT(s_global_proj_scale_fixed), CENTRE_X, CENTRE_Y);
+                keypress();
+                startgraph(mode);
+                // Implement the desired behavior for the 'O' key here
+                renderModelScanlineZBuffer(model);
+                keypress();
+                endgraph();
+                goto loopReDraw;
+            
             
             default:  // All other keys - redraw
                 goto loopReDraw;
