@@ -9866,7 +9866,7 @@ void initPalettes(void)
 // (orientation-based, texture, etc.) once depth correctness is confirmed.
 static const int debug_face_palette[] = {
     COL_LIGHT_GREEN, COL_YELLOW, COL_RED, COL_LIGHT_BLUE,
-    COL_ORANGE, COL_WHITE, COL_LIGHT_GREY, COL_PURPLE
+    COL_ORANGE, COL_ROSE, COL_LIGHT_GREY, COL_PURPLE
 };
 #define DEBUG_FACE_PALETTE_SIZE (sizeof(debug_face_palette) / sizeof(debug_face_palette[0]))
 
@@ -9903,6 +9903,8 @@ void renderModelScanlineZBuffer(Model3D* model) {
     static float zbuffer_line[SCREEN_WIDTH];
 
     ScanIntersection hits[MAX_SPAN_INTERSECTIONS];
+
+    SetPenMode(0);
 
     for (y = 0; y < SCREEN_HEIGHT; y++) {
         for (i = 0; i < SCREEN_WIDTH; i++) zbuffer_line[i] = -1.0f; // nothing drawn yet
@@ -10662,8 +10664,6 @@ segment "code22";
             // 'O' - some functionality for the 'O' key
             case 79:  // 'O'
             case 111: // 'o'
-                printf("scale=%f centre_x=%d centre_y=%d\n", FIXED_TO_FLOAT(s_global_proj_scale_fixed), CENTRE_X, CENTRE_Y);
-                keypress();
                 startgraph(mode);
                 // Implement the desired behavior for the 'O' key here
                 renderModelScanlineZBuffer(model);
