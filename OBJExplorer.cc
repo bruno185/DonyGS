@@ -9875,6 +9875,104 @@ typedef struct {
     float inv_z;  // interpolated 1/z at that intersection (native float)
 } ScanIntersection;
 
+int  drawPixel(int x, int y, int color)
+{
+    unsigned char *p;
+    unsigned char value;
+
+    /* Coordonnées valides */
+    if (x < 0 || x >= 320 || y < 0 || y >= 200)
+        return;
+
+    /* Indice de palette 0..15 */
+    color &= 0x0F;
+
+    /*
+     * SHR 320x200 :
+     *
+     * 160 octets par ligne
+     * 2 pixels par octet
+     *
+     * Adresse = 0xE12000 + y * 160 + x / 2
+     */
+    p = (unsigned char *)0xE12000 + y * 160 + (x >> 1);
+
+    asm {
+        /*
+         * Lire l'octet contenant les deux pixels.
+         */
+        sep     #0x20
+
+        lda     [p]
+        sta     value
+
+        /*
+         * x pair ou impair ?
+         */
+        lda     x
+        and     #0x01
+        bne     pixel_odd
+
+        /*
+         * =========================================
+         * x PAIR
+         * pixel = nibble HAUT
+         *
+         *   couleur : CCCC0000
+         *   ancien  : ????DDDD
+         *   résultat: CCCC DDDD
+         * =========================================
+         */
+
+        lda     color
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        and     #0xF0
+
+        sta     value
+
+        lda     [p]
+        and     #0x0F
+
+        ora     value
+        sta     [p]
+
+        bra     done
+
+
+pixel_odd:
+
+        /*
+         * =========================================
+         * x IMPAIR
+         * pixel = nibble BAS
+         *
+         *   ancien  : GGGG ????
+         *   couleur : 0000 CCCC
+         *   résultat: GGGG CCCC
+         * =========================================
+         */
+
+        lda     [p]
+        and     #0xF0
+
+        sta     value
+
+        lda     color
+        and     #0x0F
+
+        ora     value
+        sta     [p]
+
+
+done:
+        rep     #0x20
+    }
+}
+
+
 void renderModelScanlineZBuffer(Model3D* model) {
     VertexArrays3D* vtx = &model->vertices;
     FaceArrays3D* faces = &model->faces;
@@ -10008,12 +10106,14 @@ void renderModelScanlineZBuffer(Model3D* model) {
                             // needed. Same Z-test applies, so a border pixel
                             // occluded by a nearer face still gets skipped.
                             if (x == xa || x == xb) {
-                                SetSolidPenPat(COL_BLACK); // TODO: pick your outline color
+                                // SetSolidPenPat(COL_BLACK); // TODO: pick your outline color
+                                drawPixel(x, y, COL_BLACK); // draw the outline pixel
                             } else {
-                                SetSolidPenPat(debug_face_palette[f % DEBUG_FACE_PALETTE_SIZE]); // debug: color by face index
+                                // SetSolidPenPat(debug_face_palette[f % DEBUG_FACE_PALETTE_SIZE]); // debug: color by face index
+                                drawPixel(x, y, debug_face_palette[f % DEBUG_FACE_PALETTE_SIZE]); // draw the face pixel
                             }
-                            MoveTo(x, y);
-                            LineTo(x, y);
+                            // MoveTo(x, y);
+                            // LineTo(x, y);
                         }
                     }
                 }
