@@ -9875,54 +9875,39 @@ typedef struct {
     float inv_z;  // interpolated 1/z at that intersection (native float)
 } ScanIntersection;
 
-int  drawPixel(int x, int y, int color)
+void drawPixel(int x, int y, int color)
 {
-    unsigned char *p;
+    int offset;
     unsigned char value;
 
-    /* Coordonnées valides */
     if (x < 0 || x >= 320 || y < 0 || y >= 200)
         return;
 
-    /* Indice de palette 0..15 */
     color &= 0x0F;
 
-    /*
-     * SHR 320x200 :
-     *
-     * 160 octets par ligne
-     * 2 pixels par octet
-     *
-     * Adresse = 0xE12000 + y * 160 + x / 2
-     */
-    p = (unsigned char *)0xE12000 + y * 160 + (x >> 1);
+    /* Offset (0..31999) into SHR bank $E1 memory - computed in C,
+       passed to assembly via the X register (16-bit, plenty of range) */
+    offset = y * 160 + (x >> 1);
 
     asm {
-        /*
-         * Lire l'octet contenant les deux pixels.
-         */
-        sep     #0x20
+        sep     #0x20        ; 8-bit accumulator
 
-        lda     [p]
-        sta     value
+        ldx     offset       ; X = byte offset (index register stays 16-bit)
+        lda     0xE12000,x    ; read the byte containing both pixels
+                             ; (absolute LONG indexed addressing - bank $E1
+                             ; is baked into the instruction itself, no
+                             ; pointer variable involved at all)
 
-        /*
-         * x pair ou impair ?
-         */
+        pha                  ; save original byte
+
         lda     x
         and     #0x01
         bne     pixel_odd
 
-        /*
-         * =========================================
-         * x PAIR
-         * pixel = nibble HAUT
-         *
-         *   couleur : CCCC0000
-         *   ancien  : ????DDDD
-         *   résultat: CCCC DDDD
-         * =========================================
-         */
+        /* x EVEN: pixel = high nibble */
+        pla
+        and     #0x0F
+        sta     value
 
         lda     color
         asl     a
@@ -9930,48 +9915,25 @@ int  drawPixel(int x, int y, int color)
         asl     a
         asl     a
         and     #0xF0
-
-        sta     value
-
-        lda     [p]
-        and     #0x0F
-
         ora     value
-        sta     [p]
-
+        sta     0xE12000,x
         bra     done
 
-
 pixel_odd:
-
-        /*
-         * =========================================
-         * x IMPAIR
-         * pixel = nibble BAS
-         *
-         *   ancien  : GGGG ????
-         *   couleur : 0000 CCCC
-         *   résultat: GGGG CCCC
-         * =========================================
-         */
-
-        lda     [p]
+        /* x ODD: pixel = low nibble */
+        pla
         and     #0xF0
-
         sta     value
 
         lda     color
         and     #0x0F
-
         ora     value
-        sta     [p]
-
+        sta     0xE12000,x
 
 done:
         rep     #0x20
     }
 }
-
 
 void renderModelScanlineZBuffer(Model3D* model) {
     VertexArrays3D* vtx = &model->vertices;
