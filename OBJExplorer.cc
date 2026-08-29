@@ -9833,6 +9833,7 @@ void initPalettes(void)
         }
     }
 }
+
 // Alternative renderer, triggered by a dedicated key (e.g. Z/z) in the main
 // viewer loop. Entirely additive: does not touch processModelFast,
 // calculateFaceDepths, or the existing painter's-algorithm pipeline. Consumes
@@ -9874,6 +9875,39 @@ typedef struct {
     int x;        // screen-space x of the intersection
     float inv_z;  // interpolated 1/z at that intersection (native float)
 } ScanIntersection;
+
+
+// Extracted verbatim from drawPolygons's fill/frame color logic, so the
+// scanline Z-buffer renderer reproduces the exact same user choices
+// (default colors, user overrides, orientation shading, palette cycling).
+
+int getFaceFillColor(int face_id) {
+    int fill_color;
+    if (shaded_by_orientation) {
+        fill_color = face_shade_color[face_id];
+    } else if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
+        fill_color = random_fill_colors[face_id];
+    } else if (user_fill_color >= 0) {
+        fill_color = user_fill_color;
+    } else {
+        fill_color = COL_FILL_DEFAULT;
+    }
+    return fill_color;
+}
+
+int getFaceFrameColor(int face_id, int fill_color) {
+    int frame_color;
+    if (user_frame_color == 17) {
+        frame_color = fill_color;
+    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
+        frame_color = random_frame_colors[face_id];
+    } else if (user_frame_color >= 0) {
+        frame_color = user_frame_color;
+    } else {
+        frame_color = COL_FRAME;
+    }
+    return frame_color;
+}
 
 void drawPixel(int x, int y, int color)
 {
@@ -9965,6 +9999,7 @@ void renderModelScanlineZBuffer(Model3D* model) {
     ScanIntersection hits[MAX_SPAN_INTERSECTIONS];
 
     SetPenMode(0);
+    applyPalette(palette);
 
     for (y = 0; y < SCREEN_HEIGHT; y++) {
         for (i = 0; i < SCREEN_WIDTH; i++) zbuffer_line[i] = -1.0f; // nothing drawn yet
@@ -10057,25 +10092,20 @@ void renderModelScanlineZBuffer(Model3D* model) {
                             zbuffer_line[x] = iz_here;
 
                             // --- PLOT PIXEL HERE ---
-                            // Prototype via QuickDraw II (single point).
-                            // TODO: replace with inline 65816 asm doing a
-                            // direct SHR nibble read-modify-write once this
-                            // scanline logic is validated and profiled.
-                            //
-                            // Span edges (x==xa or x==xb) are the face's
-                            // border at this scanline - free byproduct of
-                            // the scan-conversion, no separate outline pass
-                            // needed. Same Z-test applies, so a border pixel
-                            // occluded by a nearer face still gets skipped.
-                            if (x == xa || x == xb) {
-                                // SetSolidPenPat(COL_BLACK); // TODO: pick your outline color
-                                drawPixel(x, y, COL_BLACK); // draw the outline pixel
-                            } else {
-                                // SetSolidPenPat(debug_face_palette[f % DEBUG_FACE_PALETTE_SIZE]); // debug: color by face index
-                                drawPixel(x, y, debug_face_palette[f % DEBUG_FACE_PALETTE_SIZE]); // draw the face pixel
+                            // Reproduces the exact color logic used by
+                            // drawPolygons (default colors, user overrides,
+                            // orientation shading, palette cycling) via the
+                            // extracted getFaceFillColor/getFaceFrameColor
+                            // helpers, so the Z-buffer view matches the
+                            // painter's rendering choices exactly.
+                            {
+                                int fillColor = getFaceFillColor(f);
+                                if (x == xa || x == xb) {
+                                    drawPixel(x, y, getFaceFrameColor(f, fillColor));
+                                } else {
+                                    drawPixel(x, y, fillColor);
+                                }
                             }
-                            // MoveTo(x, y);
-                            // LineTo(x, y);
                         }
                     }
                 }
