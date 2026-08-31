@@ -70,7 +70,7 @@
 #include <stdint.h>      // uint32_t, etc.
 
 #pragma memorymodel 1
-// #pragma optimize 1
+#pragma optimize 1
 
 segment "data";
 
@@ -9551,7 +9551,7 @@ static void show_help_pager(void) {
         ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
         "1: Painter = FAST (simple sort only)",
         "2: Painter = NORMAL (Fixed32/64)",
-        "3: Painter = GEO (geometry-only). Can be very fast for large models",
+        "3: Painter = GEO (geometry-only). Can be slow for large models",
         "4: Painter = CORRECT (painter_correct)",
         "5: Painter = CORRECTV2",
         "6: Both colors RANDOM mode",
@@ -9568,12 +9568,13 @@ static void show_help_pager(void) {
         "0: Reset pan",
         "D: Inspect faces BEFORE target",
         "S: Inspect faces AFTER target",
-        "V: Show single face (navigate with arrows)",
-        "Q: Interactive face-pair inspector",
+        "V: Show single face (navigate with arrows, show normals, space for details and other actions including hide/restore a face or all faces)",
+        "Q: Interactive face-pair inspector (space for details, then R/E/G for more actions)",
         "M: Debug pair_plane_before",
         "L: Label faces with IDs",
         "F: Dump face data (3D, 2D, sort order) to file",
         "N: Load new model",
+        "O: save SHGR screen as a PIC ($C1) not compressed file",
         "H: Display this help message",
         "ESC: Quit program"
     };
@@ -9967,96 +9968,53 @@ void setProDOSFileType(const char* filename, int fileType, long auxType) {
     SetFileInfoGS(&pb);
 }
 
-// Save the current SHR screen as a RAW (uncompressed) Apple IIGS Super
-// Hi-Res picture: 32000 bytes of screen data + 256 bytes SCB block
-// (200 real + 56 padding) + 512 bytes of color table data (16 palettes x
-// 16 colors x 2 bytes), no compression. File type $C1, auxtype $0000.
-//
-// IMPORTANT: never fwrite() directly from a raw (unsigned char*)0xE1xxxx
-// pointer. Such a C pointer is very likely "near" (16-bit) in this ORCA/C
-// environment - exactly the bug already found and fixed in drawPixel(),
-// where it silently truncated the $E1 bank byte. Doing the same thing here
-// would read garbage/wrong-bank memory instead of the real screen data,
-// which matches the persistent striping seen even after fixing the file
-// structure itself. The fix is the same as for drawPixel: copy the real
-// memory via inline 65816 assembly using absolute-long addressing (bank
-// baked into the instruction, no pointer variable involved) into a normal
-// local buffer, THEN fwrite that local buffer.
+#include <stdio.h>
 
-#include <string.h>
+#define SHR_BASE        0xE12000UL
+#define SHR_SIZE        32768UL
 
-#define PIC_WIDTH 320
-#define PIC_HEIGHT 200
-#define SHR_BYTES_PER_LINE 160
-#define SHR_SCB_COUNT 200
+void saveSHRAsRawPic(const char *filename)
+{
+    FILE *out;
+    unsigned char *shr;
+    unsigned long i;
 
-// Copy exactly `count` bytes from $E1:baseOffset (absolute long addressing,
-// bank baked into the instruction) into a local buffer. No C pointer to
-// the $E1 memory is ever created, so there's no near/far truncation risk.
-static void copyFromShrBank(unsigned int baseOffset, unsigned char* dest, unsigned int count) {
-    unsigned int i;
-    for (i = 0; i < count; i++) {
-        unsigned int off = baseOffset + i;
-        unsigned char value;
-        asm {
-            sep     #0x20
-            ldx     off
-            lda     0xE10000,x     ; absolute long indexed - bank $E1 is part
-                                  ; of the instruction itself, same trick as
-                                  ; the working drawPixel fix
-            sta     value
-            rep     #0x20
-        }
-        dest[i] = value;
-    }
-}
-
-void saveSHRAsRawPic(const char* filename) {
-    FILE* out;
-    unsigned char lineBuf[SHR_BYTES_PER_LINE];
-    unsigned char scbBuf[SHR_SCB_COUNT];
-    unsigned char pad[56];
-    int y;
-
-    memset(pad, 0, sizeof(pad));
+    /*
+     * Adresse réelle de la mémoire SHR :
+     *
+     * $E1:2000 = $E12000
+     *
+     * Le cast en pointeur 32 bits permet à ORCA/C
+     * d'utiliser l'adressage long.
+     */
+    shr = (volatile unsigned char *)SHR_BASE;
 
     out = fopen(filename, "wb");
-    if (!out) {
+
+    if (out == NULL) {
         printf("Error: unable to open %s for writing\n", filename);
         return;
     }
 
-    // Pixel data: 200 lines x 160 bytes, copied via absolute-long asm reads
-    for (y = 0; y < PIC_HEIGHT; y++) {
-        copyFromShrBank(0x2000 + y * SHR_BYTES_PER_LINE, lineBuf, SHR_BYTES_PER_LINE);
-        fwrite(lineBuf, 1, SHR_BYTES_PER_LINE, out);
-    }
-
-    // SCB block: 200 real entries (copied the same safe way) + 56 padding
-    // bytes, matching the real $9d00-9dff memory layout exactly.
-    copyFromShrBank(0x9D00, scbBuf, SHR_SCB_COUNT);
-    fwrite(scbBuf, 1, SHR_SCB_COUNT, out);
-    fwrite(pad, 1, sizeof(pad), out);
-
-    // Color table block: 16 palettes x 16 colors x 2 bytes each (512 bytes)
-    // - this comes from the `palettes[]` C array already in normal (safe)
-    // memory, not from a raw $E1 pointer, so no change needed here.
-    {
-        int p, c;
-        for (p = 0; p < 16; p++) {
-            for (c = 0; c < 16; c++) {
-                unsigned short colorWord = (unsigned short)palettes[p].color[c];
-                fwrite(&colorWord, sizeof(colorWord), 1, out);
-            }
-        }
+    /*
+     * Copie brute des 32 Ko SHR.
+     *
+     * $E12000 -> $E19FFF
+     */
+    for (i = 0; i < SHR_SIZE; i++) {
+        fputc(shr[i], out);
     }
 
     fclose(out);
 
+    /*
+     * PIC, non compressé.
+     */
     setProDOSFileType(filename, 0xC1, 0x0000);
 
     printf("Saved %s\n", filename);
 }
+
 
 // --- Generic screenshot entry point, callable after ANY renderer ---
 void saveNextScreenshot(void) {
@@ -10273,11 +10231,15 @@ segment "code22";
                 // Wait for key press and get key code
 
         key = getkeypress();
+
+        if (key == '*') {
+            saveNextScreenshot(); // we need to save image to file here, before closing QuickDraw (which alters the palette)
+        }
+
         endgraph();        // Close QuickDraw
         }
 
         DoText();           // Show text screen
-
 
         // Handle keyboard input with switch statement
         switch (key) {
@@ -10726,16 +10688,15 @@ segment "code22";
                 startgraph(mode);
                 // Implement the desired behavior for the 'O' key here
                 renderModelScanlineZBuffer(model);
-                keypress();
+                key = getkeypress();
+                if (key == '*') { saveNextScreenshot(); }
+
                 endgraph();
                 goto loopReDraw;
-            
-            
-            case 36:  // '$' - some functionality for the 'C' key
-                saveNextScreenshot();
-                goto loopReDraw;
+
             default:  // All other keys - redraw
                 goto loopReDraw;
+            
         }
         }  // End of loopReDraw block
 

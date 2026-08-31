@@ -23,7 +23,7 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 3. **Use the controls**: Navigate the scene with the keyboard and switch rendering modes using keys `1` through `5`.
 4. **Change the color palette**: Press `G` to cycle through the available color palettes.
 5. **Enable orientation shading**: Press `!` to toggle orientation-based shading on and off.
-6. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `R` to reverse the vertex winding of the selected face and update its front/back classification.
+6. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `V` (in that detail screen) to reverse the vertex winding of the selected face and update its front/back classification, `H`/`R`/`A` to hide, restore, or restore all faces, and `N` (in the main face viewer) to toggle display of the face's normal.
 7. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the farther face in front of the nearer face or `E` to move the nearer face behind the farther face in the sorted face list.
 6. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
 7. **Repair ordering**: Press `;` to run the face order repair helper, and press `.` to run `check_sort_repair_fast` for a QuickDraw-centroid-based minimal repair.
@@ -32,10 +32,11 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 
 - It is optimized for the Apple IIGS hardware and demonstrates fixed-point 3D rendering techniques.
 - It includes advanced painter algorithms for difficult overlapping geometry.
+- It provides a scanline Z-buffer rendering
 - It provides interactive inspection and debugging tools for face order, overlap, and visibility issues.
 
 ## Limitations 
-However, it has many limitations, including: speed (requires a graphics accelerator or emulator), the number of vertices and faces, the number of vertices per face, very limited handling of intersecting faces, and no handling of the case of cyclic overlap.
+However, it has many limitations, including: speed (requires a graphics accelerator or emulator), the number of vertices and faces, the number of vertices per face, very limited handling of intersecting faces, and handling of the case of cyclic overlap by scanline Z-buffer only.
 
 ### Quick start keys
 
@@ -45,6 +46,7 @@ However, it has many limitations, including: speed (requires a graphics accelera
 - `3`: GEO mode
 - `4`: CORRECT mode
 - `5`: CORRECT V2 mode
+- `O`: experimental scanline Z-buffer mode (prototype, slow)
 - `6`: random colors
 - `7`: choose face colors
 - `6`: choose border colors (including "same as fill color" = no border)
@@ -64,8 +66,7 @@ However, it has many limitations, including: speed (requires a graphics accelera
   - **NORMAL**: Full Newell-Sancha algorithm with Fixed32/64 arithmetic (robust)
   - **GEO**: Geometry-only heuristic painter mode; plane/ordering tests without the full local correction pipeline
   - **CORRECT**: Advanced ordering correction with local face reordering
-  - **CORRECT V2**: Experimental local correction (painter_correctV2)
-  - **FLOAT**: Float-based painter (ARCHIVED — implementation moved to `chutier.txt`) 
+  - **CORRECT V2**: Experimental local correction (painter_correctV2) 
   
 - **3D Manipulation**: Interactive camera controls with adjustable distance, rotation angles, and 2D panning
 - **Advanced Culling**: Observer-space back-face culling to eliminate hidden polygons
@@ -92,7 +93,7 @@ However, it has many limitations, including: speed (requires a graphics accelera
 - Limitations: May produce artifacts on complex overlapping polygons
 
 #### NORMAL Mode (Key: `2`) — NEWELL_SANCHA
-- Full Newell-Sancha (V1) pairwise comparison algorithm (implemented as `painter_newell_sancha`)
+- Based on Newell-Sancha (V1) pairwise comparison algorithm (implemented as `painter_newell_sancha`)
 - Comprehensive geometric tests per face pair:
   1. **Test 1**: Z-extents overlap check (cheap rejection)
   2. **Test 2**: X-extents overlap check
@@ -106,7 +107,7 @@ However, it has many limitations, including: speed (requires a graphics accelera
 - Fixed32 (16.16) and Fixed64 (32.32) arithmetic throughout
 - Most robust for complex geometry
 
-#### GEO Mode (Key: `3`) — ⚠️ CAN BE VERY SLOW
+#### GEO Mode (Key: `3`) — ⚠️ CAN BE VERY SLOW oN LARGE MODELS
 - Geometry-only painter mode that uses plane-based ordering heuristics
 - Uses `painter_geoV2` with ray-casting for depth ordering
 - **WARNING**: This mode is significantly slower than other painters for large models due to intensive geometric calculations
@@ -128,6 +129,15 @@ However, it has many limitations, including: speed (requires a graphics accelera
 - Diagnostic/log code is present but disabled by default (file output commented out, can be re-enabled for analysis)
 - Slower, mainly for pathological models or advanced debugging
 
+#### Scanline Z-Buffer Mode (Key: `O`)
+- Alternative renderer, entirely separate from the painter's-algorithm pipeline (does not sort faces, does not touch `processModelFast` or `calculateFaceDepths`)
+- Rasterizes each face scanline by scanline, computing per-pixel edge intersections and even-odd span pairing — correctly handles concave faces (e.g. a star) without special-casing
+- Depth is resolved per pixel via a single-scanline (320-entry) buffer of interpolated `1/z` (perspective-correct), rather than sorting whole faces — this can correctly resolve cases where two faces interpenetrate or interleave in depth by only a small margin, which the painter's algorithm cannot represent (it can only order whole faces front-to-back)
+- Face borders are drawn as a free byproduct of the scan-conversion (the first/last pixel of each span), rather than a separate outline pass
+- Fill and border colors exactly follow the user's current color choices (default colors, manual overrides, orientation shading, and random-color cycling) — same logic as the painter's `drawPolygons`
+- Pixel plotting uses a hand-written 65816 assembly routine (`drawPixel`) writing directly to SHR bitmap memory, rather than QuickDraw II calls, for performance
+- **Status**: experimental/prototype — computation is significantly slower than any painter mode due to per-pixel depth interpolation; primarily useful for validating painter's-algorithm ordering on difficult geometry (near-tangent or interpenetrating faces) rather than for interactive use
+
 ### Mathematical Implementation
 
 **Fixed-Point Arithmetic:**
@@ -146,7 +156,7 @@ typedef int64_t Fixed64; // 32.32 format
 **Plane Equations:**
 For each face, compute plane coefficients (a, b, c, d) where:
 - `ax + by + cz + d = 0`
-- Normal vector computed via cross product of two edges
+- Normal vector computed via **Newell's method** (summed over all vertices of the face), rather than a 3-vertex cross product. A 3-point cross product gives the wrong orientation for concave faces (e.g. a star-shaped polygon), because a reflex vertex's local winding can differ from the face's overall orientation. Newell's method is robust regardless of concavity and guarantees that reversing the vertex order flips the sign of `(a, b, c, d)` in every case.
 - Used for sidedness tests in painter algorithm
 
 ### Front Faces and Back Faces
@@ -230,6 +240,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `3` | GEO | Geometry-only mode with plane-based ordering heuristics |
 | `4` | CORRECT     | Advanced ordering correction |
 | `5` | CORRECT V2  | Experimental local correction (painter_correctV2) |
+| `O` | Z-BUFFER    | Experimental scanline Z-buffer renderer (prototype, slow) |
 
 #### Color Management
 | Key | Action | Description |
@@ -251,7 +262,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 #### Diagnostic Tools
 | Key | Action | Description |
 |-----|--------|-------------|
-| `V` | Show Face | Display single face (arrows to navigate); `Space` shows detailed textual info (ID, sorted position, vertices, transformed 3D and 2D coords, plane equation); `R` reverses face vertex order; `F` saves details to `Face<ID>.txt`; any other key exits |
+| `V` | Show Face | Display single face (arrows to navigate); `N` toggles normal display; `Space` shows detailed textual info (ID, sorted position, orientation, hidden status, vertices, transformed 3D and 2D coords, plane equation), from which `F` saves to `Face<ID>.txt`, `V` reverses vertex order, `H`/`R`/`A` hide/restore/restore-all faces; any other key exits |
 | `D` | Inspect Before | Analyze faces before selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `S` | Inspect After | Analyze faces after selected face in sorted order (can apply moves with `A`/`O` during preview) |
 | `M` | Debug Pair Plane | Interactive `pair_plane_before` diagnostics for two faces, prompts separately for `f1` and `f2` |
@@ -297,7 +308,18 @@ The `;` key runs `check_sort_repair`, which detects inverted or misordered faces
 | `Space` | Model Info | Display vertices, faces, camera params, performance |
 | `N` | New Model | Load different OBJ file (resets to FAST mode) |
 | `H` | Help | Show paginated keyboard reference |
+| `*` | Save Screenshot | Save the current SHR screen to disk as a native Apple IIGS Super Hi-Res picture (see "Screenshot Export" below) |
 | `ESC` | Quit | Exit application |
+
+### Screenshot Export (`*` key)
+
+Saves the current SHR display to disk as an uncompressed native picture file, readable by GS/OS paint/viewer software (verified with CiderPress II):
+
+- **Filename**: auto-incrementing `screenNNN.PIC` (e.g. `screen000.PIC`, `screen001.PIC`, ...) — the program scans the current directory and picks the first unused index, so nothing is ever overwritten.
+- **Format**: raw (uncompressed) Super Hi-Res picture — 32000 bytes of pixel data, 256 bytes of Scan Control Bytes (200 real entries + 56 reserved padding bytes), and 512 bytes of color table data (16 palettes × 16 colors), matching the documented Apple IIGS SHR memory layout exactly.
+- **ProDOS file type**: `$C1`, auxtype `$0000` ("Apple IIGS Super Hi-Res Graphic Screen Image" — the plain format matching this project's 16-shared-palettes-plus-per-scanline-SCB architecture, not the different $0002 "3200 colors" per-scanline-palette format).
+- Screen memory and SCB bytes are copied via absolute-long-addressed 65816 assembly rather than a raw C pointer, to avoid a near/far pointer truncation issue that otherwise corrupts the saved image.
+- Works after any renderer — the painter modes or the scanline Z-buffer — since it simply captures whatever is currently in SHR video memory.
 
 ### Workflow Example
 
@@ -338,13 +360,16 @@ This interactive tool helps diagnose and correct painter algorithm ordering issu
 
 - **Left/Right Arrows**: Navigate by face ID (decrement/increment)
 - **Up/Down Arrows**: Navigate through sorted face array
+- **N**: Toggle display of the selected face's normal (drawn as a fixed-length screen-space segment from the face centroid; works even when the face is hidden, using its saved vertex count)
 - **Space**: Show detailed textual info about the current face:
   - ID and position in the sorted list
-  - Vertex count and per-vertex data: index, model-space coordinates (x,y,z), observer-space coordinates (xo,yo,zo), and projected 2D coordinates (x2d,y2d)
+  - Orientation (`FRONT`/`BACK`) and hidden status (`HIDDEN`/`NOT HIDDEN`)
+  - Vertex count and per-vertex data: index, model-space coordinates (x,y,z), observer-space coordinates (xo,yo,zo), and projected 2D coordinates (x2d,y2d) — shown even when the face is hidden, using its saved vertex count
   - Plane equation coefficients `(a, b, c, d)`
-  - Press any key to return to the graphical overlay
-- **F**: When viewing textual info, press `F` (or `f`) to save the details to a file named `Face<ID>.txt` (example: `Face42.txt`). A confirmation message is shown and pressing any key returns to the overlay.
+  - From this screen: `F` saves the details to `Face<ID>.txt`, `V` reverses the face's vertex order, `H` hides the face, `R` restores it, `A` restores every hidden face in the model, any other key returns to the graphical overlay
 - **Any Other Key**: Exit viewer and return to full model
+
+**Hide/Restore:** hiding a face (`H`) sets its vertex count to zero without discarding its geometry (the original count is saved internally), so the face stops being rendered and excluded from the painter's sort, while remaining selectable and shown in gray in the viewer. `R` restores the currently selected face and recomputes its plane/visibility (the model may have rotated while hidden). `A` restores every hidden face in the model in one pass.
 
 Useful for examining individual face geometry and understanding the sorting order.
 
@@ -357,6 +382,9 @@ Ci‑dessous un tableau récapitulatif des touches les plus utiles et des **fonc
 | Touche | Action (concis) | Fonctions C impliquées (point d'entrée) |
 |--------|-----------------|-----------------------------------------|
 | `1`..`5` | Changer le mode de painter | modifie `painter_mode` → appelle ensuite `painter_newell_sancha_fast`, `painter_newell_sancha`, `painter_geo`, `painter_correct`, `painter_correctV2` selon le mode |
+| `O` | Rendu Z-buffer scanline (expérimental) | `renderModelScanlineZBuffer` |
+| `V` | Inspecter une face | `showFace` — sous-menu `Space` : `V` (reverse vertex order), `H`/`R`/`A` (hide/restore/restoreAll), `F` (export) |
+| `*` | Sauvegarder l'écran | `saveNextScreenshot` → `saveSHRAsRawPic` (format $C1/$0000, nom auto-incrémenté `screenNNN.PIC`) |
 | `A` / `Z` | Ajuster la distance caméra | modifie `params.distance` et recharge le rendu |
 | `E` / `R` / `T` / `Y` | Panoramique 2D | modifie `pan_dx` / `pan_dy` et redessine |
 | `B` | Toggle back-face culling | `cull_back_faces` + reprocess model |
@@ -459,19 +487,11 @@ This copies the compiled binary to a bootable disk image for use with emulators 
 ## Future Enhancements
 
 - Improve and extend polygon splitting logic (currently handles simple plane cuts on load)
-- Add Z-buffer rendering mode as alternative to painter's algorithm
 - Optimize CORRECT mode for better performance
 - Support textured polygons
 - Implement simple lighting model (flat shading)
-
-## Development History
-
-- **2026-01-03**: Initial implementation with FAST mode
-- **2026-01-10**: Added NORMAL mode with full Newell-Sancha algorithm
-- **2026-01-12**: Implemented diagnostic tools (inspect, overlap check)
-- **2026-01-14**: Added interactive face navigation and showFace viewer
-- **2026-01-15**: Optimized debug code with preprocessor directives (-5KB, +2% speed)
-- **2026-01-15**: Implemented custom color management system with random color generation
+- Optimize screenshot export (`*` key): current implementation copies SHR memory one byte at a time via inline assembly, which is correct but slow — a line-at-a-time (or full-buffer) assembly copy would be significantly faster
+- Optimize the scanline Z-buffer renderer (`O` key) for interactive framerates, and/or extend it with a font/adaptive resolution to speed up per-pixel depth interpolation
 
 ## Credits
 
