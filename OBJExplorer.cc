@@ -1046,123 +1046,21 @@ static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation) {
     }
 }
 
-void painter_geoV2_old(Model3D* model, int face_count) {
+void painter_geoV2(Model3D* model, int face_count) {
     FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
     int i;
 
     Fixed32* face_zmean = faces->z_mean;
     if (!face_zmean) return;
 
-    printf("Running painter_geoV2 with %d faces (cull_back_faces=%d)...\n", face_count, cull_back_faces);
-
-    painter_newell_sancha_fast(model, face_count);
-
-    int visible_count = face_count;
-    if (cull_back_faces) {
-        visible_count = 0;
-        for (i = 0; i < face_count; ++i) {
-            if (faces->display_flag[i]) ++visible_count;
-        }
-    }
-
-    int swap_count = 0;
-    int swapped = 0;
-
-    /* Hash set pour lookup O(1) — remplace la liste lineaire ordered_pairs */
-    PairCache* cache = pair_cache_create(face_count * 16);
-
-    if (inconclusive_pairs) {
-        free(inconclusive_pairs);
-        inconclusive_pairs = NULL;
-    }
-    inconclusive_pairs_capacity = face_count * 4;
-    if (inconclusive_pairs_capacity > 0) {
-        inconclusive_pairs = (InconclusivePair*)malloc(inconclusive_pairs_capacity * sizeof(InconclusivePair));
-        if (!inconclusive_pairs) inconclusive_pairs_capacity = 0;
-    }
-    inconclusive_pairs_count = 0;
-
-    do {
-        swapped = 0;
-
-        for (i = 0; i < visible_count - 1; i++) {
-            int f1 = faces->sorted_face_indices[i];
-            int f2 = faces->sorted_face_indices[i+1];
-
-            /* Lookup O(1) au lieu de O(n) */
-            if (pair_cache_find(cache, f1, f2) != 0) continue;
-
-            {
-                int geo = geometric_face_relation(model, f1, f2);
-                if (geo == -1) continue;
-                if (geo == 1) goto do_swap;
-
-                int geo2 = geometric_face_relation(model, f2, f1);
-                if (geo2 == -1) goto do_swap;
-                if (geo2 == 1) continue;
-
-                if (projected_polygons_overlap(model, f1, f2)) {
-                    int rc = ray_cast_hierarchical(model, f1, f2);
-                    if (rc < 0) {
-                        goto do_swap;
-                    } else if (rc > 0) {
-                        pair_cache_insert(cache, f1, f2, 1);
-                        continue;
-                    }
-                }
-                /* inconclusive */
-                pair_cache_insert(cache, f2, f1, 1);
-                continue;
-            }
-
-            do_swap: {
-                int tmp = faces->sorted_face_indices[i];
-                faces->sorted_face_indices[i]   = faces->sorted_face_indices[i+1];
-                faces->sorted_face_indices[i+1] = tmp;
-                swapped = 1;
-                swap_count++;
-                pair_cache_insert(cache, f2, f1, 1);
-                goto endfor;
-            }
-
-            if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) {
-                inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
-                inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
-                inconclusive_pairs_count++;
-            }
-            pair_cache_insert(cache, f2, f1, 1);
-
-            endfor: ;
-        }
-
-    } while (swapped);
-
-    pair_cache_destroy(cache);
-
-    printf("Total swaps: %d\n", swap_count);
-}
-
-void painter_geoV2GOOD(Model3D* model, int face_count) {
-    FaceArrays3D* faces = &model->faces;
-    int i;
-
-    /* Quick exit if no depth information is available */
-    Fixed32* face_zmean = faces->z_mean;
-    if (!face_zmean) return;
-
-    /* Optional per-face Z extents (used only to skip expensive ray-casts) */
     Fixed32* face_zmin = faces->z_min;   /* may be NULL */
     Fixed32* face_zmax = faces->z_max;
 
     printf("Running painter_geoV2 with %d faces (cull_back_faces=%d)...\n",
            face_count, cull_back_faces);
 
-    /* Initial rough sort by depth (Newell-Sancha style). 
-       This function is required; the geometric pass only refines the order. */
     painter_newell_sancha_fast(model, face_count);
 
-    /* Count how many faces are actually visible (respect back-face culling) */
     int visible_count = face_count;
     if (cull_back_faces) {
         visible_count = 0;
@@ -1171,7 +1069,6 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
         }
     }
 
-    /* Nothing to sort */
     if (visible_count < 2) {
         printf("Total swaps: 0\n");
         return;
@@ -1180,15 +1077,26 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
     int swap_count = 0;
     int swapped;
 
-    /* Hash cache for already-decided pairs → O(1) lookup instead of O(n) */
-    PairCache* cache = pair_cache_create(face_count * 16);
+    /* ------------------------------------------------------------------
+       Fixed-size hash cache.
+       Independent of face_count → predictable memory use and high
+       chance of successful allocation even for 6000-face models.
+       4096 entries is largely sufficient for the number of unique
+       pairs actually touched by the adjacent bubble.
+       ------------------------------------------------------------------ */
+    PairCache* cache = pair_cache_create(4096);
     if (!cache) {
-        printf("painter_geoV2: failed to allocate pair cache, hit a key.\n");
-        keypress();
-        return;
+        /* Last-chance smaller sizes */
+        cache = pair_cache_create(2048);
+        if (!cache)
+            cache = pair_cache_create(1024);
+    }
+    if (!cache) {
+        printf("painter_geoV2: warning - no pair cache, geometric pass disabled\n");
+        return;   /* better to keep the initial sort than run extremely slowly */
     }
 
-    /* Prepare the list that will collect pairs the geometric tests could not resolve */
+    /* Inconclusive buffer */
     if (inconclusive_pairs) {
         free(inconclusive_pairs);
         inconclusive_pairs = NULL;
@@ -1202,9 +1110,6 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
             inconclusive_pairs_capacity = 0;
     }
 
-    /* Classic optimized bubble-sort bookkeeping:
-       - limit shrinks after each pass (everything beyond the last swap is already sorted)
-       - MAX_PASSES is a hard safety limit against rare cycles */
     int limit = visible_count - 1;
     int new_limit;
     const int MAX_PASSES = visible_count * 2;
@@ -1219,18 +1124,10 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
             int f1 = faces->sorted_face_indices[i];
             int f2 = faces->sorted_face_indices[i + 1];
 
-            /* Already decided this ordered pair → skip */
             if (pair_cache_find(cache, f1, f2) != 0)
                 continue;
 
-            /* ----------------------------------------------------------
-               Geometric relation (plane tests only).
-               Returns:
-                 -1 → f1 is geometrically before f2 (keep current order)
-                  1 → f1 is geometrically after  f2 (must swap)
-                  0 → indeterminate
-               This is the primary source of truth for ordering.
-               ---------------------------------------------------------- */
+            /* Geometric tests – source of truth */
             int geo = geometric_face_relation(model, f1, f2);
             if (geo == -1) {
                 pair_cache_insert(cache, f1, f2, 1);
@@ -1239,51 +1136,37 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
             if (geo == 1)
                 goto do_swap;
 
-            /* First test was indeterminate → try the opposite direction */
             int geo2 = geometric_face_relation(model, f2, f1);
             if (geo2 == -1)
-                goto do_swap;          /* f2 before f1 → swap */
+                goto do_swap;
             if (geo2 == 1) {
                 pair_cache_insert(cache, f1, f2, 1);
-                continue;              /* f2 after f1 → keep */
+                continue;
             }
 
-            /* ----------------------------------------------------------
-               Both geometric tests returned indeterminate.
-               Use a cheap Z-extent test only to decide whether the
-               expensive ray-cast is worth running.
-               Important: this test NEVER forces a swap and NEVER
-               writes into the cache by itself.
-               ---------------------------------------------------------- */
+            /* Z test – only to skip the expensive ray-cast */
             int z_disjoint = 0;
             if (face_zmin && face_zmax) {
                 if (face_zmax[f1] <= face_zmin[f2] ||
-                    face_zmax[f2] <= face_zmin[f1]) {
+                    face_zmax[f2] <= face_zmin[f1])
                     z_disjoint = 1;
-                }
             } else {
-                /* Fallback when only average Z is available */
                 Fixed32 dz = face_zmean[f1] - face_zmean[f2];
-                if (dz > FLOAT_TO_FIXED(1.0f) || dz < FLOAT_TO_FIXED(-1.0f)) {
+                if (dz > FLOAT_TO_FIXED(1.0f) || dz < FLOAT_TO_FIXED(-1.0f))
                     z_disjoint = 1;
-                }
             }
 
-            /* Only run the costly projected-overlap + hierarchical ray-cast
-               when the Z ranges actually overlap */
             if (!z_disjoint && projected_polygons_overlap(model, f1, f2)) {
                 int rc = ray_cast_hierarchical(model, f1, f2);
-                if (rc < 0) {
-                    goto do_swap;      /* ray says f1 should be behind */
-                } else if (rc > 0) {
+                if (rc < 0)
+                    goto do_swap;
+                if (rc > 0) {
                     pair_cache_insert(cache, f1, f2, 1);
-                    continue;          /* ray says current order is fine */
+                    continue;
                 }
-                /* rc == 0 → still inconclusive, fall through */
             }
 
-            /* Truly inconclusive pair: record it and freeze the current order
-               so we never re-test the same pair again (prevents infinite loops) */
+            /* Inconclusive */
             if (inconclusive_pairs &&
                 inconclusive_pairs_count < inconclusive_pairs_capacity) {
                 inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
@@ -1294,24 +1177,21 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
             continue;
 
         do_swap:
-            /* Perform the adjacent swap and remember the new order */
             {
                 int tmp = faces->sorted_face_indices[i];
                 faces->sorted_face_indices[i]     = faces->sorted_face_indices[i + 1];
                 faces->sorted_face_indices[i + 1] = tmp;
                 swapped = 1;
                 swap_count++;
-                pair_cache_insert(cache, f2, f1, 1);  /* cache the opposite direction */
-                new_limit = i;                        /* everything after i may still move */
+                pair_cache_insert(cache, f2, f1, 1);
+                new_limit = i;
             }
         }
 
-        /* Shrink the active range for the next pass */
         limit = new_limit;
 
     } while (swapped && limit > 0 && pass < MAX_PASSES);
 
-    /* Safety net: should almost never trigger with the cache */
     if (pass >= MAX_PASSES) {
         printf("painter_geoV2: safety limit reached (%d passes)\n", pass);
     }
@@ -1320,199 +1200,6 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
     printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
 }
 
-void painter_geoV2(Model3D* model, int face_count) {
-    FaceArrays3D* faces = &model->faces;
-    int i;
-
-    /* Quick exit if no depth information is available */
-    Fixed32* face_zmean = faces->z_mean;
-    if (!face_zmean) return;
-
-    /* Optional per-face Z extents (used only to skip expensive ray-casts) */
-    Fixed32* face_zmin = faces->z_min;   /* may be NULL */
-    Fixed32* face_zmax = faces->z_max;
-
-    printf("Running painter_geoV2 with %d faces (cull_back_faces=%d)...\n",
-           face_count, cull_back_faces);
-
-    /* Initial rough sort by depth (Newell-Sancha style).
-       This function is required; the geometric pass only refines the order. */
-    painter_newell_sancha_fast(model, face_count);
-
-    /* Count how many faces are actually visible (respect back-face culling) */
-    int visible_count = face_count;
-    if (cull_back_faces) {
-        visible_count = 0;
-        for (i = 0; i < face_count; ++i) {
-            if (faces->display_flag[i]) ++visible_count;
-        }
-    }
-
-    /* Nothing to sort */
-    if (visible_count < 2) {
-        printf("Total swaps: 0\n");
-        return;
-    }
-
-    int swap_count = 0;
-    int swapped;
-
-    /* ------------------------------------------------------------------
-       Allocate pair cache with progressive fallback.
-       We need to support up to ~6000 faces, so we start reasonably
-       and shrink if allocation fails.
-       ------------------------------------------------------------------ */
-    PairCache* cache = NULL;
-    int cache_size_try[] = {
-        face_count * 8,     /* preferred */
-        face_count * 4,
-        face_count * 2,
-        face_count,         /* minimum useful */
-        0                   /* last resort: no cache */
-    };
-    int t;
-    for (t = 0; t < 5; ++t) {
-        if (cache_size_try[t] <= 0) break;
-        cache = pair_cache_create(cache_size_try[t]);
-        if (cache) break;
-    }
-    if (!cache) {
-        printf("painter_geoV2: warning - running without pair cache (slower, safety limit active)\n");
-    }
-
-    /* Prepare the list that will collect pairs the geometric tests could not resolve */
-    if (inconclusive_pairs) {
-        free(inconclusive_pairs);
-        inconclusive_pairs = NULL;
-    }
-    inconclusive_pairs_capacity = face_count * 4;
-    inconclusive_pairs_count = 0;
-    if (inconclusive_pairs_capacity > 0) {
-        inconclusive_pairs = (InconclusivePair*)malloc(
-            inconclusive_pairs_capacity * sizeof(InconclusivePair));
-        if (!inconclusive_pairs)
-            inconclusive_pairs_capacity = 0;
-    }
-
-    /* Classic optimized bubble-sort bookkeeping:
-       - limit shrinks after each pass
-       - MAX_PASSES is a hard safety limit (more important when cache is missing) */
-    int limit = visible_count - 1;
-    int new_limit;
-    const int MAX_PASSES = cache ? (visible_count * 2) : (visible_count + 16);
-    int pass = 0;
-
-    do {
-        swapped = 0;
-        new_limit = 0;
-        ++pass;
-
-        for (i = 0; i < limit; ++i) {
-            int f1 = faces->sorted_face_indices[i];
-            int f2 = faces->sorted_face_indices[i + 1];
-
-            /* Already decided this ordered pair → skip (if cache exists) */
-            if (cache && pair_cache_find(cache, f1, f2) != 0)
-                continue;
-
-            /* ----------------------------------------------------------
-               Geometric relation (plane tests only).
-               Returns:
-                 -1 → f1 is geometrically before f2 (keep current order)
-                  1 → f1 is geometrically after  f2 (must swap)
-                  0 → indeterminate
-               This is the primary source of truth for ordering.
-               ---------------------------------------------------------- */
-            int geo = geometric_face_relation(model, f1, f2);
-            if (geo == -1) {
-                if (cache) pair_cache_insert(cache, f1, f2, 1);
-                continue;
-            }
-            if (geo == 1)
-                goto do_swap;
-
-            /* First test was indeterminate → try the opposite direction */
-            int geo2 = geometric_face_relation(model, f2, f1);
-            if (geo2 == -1)
-                goto do_swap;          /* f2 before f1 → swap */
-            if (geo2 == 1) {
-                if (cache) pair_cache_insert(cache, f1, f2, 1);
-                continue;              /* f2 after f1 → keep */
-            }
-
-            /* ----------------------------------------------------------
-               Both geometric tests returned indeterminate.
-               Use a cheap Z-extent test only to decide whether the
-               expensive ray-cast is worth running.
-               Important: this test NEVER forces a swap and NEVER
-               writes into the cache by itself.
-               ---------------------------------------------------------- */
-            int z_disjoint = 0;
-            if (face_zmin && face_zmax) {
-                if (face_zmax[f1] <= face_zmin[f2] ||
-                    face_zmax[f2] <= face_zmin[f1]) {
-                    z_disjoint = 1;
-                }
-            } else {
-                /* Fallback when only average Z is available */
-                Fixed32 dz = face_zmean[f1] - face_zmean[f2];
-                if (dz > FLOAT_TO_FIXED(1.0f) || dz < FLOAT_TO_FIXED(-1.0f)) {
-                    z_disjoint = 1;
-                }
-            }
-
-            /* Only run the costly projected-overlap + hierarchical ray-cast
-               when the Z ranges actually overlap */
-            if (!z_disjoint && projected_polygons_overlap(model, f1, f2)) {
-                int rc = ray_cast_hierarchical(model, f1, f2);
-                if (rc < 0) {
-                    goto do_swap;      /* ray says f1 should be behind */
-                } else if (rc > 0) {
-                    if (cache) pair_cache_insert(cache, f1, f2, 1);
-                    continue;          /* ray says current order is fine */
-                }
-                /* rc == 0 → still inconclusive, fall through */
-            }
-
-            /* Truly inconclusive pair: record it and freeze the current order
-               so we never re-test the same pair again (prevents infinite loops) */
-            if (inconclusive_pairs &&
-                inconclusive_pairs_count < inconclusive_pairs_capacity) {
-                inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
-                inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
-                inconclusive_pairs_count++;
-            }
-            if (cache) pair_cache_insert(cache, f1, f2, 1);
-            continue;
-
-        do_swap:
-            /* Perform the adjacent swap and remember the new order */
-            {
-                int tmp = faces->sorted_face_indices[i];
-                faces->sorted_face_indices[i]     = faces->sorted_face_indices[i + 1];
-                faces->sorted_face_indices[i + 1] = tmp;
-                swapped = 1;
-                swap_count++;
-                if (cache) pair_cache_insert(cache, f2, f1, 1);
-                new_limit = i;         /* everything after i may still move */
-            }
-        }
-
-        /* Shrink the active range for the next pass */
-        limit = new_limit;
-
-    } while (swapped && limit > 0 && pass < MAX_PASSES);
-
-    /* Safety net */
-    if (pass >= MAX_PASSES) {
-        printf("painter_geoV2: safety limit reached (%d passes)\n", pass);
-    }
-
-    if (cache)
-        pair_cache_destroy(cache);
-
-    printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
-}
 
 // XXXX
 void painter_newell_sancha(Model3D* model, int face_count) {
