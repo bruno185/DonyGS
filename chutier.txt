@@ -4589,3 +4589,68 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
 }
 
 
+// geometric_face_relation_old (optimized by geometric_face_relation in code)
+//
+static int geometric_face_relation_old(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+    /* Fixed epsilon scaled by current observer distance (0.002 * distance). */
+    Fixed64 epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.001f));
+
+    /* test4-like: f2 entirely on same side as observer of f1 */
+    {
+        int n2 = faces->vertex_count[f2];
+        int offset2 = faces->vertex_indices_ptr[f2];
+        Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
+                c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
+        int obs = 0, side, all_same = 1;
+        if (d1 > epsilon) obs = 1;
+        else if (d1 < -epsilon) obs = -1;
+        else obs = 0;
+        if (obs != 0) {
+            for (int k = 0; k < n2; ++k) {
+                int v = faces->vertex_indices_buffer[offset2+k] - 1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d1;
+                if (acc > epsilon) side = 1;
+                else if (acc < -epsilon) side = -1;
+                else continue;
+                if (obs != side) { all_same = 0; break; }
+            }
+            if (all_same) return -1;
+        }
+    }
+    /* test6-like: f2 entirely on opposite side of f1 */
+    {
+        int n2 = faces->vertex_count[f2];
+        int offset2 = faces->vertex_indices_ptr[f2];
+        Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
+                c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
+        int obs = 0, side, all_opp = 1;
+        if (d1 > epsilon) obs = 1;
+        else if (d1 < -epsilon) obs = -1;
+        else obs = 0;
+        if (obs != 0) {
+            for (int k = 0; k < n2; ++k) {
+                int v = faces->vertex_indices_buffer[offset2+k] - 1;
+                Fixed64 acc = 0;
+                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+                acc += (Fixed64)d1;
+                if (acc > epsilon) side = 1;
+                else if (acc < -epsilon) side = -1;
+                else continue;
+                if (obs == side) { all_opp = 0; break; }
+            }
+            if (all_opp) return 1;
+        }
+    }
+    /* remaining tests 5 and 7 could be implemented similarly, but they are
+       symmetrically covered by swapping the arguments and calling above logic. */
+    return 0;
+}

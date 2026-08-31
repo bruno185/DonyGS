@@ -939,68 +939,42 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
 
-    //Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
-
-    /* Fixed epsilon scaled by current observer distance (0.002 * distance). */
     Fixed64 epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.001f));
 
-    /* test4-like: f2 entirely on same side as observer of f1 */
-    {
-        int n2 = faces->vertex_count[f2];
-        int offset2 = faces->vertex_indices_ptr[f2];
-        Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
-                c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
-        int obs = 0, side, all_same = 1;
-        if (d1 > epsilon) obs = 1;
-        else if (d1 < -epsilon) obs = -1;
-        else obs = 0;
-        if (obs != 0) {
-            for (int k = 0; k < n2; ++k) {
-                int v = faces->vertex_indices_buffer[offset2+k] - 1;
-                Fixed64 acc = 0;
-                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-                acc += (Fixed64)d1;
-                if (acc > epsilon) side = 1;
-                else if (acc < -epsilon) side = -1;
-                else continue;
-                if (obs != side) { all_same = 0; break; }
-            }
-            if (all_same) return -1;
-        }
+    Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
+            c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
+
+    int obs;
+    if (d1 > epsilon) obs = 1;
+    else if (d1 < -epsilon) obs = -1;
+    else return 0;  /* obs == 0 : comportement identique à l'original,
+                        les deux blocs sautaient déjà leur boucle dans ce cas */
+
+    int n2 = faces->vertex_count[f2];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    int all_same = 1, all_opp = 1;
+
+    for (int k = 0; k < n2; ++k) {
+        int v = faces->vertex_indices_buffer[offset2 + k] - 1;
+        Fixed64 acc = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT)
+                    + (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT)
+                    + (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT)
+                    + d1;
+
+        int side;
+        if (acc > epsilon) side = 1;
+        else if (acc < -epsilon) side = -1;
+        else continue;  /* sommet ambigu : ne contredit ni l'une ni l'autre hypothèse */
+
+        if (side == obs) all_opp = 0; else all_same = 0;
+
+        if (!all_same && !all_opp) return 0;  /* sortie anticipée : plus rien à prouver */
     }
-    /* test6-like: f2 entirely on opposite side of f1 */
-    {
-        int n2 = faces->vertex_count[f2];
-        int offset2 = faces->vertex_indices_ptr[f2];
-        Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
-                c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
-        int obs = 0, side, all_opp = 1;
-        if (d1 > epsilon) obs = 1;
-        else if (d1 < -epsilon) obs = -1;
-        else obs = 0;
-        if (obs != 0) {
-            for (int k = 0; k < n2; ++k) {
-                int v = faces->vertex_indices_buffer[offset2+k] - 1;
-                Fixed64 acc = 0;
-                acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-                acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-                acc += (Fixed64)d1;
-                if (acc > epsilon) side = 1;
-                else if (acc < -epsilon) side = -1;
-                else continue;
-                if (obs == side) { all_opp = 0; break; }
-            }
-            if (all_opp) return 1;
-        }
-    }
-    /* remaining tests 5 and 7 could be implemented similarly, but they are
-       symmetrically covered by swapping the arguments and calling above logic. */
+
+    if (all_same) return -1;
+    if (all_opp) return 1;
     return 0;
 }
-
 
 void painter_geoV1(Model3D* model, int face_count) {
     // ...existing code...
@@ -10114,6 +10088,140 @@ void renderModelScanlineZBuffer(Model3D* model) {
     }
 }
 
+#include <GSOS.h>
+
+void setProDOSFileType(const char* filename, int fileType, long auxType) {
+    FileInfoRecGS pb;
+    GSString255 gsName;
+
+    gsName.length = strlen(filename);
+    strncpy((char*)gsName.text, filename, gsName.length);
+
+    pb.pCount = 5;              // verify against your GSOS.h - number of params for this call
+    pb.pathname = &gsName;
+    pb.access = 0xC3;           // standard full-access default, unchanged
+    pb.fileType = fileType;     // e.g. 0xC1
+    pb.auxType = auxType;       // e.g. 0x0000
+    pb.storageType = 0;         // 0 = leave unchanged (per GS/OS SetFileInfo semantics)
+    pb.optionList = 0;
+
+    SetFileInfoGS(&pb);
+}
+
+// Save the current SHR screen as a RAW (uncompressed) Apple IIGS Super
+// Hi-Res picture: 32000 bytes of screen data + 256 bytes SCB block
+// (200 real + 56 padding) + 512 bytes of color table data (16 palettes x
+// 16 colors x 2 bytes), no compression. File type $C1, auxtype $0000.
+//
+// IMPORTANT: never fwrite() directly from a raw (unsigned char*)0xE1xxxx
+// pointer. Such a C pointer is very likely "near" (16-bit) in this ORCA/C
+// environment - exactly the bug already found and fixed in drawPixel(),
+// where it silently truncated the $E1 bank byte. Doing the same thing here
+// would read garbage/wrong-bank memory instead of the real screen data,
+// which matches the persistent striping seen even after fixing the file
+// structure itself. The fix is the same as for drawPixel: copy the real
+// memory via inline 65816 assembly using absolute-long addressing (bank
+// baked into the instruction, no pointer variable involved) into a normal
+// local buffer, THEN fwrite that local buffer.
+
+#include <string.h>
+
+#define PIC_WIDTH 320
+#define PIC_HEIGHT 200
+#define SHR_BYTES_PER_LINE 160
+#define SHR_SCB_COUNT 200
+
+// Copy exactly `count` bytes from $E1:baseOffset (absolute long addressing,
+// bank baked into the instruction) into a local buffer. No C pointer to
+// the $E1 memory is ever created, so there's no near/far truncation risk.
+static void copyFromShrBank(unsigned int baseOffset, unsigned char* dest, unsigned int count) {
+    unsigned int i;
+    for (i = 0; i < count; i++) {
+        unsigned int off = baseOffset + i;
+        unsigned char value;
+        asm {
+            sep     #0x20
+            ldx     off
+            lda     0xE10000,x     ; absolute long indexed - bank $E1 is part
+                                  ; of the instruction itself, same trick as
+                                  ; the working drawPixel fix
+            sta     value
+            rep     #0x20
+        }
+        dest[i] = value;
+    }
+}
+
+void saveSHRAsRawPic(const char* filename) {
+    FILE* out;
+    unsigned char lineBuf[SHR_BYTES_PER_LINE];
+    unsigned char scbBuf[SHR_SCB_COUNT];
+    unsigned char pad[56];
+    int y;
+
+    memset(pad, 0, sizeof(pad));
+
+    out = fopen(filename, "wb");
+    if (!out) {
+        printf("Error: unable to open %s for writing\n", filename);
+        return;
+    }
+
+    // Pixel data: 200 lines x 160 bytes, copied via absolute-long asm reads
+    for (y = 0; y < PIC_HEIGHT; y++) {
+        copyFromShrBank(0x2000 + y * SHR_BYTES_PER_LINE, lineBuf, SHR_BYTES_PER_LINE);
+        fwrite(lineBuf, 1, SHR_BYTES_PER_LINE, out);
+    }
+
+    // SCB block: 200 real entries (copied the same safe way) + 56 padding
+    // bytes, matching the real $9d00-9dff memory layout exactly.
+    copyFromShrBank(0x9D00, scbBuf, SHR_SCB_COUNT);
+    fwrite(scbBuf, 1, SHR_SCB_COUNT, out);
+    fwrite(pad, 1, sizeof(pad), out);
+
+    // Color table block: 16 palettes x 16 colors x 2 bytes each (512 bytes)
+    // - this comes from the `palettes[]` C array already in normal (safe)
+    // memory, not from a raw $E1 pointer, so no change needed here.
+    {
+        int p, c;
+        for (p = 0; p < 16; p++) {
+            for (c = 0; c < 16; c++) {
+                unsigned short colorWord = (unsigned short)palettes[p].color[c];
+                fwrite(&colorWord, sizeof(colorWord), 1, out);
+            }
+        }
+    }
+
+    fclose(out);
+
+    setProDOSFileType(filename, 0xC1, 0x0000);
+
+    printf("Saved %s\n", filename);
+}
+
+// --- Generic screenshot entry point, callable after ANY renderer ---
+void saveNextScreenshot(void) {
+    char fname[16];
+    int idx;
+    FILE* test;
+
+    for (idx = 0; idx < 1000; idx++) {
+        sprintf(fname, "screen%03d.PIC", idx);
+        test = fopen(fname, "rb");
+        if (test == NULL) {
+            break; // this index is free
+        }
+        fclose(test);
+    }
+
+    if (idx >= 1000) {
+        printf("Error: no available screen index (000-999 all used)\n");
+        return;
+    }
+
+    saveSHRAsRawPic(fname);
+}
+
 // ==============================================================
 // THIS IS THE MAIN PROGRAM
 // ==============================================================
@@ -10764,6 +10872,9 @@ segment "code22";
                 goto loopReDraw;
             
             
+            case 36:  // '$' - some functionality for the 'C' key
+                saveNextScreenshot();
+                goto loopReDraw;
             default:  // All other keys - redraw
                 goto loopReDraw;
         }
