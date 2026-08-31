@@ -4654,3 +4654,209 @@ static int geometric_face_relation_old(Model3D* model, int f1, int f2) {
        symmetrically covered by swapping the arguments and calling above logic. */
     return 0;
 }
+
+
+
+********** 
+painter_geoV1 : redondant avec painter_geoV2 (qui est meilleur dans le tri des faces et ne bloque pas)
+********** 
+
+void painter_geoV1(Model3D* model, int face_count) {
+    // ...existing code...
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int i, j;
+    
+    Fixed32* face_zmean = faces->z_mean;
+    if (!face_zmean) return; // safety
+
+
+    printf("Running painter_geoV1 with %d faces (cull_back_faces=%d)...\n", face_count, cull_back_faces);
+
+    // delegate initial ordering to the fast variant which already implements
+    // visible-face filtering and the stable z-mean sort.
+    painter_newell_sancha_fast(model, face_count);
+
+    // recompute `visible_count` for the correction passes
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i]) ++visible_count;
+        }
+    }
+    
+    int swap_count = 0;
+    int swapped = 0; // flag used for the correction loop
+
+    // Ordered pairs cache: store definitive pairwise relations to avoid re-testing.
+    typedef struct {
+        int face1;  // Face that must be drawn before (farther)
+        int face2;  // Face that must be drawn after (closer)
+    } OrderedPair;
+
+    int ordered_pairs_capacity = face_count * 10; // heuristic capacity to reduce reallocs
+    OrderedPair* ordered_pairs = NULL;
+    if (ordered_pairs_capacity > 0) {
+        ordered_pairs = (OrderedPair*)malloc(ordered_pairs_capacity * sizeof(OrderedPair));
+        if (!ordered_pairs) {
+            ordered_pairs_capacity = 0; // fall back to not caching ordered pairs
+        }
+    }
+    int ordered_pairs_count = 0;
+
+    // Prepare global inconclusive buffer for diagnostic recording. These pairs are
+    // intentionally left unresolved in order to avoid mesh splits; they can be
+    // inspected with `frameInconclusivePairs()` for debugging.
+    if (inconclusive_pairs) {
+        free(inconclusive_pairs);
+        inconclusive_pairs = NULL;
+    }
+    inconclusive_pairs_capacity = face_count * 4;
+    if (inconclusive_pairs_capacity > 0) {
+        inconclusive_pairs = (InconclusivePair*)malloc(inconclusive_pairs_capacity * sizeof(InconclusivePair));
+        if (!inconclusive_pairs) {
+            inconclusive_pairs_capacity = 0;
+        }
+    }
+    inconclusive_pairs_count = 0;
+
+    int pass = 0;
+    int max_passes = visible_count * 2; // heuristic limit to prevent infinite loops in pathological cases
+    // Bubble-like correction passes (iterate until stable)
+    do {
+        swapped = 0;
+        swapped = 0;
+        pass++;
+
+        if (pass > max_passes) {
+            printf("WARNING: painter_geo cycle detected, stopping at pass %d\n", pass);
+            keypress();
+            break;
+        }
+   
+        // Iterate consecutive pairs (only over visible faces if culling is enabled)
+        for (i = 0; i < visible_count-1; i++) {
+            int f1 = faces->sorted_face_indices[i];
+            int f2 = faces->sorted_face_indices[i+1];
+
+            // Skip pairs already declared ordered by previous swaps or tests.
+            // ordered_pairs stores definitive relations discovered earlier in the pass to
+            // avoid repeated work (e.g., if we previously determined f2 < f1 we won't re-evaluate).
+            int already_ordered = 0;
+            int p;
+            for (p = 0; p < ordered_pairs_count; p++) {
+                if (ordered_pairs[p].face1 == f1 && ordered_pairs[p].face2 == f2) {
+                    already_ordered = 1; break; // f1 before f2
+                }
+                if (ordered_pairs[p].face1 == f2 && ordered_pairs[p].face2 == f1) {
+                    already_ordered = 1; break; // f2 before f1 (inverse relation)
+                }
+            }
+            if (already_ordered) {
+                //  printf("Already ordered: %d <-> %d\n", f1, f2);
+                continue;
+            }
+
+
+            /* Tests 4 5 : perform purely geometric plane tests here, replacing the lengthy
+               inline code that followed previously */
+            {
+                int geo  = geometric_face_relation(model, f1, f2);
+                if (geo == -1) continue;
+                if (geo == 1) goto do_swap;
+
+                int geo2 = geometric_face_relation(model, f2, f1);
+                if (geo2 == -1) goto do_swap; // swapped result means f2 before f1 -> swap
+                if (geo2 == 1) continue;     // f2 after f1 -> order correct
+                
+                /* both zero -> inconclusive, but defer recording until we know the raycast result */
+                /* try a QuickDraw-centric raycast if the projected polygons actually overlap */
+                if (projected_polygons_overlap(model, f1, f2)) {
+                    int rc = ray_cast_hierarchical(model, f1, f2);
+                    // if ((f1==6 && f2==45)||(f1==45 && f2==6)) {
+                    //     printf("Raycast result f1=%d f2=%d : rc=%d\n", f1, f2, rc);
+                    //     keypress();
+                    // }
+                    if (rc < 0) {
+                        /* ray hit f1 first -> f1 is in front, so the current order f1,f2 is wrong;
+                           swap them. */
+                        goto do_swap;
+                    } else if (rc > 0) {
+                        /* ray hit f2 first -> f1 is farther than f2; order f1 before f2 is correct,
+                           record this ordering. */
+                        if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
+                            ordered_pairs[ordered_pairs_count].face1 = f1;
+                            ordered_pairs[ordered_pairs_count].face2 = f2;
+                            ordered_pairs_count++;
+                        }
+                        continue;
+                    }
+                    /* rc == 0 falls through to record inconclusive as before */
+                }
+                /* no overlap or raycast inconclusive – treat as non-swapped but remember order */
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
+                    ordered_pairs[ordered_pairs_count].face1 = f2;
+                    ordered_pairs[ordered_pairs_count].face2 = f1;
+                    ordered_pairs_count++;
+                }
+                continue;
+            }
+            /* still inconclusive, fall through to record as inconclusive pair */
+
+                
+            do_swap: {
+                // Perform adjacent swap: this is an in-place stable operation and keeps
+                // changes local (simple bubble logic). We record the definitive ordered
+                // relation (f2 before f1 after swap) into `ordered_pairs` when possible
+                // so subsequent passes skip redundant checks.
+                int tmp = faces->sorted_face_indices[i];
+                faces->sorted_face_indices[i] = faces->sorted_face_indices[i+1];
+                faces->sorted_face_indices[i+1] = tmp;
+                swapped = 1;
+                swap_count++;
+
+                // Record the pair as an established ordering (if capacity permits).
+                // If we exceed capacity we silently drop the record — this only affects
+                // performance (more re-evaluation), not correctness.
+                if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
+                    ordered_pairs[ordered_pairs_count].face1 = f2; // now before
+                    ordered_pairs[ordered_pairs_count].face2 = f1; // now after
+                    ordered_pairs_count++;
+                }
+
+                // After a swap we skip ahead to the next pass iteration (goto ends current pair loop)
+                goto endfor;
+            }
+
+
+        // If we reach this point, no test was able to draw a conclusion
+        // We should perform clipping of f1 by f2 (or vice versa), but it is not done now
+       if (inconclusive_pairs != NULL && inconclusive_pairs_count < inconclusive_pairs_capacity) {
+                inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
+                inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
+                inconclusive_pairs_count++;
+            }
+        // add them to the ordered-pairs list so they are not retested
+        // if tests were inconclusive, preserve the current ordering
+        if (ordered_pairs != NULL && ordered_pairs_count < ordered_pairs_capacity) {
+                ordered_pairs[ordered_pairs_count].face1 = f2;
+                ordered_pairs[ordered_pairs_count].face2 = f1;
+                ordered_pairs_count++;
+            }
+        
+        endfor: ;
+        } // END of the for loop int i=0; i<face_count-1; i++
+
+    } while (swapped);
+    // printf("inconclusive pairs: %d / %d (%.2f%%)\n", inconclusive_pairs_count, visible_count-1, (visible_count > 1) ? (100.0f * inconclusive_pairs_count / (visible_count-1)) : 0.0f);
+    // printf("total swaps performed: %d\n", swap_count);
+    // keypress();
+    // End of bubble sort
+
+    
+    // Free the memory of the ordered pairs list
+    if (ordered_pairs) {
+        free(ordered_pairs);
+    }  
+}
