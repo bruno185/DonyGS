@@ -60,7 +60,7 @@
 #pragma memorymodel 1
 #pragma optimize 1
 
-#include "prog.c"
+#include "engine.c"
 
 
 segment "code22";
