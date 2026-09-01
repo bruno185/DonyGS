@@ -68,6 +68,7 @@
 #include <window.h>     // Apple IIGS Window management
 #include <orca.h>       // ORCA specific functions (startgraph, etc.)
 #include <stdint.h>      // uint32_t, etc.
+#include <GSOS.h>
 
 #pragma memorymodel 1
 #pragma optimize 1
@@ -9554,6 +9555,7 @@ static void show_help_pager(void) {
         "3: Painter = GEO (geometry-only). Can be slow for large models",
         "4: Painter = CORRECT (painter_correct)",
         "5: Painter = CORRECTV2",
+        "O: Render scanline Z-Buffer (alternative to painter algorithm)",
         "6: Both colors RANDOM mode",
         "7: Choose fill color",
         "8: Choose frame color",
@@ -9574,7 +9576,7 @@ static void show_help_pager(void) {
         "L: Label faces with IDs",
         "F: Dump face data (3D, 2D, sort order) to file",
         "N: Load new model",
-        "O: save SHGR screen as a PIC ($C1) not compressed file",
+        "*: save SHGR screen as a PIC ($C1) not compressed file",
         "H: Display this help message",
         "ESC: Quit program"
     };
@@ -9748,9 +9750,6 @@ void drawPixel(int x, int y, int color)
     int offset;
     unsigned char value;
 
-    if (x < 0 || x >= 320 || y < 0 || y >= 200)
-        return;
-
     color &= 0x0F;
 
     /* Offset (0..31999) into SHR bank $E1 memory - computed in C,
@@ -9836,6 +9835,9 @@ void renderModelScanlineZBuffer(Model3D* model) {
     applyPalette(palette);
 
     for (y = 0; y < SCREEN_HEIGHT; y++) {
+        int screenY = y + pan_dy;
+        if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
+
         for (i = 0; i < SCREEN_WIDTH; i++) zbuffer_line[i] = -1.0f; // nothing drawn yet
 
         for (f = 0; f < fcount; f++) {
@@ -9857,7 +9859,7 @@ void renderModelScanlineZBuffer(Model3D* model) {
             // same principle as the Newell/shoelace robustness discussed
             // earlier for orientation.
             for (k = 0; k < n; k++) {
-                int k2 = (k + 1) % n;
+                int k2 = (k + 1 < n) ? (k + 1) : 0; // avoid modulo (no native op on 65816)
                 int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
                 int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
 
@@ -9916,30 +9918,38 @@ void renderModelScanlineZBuffer(Model3D* model) {
 
                     if (xa == xb) continue; // degenerate span
 
-                    for (x = xa; x <= xb; x++) {
-                        if (x < 0 || x >= SCREEN_WIDTH) continue;
+                    // Color depends only on the face (f), never on x/y -
+                    // compute once per span instead of once per pixel.
+                    {
+                        int fillColor = getFaceFillColor(f);
+                        int frameColor = getFaceFrameColor(f, fillColor);
 
-                        float tx = (float)(x - xa) / (float)(xb - xa);
-                        float iz_here = iza + (izb - iza) * tx;
+                        // iz_here varies linearly across the span - compute
+                        // the per-pixel step ONCE (one division), then just
+                        // add it each pixel instead of recomputing a full
+                        // division + multiplication every pixel. This is
+                        // the hottest loop in the function (executed once
+                        // per pixel drawn, vs once per span/edge for the
+                        // other optimizations), so this is where the real
+                        // cost was.
+                        float dIz = (izb - iza) / (float)(xb - xa);
+                        float iz_here = iza;
 
-                        if (iz_here > zbuffer_line[x]) {
-                            zbuffer_line[x] = iz_here;
+                        for (x = xa; x <= xb; x++) {
+                            int screenX = x + pan_dx;
+                            if (screenX >= 0 && screenX < SCREEN_WIDTH) {
+                                if (iz_here > zbuffer_line[x]) {
+                                    zbuffer_line[x] = iz_here;
 
-                            // --- PLOT PIXEL HERE ---
-                            // Reproduces the exact color logic used by
-                            // drawPolygons (default colors, user overrides,
-                            // orientation shading, palette cycling) via the
-                            // extracted getFaceFillColor/getFaceFrameColor
-                            // helpers, so the Z-buffer view matches the
-                            // painter's rendering choices exactly.
-                            {
-                                int fillColor = getFaceFillColor(f);
-                                if (x == xa || x == xb) {
-                                    drawPixel(x, y, getFaceFrameColor(f, fillColor));
-                                } else {
-                                    drawPixel(x, y, fillColor);
+                                    // --- PLOT PIXEL HERE ---
+                                    if (x == xa || x == xb) {
+                                        drawPixel(screenX, screenY, frameColor);
+                                    } else {
+                                        drawPixel(screenX, screenY, fillColor);
+                                    }
                                 }
                             }
+                            iz_here += dIz;
                         }
                     }
                 }
@@ -9948,7 +9958,6 @@ void renderModelScanlineZBuffer(Model3D* model) {
     }
 }
 
-#include <GSOS.h>
 
 void setProDOSFileType(const char* filename, int fileType, long auxType) {
     FileInfoRecGS pb;
@@ -10687,11 +10696,18 @@ segment "code22";
             case 111: // 'o'
                 startgraph(mode);
                 // Implement the desired behavior for the 'O' key here
+                int startTime = GetTick();
                 renderModelScanlineZBuffer(model);
+                int endTime = GetTick();
                 key = getkeypress();
                 if (key == '*') { saveNextScreenshot(); }
 
                 endgraph();
+                DoText();
+
+                // printf("endtime = %d\n", endTime);
+                printf("Z-Buffer scanline render time: %d ticks. Press a key to continue.\n", endTime - startTime);
+                keypress();
                 goto loopReDraw;
 
             default:  // All other keys - redraw
