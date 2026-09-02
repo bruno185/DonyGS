@@ -1,0 +1,249 @@
+================================================================================
+0. MODEL LOADING
+================================================================================
+main()
+│
+├── createModel3D()
+│   └── NewHandle / HLock / initialisation des tableaux parallèles
+│
+├── destroyModel3D()
+│   └── HUnlock / DisposeHandle / free
+│
+├── loadModel3D()
+│   ├── readVertices()
+│   │   └── calcul auto_center_* + auto_suggested_distance / proj_scale
+│   └── readFaces_model()
+│
+└── check_intersect()                                    // optionnel au chargement
+    ├── faces_share_vertex_or_edge()
+    ├── edge_crosses_interior()
+    │   ├── compute_face_plane() / compute_face_plane_float()
+    │   └── strict_inside()
+    ├── count_edge_crossings()
+    │   └── edge_crosses_interior()                      [shared]
+    ├── edge_intersects_face()
+    │   └── edge_crosses_interior()                      [shared]
+    ├── split_face_by_plane()
+    │   ├── add_vertex()
+    │   ├── clip_face_plane()
+    │   ├── poly_signed_area()
+    │   ├── reorder_poly()
+    │   ├── cleanup_list()
+    │   └── remove_duplicates()
+    └── compute_face_bboxes3D()
+
+
+================================================================================
+1. PAINTER CORE
+================================================================================
+processModelFast()
+│
+├── [selon painter_mode]
+│   │
+│   ├── painter_newell_sancha_fast()
+│   │   └── cmp_faces_by_zmean()
+│   │
+│   ├── painter_newell_sancha() / painter_newell_sancha_old()
+│   │   ├── painter_newell_sancha_fast()                 [shared]
+│   │   ├── geometric_face_relation()
+│   │   ├── projected_polygons_overlap()                 [→ section 2]
+│   │   ├── pair_plane_before() / pair_plane_after()     [→ section 2]
+│   │   └── …
+│   │
+│   ├── painter_geoV2()
+│   │   ├── painter_newell_sancha_fast()                 [shared]
+│   │   ├── geometric_face_relation()                    [shared]
+│   │   ├── pair_cache_create()
+│   │   │   └── calloc
+│   │   ├── pair_cache_find() / pair_cache_insert()
+│   │   │   └── pair_cache_slot()
+│   │   ├── pair_cache_destroy()
+│   │   ├── projected_polygons_overlap()                 [shared]
+│   │   └── ray_cast_hierarchical()                      [→ section 2]
+│   │
+│   ├── painter_correct()
+│   │   ├── painter_newell_sancha_fast()                 [shared]
+│   │   ├── projected_polygons_overlap_simple()          [→ section 2]
+│   │   ├── pair_plane_before() / pair_plane_after()     [shared]
+│   │   ├── evaluate_pair_tests()
+│   │   │   └── (7 tests : depth, bbox X/Y, plane…)
+│   │   └── move_element_remove_and_insert()
+│   │       └── move_element_remove_and_insert_pos()
+│   │
+│   └── painter_correctV2()
+│       ├── partition back / front faces
+│       ├── painter_newell_sancha_fast()                 [shared]
+│       └── move_element_remove_and_insert_pos()         [shared]
+
+
+================================================================================
+2. ORDERING TESTS & OVERLAP
+================================================================================
+projected_polygons_overlap(model, f1, f2)
+│
+├── (quick reject bbox 2D)
+├── set_use_fixed_clipping()
+├── compute_intersection_centroid_ordered_fixed()
+│   ├── (Sutherland-Hodgman clipping Fixed64)
+│   │   ├── clip contre chaque arête du polygone clip
+│   │   └── calcul centroïde + aire signée
+│   └── debug_clip_* (variables globales de diagnostic)
+├── compute_intersection_centroid_ordered_fixed_tryboth()
+│   └── compute_intersection_centroid_ordered_fixed()    [shared]
+├── compute_intersection_region_bbox()
+└── (version float alternative si use_fixed_clipping == 0)
+
+projected_polygons_overlap_simple()
+└── (version allégée)
+
+pair_plane_before() / pair_plane_after()
+│
+├── (teste le côté de tous les sommets de f2 par rapport au plan de f1)
+└── geometric_face_relation()                            [shared]
+
+ray_cast_hierarchical(model, f1, f2)
+│
+├── compute_bbox_intersection_center()
+├── ray_cast_at()
+│   └── ray_cast_distances()
+│       └── (intersection rayon ↔ plan des deux faces)
+└── (plusieurs points d’essai si nécessaire)
+
+geo_face_order(model, f1, f2)
+└── geometric_face_relation()                            [shared]
+
+evaluate_pair_tests(model, f1, f2, out[7])
+├── test profondeur (z_min / z_max)
+├── test bbox X
+├── test bbox Y
+├── geometric_face_relation()                            [shared]
+└── …
+
+compute_intersection_centroid_ordered_qd_fixed()
+└── (même logique via QuickDraw)
+
+
+================================================================================
+3. TRANSFORM & PROJECTION
+================================================================================
+processModelFast()
+│
+├── (transformation Fixed32 → xo / yo / zo)
+│
+├── calculateFaceDepths()
+│   └── z_min / z_max / z_mean + plane_a/b/c/d + bbox 2D
+│
+├── compute2DFromObserver()
+│   └── updateFace2DBounds()
+│
+├── normalizeAutoFitDistanceTo150()
+│
+└── getObserverParams()
+
+
+================================================================================
+4. RENDERING (QuickDraw + Scanline Z-Buffer)
+================================================================================
+drawPolygons() / drawPolygons_jitter()
+│
+├── getFaceFillColor()
+├── getFaceFrameColor()
+├── generate_random_colors()                             // si mode random
+└── FillPoly / FramePoly
+
+frameInconclusivePairs()
+└── drawFace()                                           [shared]
+
+drawFace() / drawFaceIndex()
+
+renderModelScanlineZBuffer()                             // touche O
+│
+├── getFaceFillColor() / getFaceFrameColor()             [shared]
+└── drawPixel()                                          // inline 65816 asm
+
+computeOrientationShading()                              // touche !
+
+
+================================================================================
+5. PALETTE & COLOR MANAGEMENT
+================================================================================
+initPalettes()
+└── paletteGradientColor()
+    └── encodePaletteColor()
+
+applyPalette() → SetColorTable()
+ReadPalette()
+SetColor()
+DoColor()
+
+
+================================================================================
+6. DEBUG & INSPECTION TOOLS
+================================================================================
+check_sort_repair()
+│
+├── compute_bbox_intersection()
+├── projected_polygons_overlap()                         [shared → §2]
+├── geo_face_order()                                     [shared → §2]
+├── compute_intersection_centroid_ordered_fixed()        [shared → §2]
+├── ray_cast_distances()                                 [shared → §2]
+├── show_inspect_faces_with_message()
+│   └── drawFace()                                       [shared → §4]
+└── enforce_mandatory_after_relations()
+
+check_sort_repair_fast()
+└── (même famille + compute_intersection_centroid_ordered_qd_fixed)
+
+inspect_faces_before() / inspect_faces_after()
+│
+├── pair_plane_before() / pair_plane_after()             [shared → §2]
+├── projected_polygons_overlap()                         [shared → §2]
+├── drawFace()                                           [shared → §4]
+└── show_inspect_faces_with_message()                    [shared]
+
+showFace()
+│
+├── drawFace() / drawFaceIndex()                         [shared → §4]
+├── hideFace() / restoreFace() / restoreAllFaces()
+└── reverseFaceVertexOrder()
+
+inspect_face_pair_ui()
+└── pair_plane_geometric_tests()
+    ├── pair_plane_before_debug()
+    │   └── pair_plane_before()                          [shared → §2]
+    └── PDBG / PKEYP
+
+display_model_face_ids()
+└── drawFaceIndex()                                      [shared → §4]
+
+debug_two_faces()
+└── drawFace()                                           [shared → §4]
+
+compare_faces_diagnostic()
+│
+├── projected_polygons_overlap()                         [shared → §2]
+├── pair_plane_before() / pair_plane_after()             [shared → §2]
+├── ray_cast_hierarchical()                              [shared → §2]
+├── compute_intersection_centroid_ordered_fixed()        [shared → §2]
+├── compute_intersection_centroid_ordered_qd_fixed()
+└── dump_compare_results_to_file()
+
+dumpFaceEquationsCSV()
+dumpFace2DCoordinates()
+dumpSortedFaceIndices()
+
+pair_order_relation()                                    // utilisé surtout par repair
+└── geometric_face_relation()                            [shared]
+
+
+================================================================================
+7. UTILITIES & SYSTEM HELPERS
+================================================================================
+DoText()
+show_help_pager()
+
+saveNextScreenshot()
+└── saveSHRAsRawPic()
+    └── setProDOSFileType()
+
+sin_deg_int() / cos_deg_int() / normalize_deg()          // tables Fixed32

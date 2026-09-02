@@ -570,7 +570,6 @@ void normalizeAutoFitDistanceTo150(Model3D* model);
 // Vérifications / réparation d’ordre
 // void check_intersect(Model3D* model);
 // void check_sort_repair(Model3D* model, int face_count);
-// void check_sort_repair_fast(Model3D* model, int face_count);
 
 // Inspection / debug
 void inspect_faces_before(Model3D* model, ObserverParams* params, const char* filename);

@@ -1,36 +1,9 @@
 #include "declare.c"
 
-/**
- * PAINTER'S ALGORITHM - NEWELL / SANCHA (detailed)
- * =================================================
- * Overview:
- *  - The painter builds an ordering of faces for correct filled-polygon rendering without
- *    performing geometric splits. The algorithm follows the Newell/Sancha approach:
- *      1) Compute per-face depth metrics (z_min/z_max/z_mean) and planar coefficients.
- *      2) Initially sort faces by z_mean (descending) to obtain a broadly correct depth order.
- *      3) Use axis-aligned bounding-box overlap tests (X and Y) to detect candidate overlapping faces.
- *      4) For overlapping pairs, apply robust pairwise ordering tests using plane/triangle votes and
- *         local sampling; if the order is ambiguous, record the pair in the `inconclusive_pairs`
- *         buffer for diagnostic framing and later inspection (no automatic splitting).
- *
- * Visibility & culling:
- *  - When `cull_back_faces` is enabled, the painter operates primarily on the subset of faces
- *    with `display_flag == 1` (visible). Culled faces are appended afterwards to preserve
- *    stable indices and deterministic behavior of `sorted_face_indices`.
- *
- * Modes:
- *  - FAST: performs only low-cost tests (depth + bbox) and skips plane calculations for speed.
- *  - FIXED: Full fixed-point Newell/Sancha implementation with all pairwise tests and corrections.
-
- * Notes:
- *  - The algorithm is intentionally conservative: inconclusive pairs are stored rather than
- *    forcing a risky swap that may introduce visual artifacts.
- *  - Use `frameInconclusivePairs()` in diagnostics to highlight such pairs in the rendered view.
- *
- * Usage:
- *  - Call `painter_newell_sancha(model, face_count)` (or a mode-specific variant) after
- *    `calculateFaceDepths()` / `processModelFast()` has computed observer-space coordinates.
- */
+// ============================================================================
+//  1. PAINTER CORE
+//  Newell/Sancha algorithm and all painter variants
+// ============================================================================
 
 // Comparator support for qsort in painter_newell_sancha
 static int cmp_faces_by_zmean(const void* pa, const void* pb) {
@@ -42,84 +15,6 @@ static int cmp_faces_by_zmean(const void* pa, const void* pb) {
     if (za < zb) return 1;
     if (a < b) return -1;     // tie-breaker: smaller index first
     if (a > b) return 1;
-    return 0;
-}
-
-/**
- * FAST PUBLISHABLE PASS (painter_newell_sancha_fast)
- * --------------------------------------------------
- * Purpose:
- *   Very fast ordering pass intended for interactive / high-frame-rate use. This mode:
- *    - Sorts visible faces by `z_mean` only (stable sort via qsort with tie-breaker on index).
- *    - Performs only inexpensive overlap tests (axis-aligned X and Y bounding boxes) to
- *      detect obvious separations. No plane coefficients, no Newell plane tests, and no
- *      ordering corrections are computed.
- *
- * Tradeoffs:
- *   - Much faster and suitable for large models, but may leave ordering ambiguities
- *     unresolved (which shows up as graphical overlap artifacts for complex geometry).
- *   - When `cull_back_faces` is set, this pass operates on the subset of faces with
- *     `display_flag == 1` and appends culled faces after the visible list to keep indices
- *     stable for downstream users.
- */
-
-void painter_newell_sancha_fast(Model3D* model, int face_count) {
-    FaceArrays3D* faces = &model->faces;
-    if (!faces->z_mean) return; // safety
-
-    // Build list of faces to sort: when culling is enabled, only visible faces are sorted
-    int i;
-    int visible_count = face_count;
-    if (cull_back_faces) {
-        visible_count = 0;
-        // put visible faces first
-        for (i = 0; i < face_count; ++i) {
-            if (faces->display_flag[i]) faces->sorted_face_indices[visible_count++] = i;
-        }
-        // append culled faces to keep array content stable
-        int tail = visible_count;
-        for (i = 0; i < face_count; ++i) {
-            if (!faces->display_flag[i]) faces->sorted_face_indices[tail++] = i;
-        }
-    } else {
-        for (i = 0; i < face_count; ++i) faces->sorted_face_indices[i] = i;
-    }
-
-    // Initial stable sort by z_mean (descending) with tie-breaker on index, only on visible faces
-    qsort_faces_ptr_for_cmp = faces;
-    qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
-    qsort_faces_ptr_for_cmp = NULL;
-}
-
-void debug_two_faces(Model3D* model, int f1, int f2) {
-    startgraph(mode);
-    drawFace(model, f1, COL_LIGHT_GREEN, 1);
-    keypress();
-    drawFace(model, f2, COL_LIGHT_GREEN, 1);
-    keypress();
-    endgraph();
-    DoText();
-}
-
-
-/* -------------------------------------------------------------------------
- * New painter variant where each pairwise test is factored into its own
- * helper function. 
- *
- * Each helper returns:
- *   -1 when f1 is conclusively before (no swap)
- *    1 when f1 is conclusively after (swap needed)
- *    0 when inconclusive (proceed to next test)
- *
- * None of the helper functions call any existing utilities – they contain
- * the original calculations directly per requirement.
- */
-// XXXX ?? not used.
-
-static int painter_new_test1_depth(Model3D* model, int f1, int f2) {
-    FaceArrays3D* faces = &model->faces;
-    if (faces->z_max[f2] <= faces->z_min[f1]) return -1;
-    if (faces->z_max[f1] <= faces->z_min[f2]) return 1;
     return 0;
 }
 
@@ -166,7 +61,52 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
     return 0;
 }
 
+/**
+ * FAST PUBLISHABLE PASS (painter_newell_sancha_fast)
+ * --------------------------------------------------
+ * Purpose:
+ *   Very fast ordering pass intended for interactive / high-frame-rate use. This mode:
+ *    - Sorts visible faces by `z_mean` only (stable sort via qsort with tie-breaker on index).
+ *    - Performs only inexpensive overlap tests (axis-aligned X and Y bounding boxes) to
+ *      detect obvious separations. No plane coefficients, no Newell plane tests, and no
+ *      ordering corrections are computed.
+ *
+ * Tradeoffs:
+ *   - Much faster and suitable for large models, but may leave ordering ambiguities
+ *     unresolved (which shows up as graphical overlap artifacts for complex geometry).
+ *   - When `cull_back_faces` is set, this pass operates on the subset of faces with
+ *     `display_flag == 1` and appends culled faces after the visible list to keep indices
+ *     stable for downstream users.
+ */
+void painter_newell_sancha_fast(Model3D* model, int face_count) {
+    FaceArrays3D* faces = &model->faces;
+    if (!faces->z_mean) return; // safety
 
+    // Build list of faces to sort: when culling is enabled, only visible faces are sorted
+    int i;
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        // put visible faces first
+        for (i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i]) faces->sorted_face_indices[visible_count++] = i;
+        }
+        // append culled faces to keep array content stable
+        int tail = visible_count;
+        for (i = 0; i < face_count; ++i) {
+            if (!faces->display_flag[i]) faces->sorted_face_indices[tail++] = i;
+        }
+    } else {
+        for (i = 0; i < face_count; ++i) faces->sorted_face_indices[i] = i;
+    }
+
+    // Initial stable sort by z_mean (descending) with tie-breaker on index, only on visible faces
+    qsort_faces_ptr_for_cmp = faces;
+    qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
+    qsort_faces_ptr_for_cmp = NULL;
+}
+
+// --- Pair cache (used by painter_geoV2) ---
 static PairCache* pair_cache_create(int capacity) {
     PairCache* c = (PairCache*)malloc(sizeof(PairCache));
     if (!c) return NULL;
@@ -220,6 +160,9 @@ static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation) {
         }
     }
 }
+
+
+// --- Painter variants ---
 
 void painter_geoV2(Model3D* model, int face_count) {
     FaceArrays3D* faces = &model->faces;
@@ -375,9 +318,7 @@ void painter_geoV2(Model3D* model, int face_count) {
     printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
 }
 
-
-// XXXX
-void painter_newell_sancha(Model3D* model, int face_count) {
+void painter_newell_sancha_old(Model3D* model, int face_count) {
     // ...existing code...
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -567,8 +508,236 @@ void painter_newell_sancha(Model3D* model, int face_count) {
     }  
 }
 
-/* Float-based painter: reproduces Windows numeric behaviour exactly
-   Implemented as non-destructive function; enable via env var USE_FLOAT_PAINTER=1 */
+void painter_newell_sancha(Model3D* model, int face_count)
+{
+    // Early exit for trivial cases
+    if (face_count <= 1) {
+        painter_newell_sancha_fast(model, face_count);
+        return;
+    }
+
+    FaceArrays3D* faces = &model->faces;
+
+    // -------------------------------------------------
+    // 1. Initial fast sort + back-face culling
+    // -------------------------------------------------
+    // This performs a stable descending Z-mean sort and
+    // optionally filters out back-facing polygons.
+    painter_newell_sancha_fast(model, face_count);
+
+    // Recalculate the number of visible faces after culling
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (int i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i]) {
+                ++visible_count;
+            }
+        }
+    }
+
+    // Nothing to correct if fewer than 2 faces are visible
+    if (visible_count < 2) return;
+
+    // Shortcut to the sorted index array
+    int* sorted = faces->sorted_face_indices;
+
+    // -------------------------------------------------
+    // 2. Ordered-pair cache using a simple hash table
+    // -------------------------------------------------
+    // We store definitive ordering relations so we never
+    // re-test the same pair of faces in later passes.
+    // This dramatically reduces the number of expensive
+    // geometric tests when many faces are present.
+
+    typedef struct {
+        int face1;      // Face that should be drawn first (farther)
+        int face2;      // Face that should be drawn second (closer)
+        int next;       // Next entry in the hash collision chain
+    } OrderedPair;
+
+    // Hash table size (must be a power of two)
+    // 2048 is a good compromise between memory usage and
+    // collision rate on the Apple IIGS.
+    const int HASH_SIZE = 2048;
+    const int HASH_MASK = HASH_SIZE - 1;
+
+    // Allocate and initialize the hash table
+    int* hash_table = (int*)malloc(HASH_SIZE * sizeof(int));
+    if (!hash_table) {
+        // Out of memory → fall back to the fast path only
+        painter_newell_sancha_fast(model, face_count);
+        return;
+    }
+
+    // Mark all buckets as empty (-1)
+    for (int i = 0; i < HASH_SIZE; ++i) {
+        hash_table[i] = -1;
+    }
+
+    // Capacity of the ordered-pair buffer
+    // We limit it to avoid excessive memory usage on the IIGS
+    int ordered_cap = face_count * 2;
+    if (ordered_cap > 4096) ordered_cap = 4096;
+
+    OrderedPair* ordered = (OrderedPair*)malloc(ordered_cap * sizeof(OrderedPair));
+    int ordered_count = 0;
+
+    if (!ordered) {
+        free(hash_table);
+        painter_newell_sancha_fast(model, face_count);
+        return;
+    }
+
+    // -------------------------------------------------
+    // Inconclusive pairs buffer (for diagnostics)
+    // -------------------------------------------------
+    // These pairs could not be ordered by any geometric test.
+    // They are recorded so they can be inspected later.
+    if (inconclusive_pairs) {
+        free(inconclusive_pairs);
+        inconclusive_pairs = NULL;
+    }
+
+    inconclusive_pairs_capacity = ordered_cap;
+    inconclusive_pairs = (InconclusivePair*)malloc(ordered_cap * sizeof(InconclusivePair));
+    if (!inconclusive_pairs) {
+        inconclusive_pairs_capacity = 0;
+    }
+    inconclusive_pairs_count = 0;
+
+    // -------------------------------------------------
+    // Local pointers for faster access inside the loop
+    // -------------------------------------------------
+    Fixed32* z_min = faces->z_min;
+    Fixed32* z_max = faces->z_max;
+    int* minx = faces->minx;
+    int* maxx = faces->maxx;
+    int* miny = faces->miny;
+    int* maxy = faces->maxy;
+
+    // Simple hash function for a pair of face indices
+    #define PAIR_HASH(a, b)  ((((unsigned)(a) * 73856093u) ^ ((unsigned)(b) * 19349663u)) & HASH_MASK)
+
+    // -------------------------------------------------
+    // 3. Correction passes (bubble-style)
+    // -------------------------------------------------
+    // We repeatedly scan adjacent pairs and swap them
+    // when geometric tests prove the order is wrong.
+    // The loop stops when a full pass produces no swaps.
+
+    int swapped;
+
+    do {
+        swapped = 0;
+
+        for (int i = 0; i < visible_count - 1; ++i) {
+            int f1 = sorted[i];
+            int f2 = sorted[i + 1];
+
+            // -------------------------------------------------
+            // Check whether this pair has already been decided
+            // -------------------------------------------------
+            unsigned h = PAIR_HASH(f1, f2);
+            int idx = hash_table[h];
+            int already_known = 0;
+
+            while (idx >= 0) {
+                if ((ordered[idx].face1 == f1 && ordered[idx].face2 == f2) ||
+                    (ordered[idx].face1 == f2 && ordered[idx].face2 == f1)) {
+                    already_known = 1;
+                    break;
+                }
+                idx = ordered[idx].next;
+            }
+
+            if (already_known) {
+                continue;   // Skip already resolved pairs
+            }
+
+            // -------------------------------------------------
+            // Test 1 : Depth separation (very cheap)
+            // -------------------------------------------------
+            // If the farthest point of f2 is in front of the
+            // nearest point of f1, the current order is safe.
+            if (z_max[f2] <= z_min[f1]) continue;
+
+            // If the farthest point of f1 is in front of the
+            // nearest point of f2, we must swap.
+            if (z_max[f1] <= z_min[f2]) goto do_swap;
+
+            // -------------------------------------------------
+            // Test 2 & 3 : Axis-aligned bounding box overlap
+            // -------------------------------------------------
+            // If the projected bounding boxes do not overlap
+            // on X or on Y, the faces cannot hide each other.
+            if (maxx[f1] <= minx[f2] || maxx[f2] <= minx[f1]) continue;
+            if (maxy[f1] <= miny[f2] || maxy[f2] <= miny[f1]) continue;
+
+            // -------------------------------------------------
+            // Test 4 : Projected polygon overlap
+            // -------------------------------------------------
+            if (!projected_polygons_overlap(model, f1, f2)) {
+                continue;   // Bounding boxes overlap but polygons do not
+            }
+
+            // -------------------------------------------------
+            // Tests 5 & 6 : Geometric plane / face relation
+            // -------------------------------------------------
+            int geo = geometric_face_relation(model, f1, f2);
+            if (geo == -1) continue;          // Current order is correct
+            if (geo == 1)  goto do_swap;      // Must swap
+
+            // Try the opposite direction
+            int geo2 = geometric_face_relation(model, f2, f1);
+            if (geo2 == -1) goto do_swap;     // Opposite order is required
+
+            // -------------------------------------------------
+            // Inconclusive case
+            // -------------------------------------------------
+            // No test could decide the correct order.
+            // We keep the current order and record the pair
+            // for later diagnostics.
+            if (inconclusive_pairs_count < inconclusive_pairs_capacity) {
+                inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
+                inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
+                ++inconclusive_pairs_count;
+            }
+
+            // Remember this pair so we never test it again
+            if (ordered_count < ordered_cap) {
+                ordered[ordered_count].face1 = f1;
+                ordered[ordered_count].face2 = f2;
+                ordered[ordered_count].next  = hash_table[h];
+                hash_table[h] = ordered_count;
+                ++ordered_count;
+            }
+            continue;
+
+        do_swap:
+            // Perform the adjacent swap
+            sorted[i]     = f2;
+            sorted[i + 1] = f1;
+            swapped = 1;
+
+            // Record the new definitive ordering
+            if (ordered_count < ordered_cap) {
+                unsigned h2 = PAIR_HASH(f2, f1);
+                ordered[ordered_count].face1 = f2;
+                ordered[ordered_count].face2 = f1;
+                ordered[ordered_count].next  = hash_table[h2];
+                hash_table[h2] = ordered_count;
+                ++ordered_count;
+            }
+        }
+    } while (swapped);
+
+    // -------------------------------------------------
+    // Cleanup
+    // -------------------------------------------------
+    free(ordered);
+    free(hash_table);
+}
 
 /* painter_correct
  * ----------------
@@ -603,55 +772,6 @@ void painter_newell_sancha(Model3D* model, int face_count) {
  *
  * Return value: number of element moves applied to `sorted_face_indices`.
  */
-static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx) {
-    if (from < 0 || from >= n) return 0;
-    if (insert_idx < 0) insert_idx = 0;
-    if (insert_idx > n-1) insert_idx = n-1;
-    if (from == insert_idx) return 0;
-    int val = arr[from];
-    if (insert_idx < from) {
-        /* shift left region [insert_idx..from-1] right by 1 */
-        memmove(&arr[insert_idx+1], &arr[insert_idx], (from - insert_idx) * sizeof(int));
-        arr[insert_idx] = val;
-    } else {
-        /* insert_idx > from: shift region [from+1..insert_idx] left by 1 */
-        memmove(&arr[from], &arr[from+1], (insert_idx - from) * sizeof(int));
-        arr[insert_idx] = val;
-    }
-    return 1;
-}
-
-/* Optimized variant: performs the same remove+insert but updates an optional
- * inverse map `pos_of_face` in a single pass to avoid a separate update loop.
- * If `pos_of_face` is NULL, this behaves like the classic version (but using
- * explicit loops instead of memmove so we can update positions inline).
- */
-static int move_element_remove_and_insert_pos(int *arr, int n, int from, int insert_idx, int *pos_of_face) {
-    if (from < 0 || from >= n) return 0;
-    if (insert_idx < 0) insert_idx = 0;
-    if (insert_idx > n-1) insert_idx = n-1;
-    if (from == insert_idx) return 0;
-    int val = arr[from];
-    if (insert_idx < from) {
-        /* shift right region [insert_idx..from-1] -> [insert_idx+1..from] */
-        for (int i = from; i > insert_idx; --i) {
-            arr[i] = arr[i-1];
-            if (pos_of_face) pos_of_face[arr[i]] = i;
-        }
-        arr[insert_idx] = val;
-        if (pos_of_face) pos_of_face[val] = insert_idx;
-    } else {
-        /* shift left region [from+1..insert_idx] -> [from..insert_idx-1] */
-        for (int i = from; i < insert_idx; ++i) {
-            arr[i] = arr[i+1];
-            if (pos_of_face) pos_of_face[arr[i]] = i;
-        }
-        arr[insert_idx] = val;
-        if (pos_of_face) pos_of_face[val] = insert_idx;
-    }
-    return 1;
-}
-
 static int painter_correct(Model3D* model, int face_count, int debug) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
@@ -1237,825 +1357,73 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     return moves;
 }
 
-
-/* Helper: pairwise ordering decision using tests 1..7 from painter_newell_sancha
- * Returns:
- *  -1 if f1 is (conclusively) before f2
- *   1 if f1 is (conclusively) after f2
- *   0 if inconclusive
- */
-
-/* pair_order_relation
- * -------------------
- * Purpose:
- *  - Apply the same per-pair tests used by the painter (tests 1..7) to decide
- *    whether two faces are conclusively ordered.
- * Behavior / Return values:
- *  - returns -1 if f1 is conclusively BEFORE f2
- *  - returns  1 if f1 is conclusively AFTER f2
- *  - returns  0 if inconclusive
- * Notes:
- *  - Uses depth (z_min/z_max), axis-aligned bbox separation (X/Y) and plane-based
- *    vertex-side tests (observer-side checks) mirroring painter logic.
- */
-segment "code01";
-static int pair_order_relation(Model3D* model, int f1, int f2) {
-    if (!model) return 0;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
-
-    // Test 1: depth separation
-    if (faces->z_max[f2] <= faces->z_min[f1]) return -1; // f1 before f2
-    if (faces->z_max[f1] <= faces->z_min[f2]) return 1;  // f1 after f2
-
-    // Test 2/3: bbox separation (symmetric)
-    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
-    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-    if (maxx1 <= minx2) return -1; // f1 left of f2
-    if (maxx2 <= minx1) return 1;  // f1 right of f2
-    if (maxy1 <= miny2) return -1; // f1 below f2
-    if (maxy2 <= miny1) return 1;  // f1 above f2
-
-    // plane-only geometry tests factored out into helper
-    int geo = geometric_face_relation(model, f1, f2);
-    if (geo != 0) return geo;
-    /* swapped orientation covers the symmetric tests (5 & 7 in the old
-       numbering).  Invert the result because the arguments are reversed. */
-    geo = geometric_face_relation(model, f2, f1);
-    if (geo != 0) return -geo;
-
-    // Non-conclusive
-    return 0;
-}
-
-/* Helper: enforce mandatory after-relations.
- *
- * This mechanism preserves the invariant simply: after a move discovered by
- * `check_sort_repair`, it records the relation 'a after b'.
- * If a later move changes the global order, it revalidates all recorded
- * relations and adjusts the list to explicitly restore `a` after `b`.
- *
- * By design, this code is conservative: it applies relations one by one and
- * restarts the pass after each correction to avoid skipping a relation that
- * would become invalid after a move.
- */
-static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of_face, int relation_count, const int (*relations)[2]) {
-    if (!model || !pos_of_face || !relations) return;
-    FaceArrays3D* faces = &model->faces;
-
-    for (int i = 0; i < relation_count; ++i) {
-        int a = relations[i][0];
-        int b = relations[i][1];
-
-        // Skip invalid or out-of-bounds relations
-        if (a < 0 || a >= n || b < 0 || b >= n) continue;
-
-        int pa = pos_of_face[a];
-        int pb = pos_of_face[b];
-
-        // If a is not after b, move a immediately after b
-        if (pa <= pb) {
-            int tmp = faces->sorted_face_indices[pa];
-            memmove(&faces->sorted_face_indices[pa], &faces->sorted_face_indices[pa + 1], sizeof(int) * (pb - pa));
-            faces->sorted_face_indices[pb] = tmp;
-
-            // Repair the position table in O(delta)
-            for (int k = pa; k <= pb; ++k) {
-                pos_of_face[faces->sorted_face_indices[k]] = k;
-            }
-
-            // Restart from zero to ensure the next relation is evaluated on the
-            // updated order (simple convergence guarantee).
-            i = -1;
-        }
-    }
-}
-
-/* check_sort_repair
- * -----------------
- * Minimal deterministic repair of face ordering. For each pair that
- * `check_sort` would report as a mismatch, move the offending face by
- * a single minimal step so the ordering matches `ray_cast`:
- *  - If ray_cast == -1 (f1 closer than f2), ensure f1 is immediately AFTER f2.
- *  - If ray_cast ==  1 (f1 farther  than f2), ensure f1 is immediately BEFORE f2.
- * Returns the number of repairs performed.
- */
-int check_sort_repair(Model3D* model, int face_count) {
-    if (!model) return 0;
-    FaceArrays3D* faces = &model->faces;
-    if (face_count <= 0) return 0;
-
-    int n = face_count;
-    int *pos_of_face = (int*)malloc(sizeof(int) * n);
-    if (!pos_of_face) return 0;
-    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
-
-    /* Mandatory relations recorded during the repair pass.
-     * Each entry is [a,b] meaning: a must come after b in
-     * faces->sorted_face_indices (pos[a] > pos[b]).
-     *
-     * This implements the requested mechanism: if A was moved after B, the
-     * constraint is preserved and is continuously checked when other moves may
-     * reorder B.
-     */
-    int relation_capacity = n + 16;
-    int relation_count = 0;
-    int (*after_relations)[2] = (int(*)[2])malloc(sizeof(int) * 2 * relation_capacity);
-    if (!after_relations) {
-        free(pos_of_face);
-        return 0;
-    }
-
-    int repairs = 0;
-    const char* instructions = "\nWhen graphics is displayed  :\nESC=abort, RETURN=automatic mode (no graphics), N=skip, any other key = continue.\n\n";
-    int automatic_mode = 0; /* 0=graphical inspect, 1=automatic (no graphics) */
-
-    printf("%s", instructions);
-    for (int f1 = 0; f1 < n; ++f1) {
-        printf("%d ", f1);
-        if (faces->display_flag[f1] == 0) continue;
-        if (cull_back_faces && faces->plane_d[f1] <= 0) continue;
-        for (int f2 = f1 + 1; f2 < n; ++f2) {
-            if (faces->display_flag[f2] == 0) continue;
-            if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
-
-            /* Quick Z reject: no 2D overlap is possible if depth ranges do not intersect */
-            if (faces->z_max[f1] <= faces->z_min[f2] || faces->z_max[f2] <= faces->z_min[f1]) continue;
-
-            /* Quick AABB reject using existing helper */
-            int _ix0, _iy0, _ix1, _iy1;
-            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
-
-            // If projected polygons do not overlap (touching considered non-overlap), skip
-            if (!projected_polygons_overlap(model, f1, f2)) continue;
-
-            int pos1 = pos_of_face[f1];
-            int pos2 = pos_of_face[f2];
-            /* Try both intersection centroids (both orders) and prefer the one
-             * with the larger positive clipped area. If the selected point yields
-             * an indeterminate ray_cast (rc==0), try the other centroid, then
-             * finally fall back to bbox-center as last resort. This mirrors the
-             * inspector's behaviour but is slightly more tolerant (tries multiple
-             * candidates) to avoid missing detectable inversions.
-             */
-            int cx = 0, cy = 0;
-            int point_source = 0; /* 1=cent1, 2=cent2, 3=bbox */
-            int rc = 0;
-
-            /* Try a lightweight geometry test first, before running SH clipping. */
-            {
-                int geo = geo_face_order(model, f1, f2);
-                if (geo != 0) {
-                    /* geo_face_order returns -1 if f1 is before f2, 1 if f1 is after f2.
-                     * check_sort_repair uses rc == -1 to mean f1 is in front.
-                     * Invert the sign to match raycast semantics.
-                     */
-                    rc = (geo == -1) ? 1 : -1;
-                    point_source = 4; /* geo */
-                }
-            }
-
-            long long a1 = 0, a2 = 0;
-            int cx1 = 0, cy1 = 0, cx2 = 0, cy2 = 0;
-            int have1 = 0;
-            int have2 = 0;
-
-            /* Only perform SH centroid clipping if the geometry test is inconclusive. */
-            if (rc == 0) {
-                have1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &cx1, &cy1, &a1) && a1 > 0;
-                if (have1) {
-                    cx = cx1; cy = cy1; point_source = 1;
-                    {
-                        float _tf1 = 0.0f, _tf2 = 0.0f;
-                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
-                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
-                        } else rc = 0;
-                    }
-                }
-            }
-
-            if (rc == 0) {
-                have2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &cx2, &cy2, &a2) && a2 > 0;
-                if (!have1 && have2) {
-                    cx = cx2; cy = cy2; point_source = 2;
-                    {
-                        float _tf1 = 0.0f, _tf2 = 0.0f;
-                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
-                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
-                        } else rc = 0;
-                    }
-                } else if (have1 && have2 && rc == 0) {
-                    cx = cx2; cy = cy2; point_source = 2;
-                    {
-                        float _tf1 = 0.0f, _tf2 = 0.0f;
-                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
-                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
-                        } else rc = 0;
-                    }
-                }
-            }
-
-            // Potential extension: if geo is also indeterminate, we could try a
-            // QuickDraw-based centroid raycast here using the QD intersection
-            // centroid computed by compute_intersection_centroid_ordered_qd_fixed.
-            // That would look something like:
-            //
-            //   if (rc == 0 && use_qd) {
-            //       int qd_cx = 0, qd_cy = 0;
-            //       long long qd_area2 = 0;
-            //       if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &qd_cx, &qd_cy, &qd_area2) && qd_area2 != 0) {
-            //           float _tf1 = 0.0f, _tf2 = 0.0f;
-            //           if (ray_cast_distances(model, f1, f2, qd_cx, qd_cy, &_tf1, &_tf2)) {
-            //               if (_tf1 < _tf2) rc = -1;
-            //               else if (_tf1 > _tf2) rc = 1;
-            //               else rc = 0;
-            //           }
-            //       }
-            //   }
-            //
-            // We leave it commented because it may slow down check_sort_repair too much.
-
-            /* Last resort: bbox center */
-            if (rc == 0) {
-                int ix0 = _ix0; int ix1 = _ix1; int iy0 = _iy0; int iy1 = _iy1;
-                cx = (ix0 + ix1) / 2; cy = (iy0 + iy1) / 2; point_source = 3;
-                {
-                    float _tf1 = 0.0f, _tf2 = 0.0f;
-                    if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
-                        if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
-                    } else rc = 0;
-                    
-                }
-            }
-
-            if (debug_overlap_subj == f1 && debug_overlap_clip == f2) {
-                if (point_source == 1) printf("check_sort_repair: using centroid f1->f2 (%d,%d) area1=%lld\n", cx, cy, a1);
-                else if (point_source == 2) printf("check_sort_repair: using centroid f2->f1 (%d,%d) area2=%lld\n", cx, cy, a2);
-                else if (point_source == 4) printf("check_sort_repair: using geo_face_order decision (%d,%d)\n", cx, cy);
-                else printf("check_sort_repair: using bbox-center (%d,%d)\n", cx, cy);
-            }
-            if (rc == 0) continue; // undetermined
-
-            if (rc == -1 || rc == 1) {
-                /* Single-direction strategy: always move the *closer* face forward
-                 * (towards higher indices) to be immediately AFTER the other face.
-                 */
-                int closer = (rc == -1) ? f1 : f2;
-                int other  = (rc == -1) ? f2 : f1;
-                int pclos = pos_of_face[closer];
-                int pother = pos_of_face[other];
-                if (pclos <= pother) {
-                    int tmp = faces->sorted_face_indices[pclos];
-                    if (!automatic_mode) {
-                        char msg[160];
-                        snprintf(msg, sizeof(msg), "Face %d after face %d ? \n(N=skip, ESC=abort, RET=auto, other=apply)", closer, other);
-                        int _k = show_inspect_faces_with_message(model, closer, other, msg, 3, 188);
-                        if (_k == 27) { /* ESC */ free(pos_of_face); free(after_relations); return repairs; }
-                        if (_k == 'N' || _k == 'n') {
-                            // skip move, continue to next pair
-                            if (!automatic_mode) {
-                                printf("Check and repair running...\n"); fflush(stdout);
-                                printf("\n%s\n", instructions);
-                                printf("Face %d\n", f1);
-                            }
-                            continue;
-                        }
-                        if (_k == 13 || _k == 10) { /* RETURN/ENTER */
-                            automatic_mode = 1;
-                            // Fall through to move execution, but also show text status for return.
-                            if (!automatic_mode) {
-                                printf("Check and repair running...\n"); fflush(stdout);
-                                printf("\n%s\n", instructions);
-                                printf("Face %d\n", f1);
-                            }
-                        }
-                    }
-
-                    if (pclos < pother) {
-                        memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
-                        faces->sorted_face_indices[pother] = tmp;
-                        for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
-                        ++repairs;
-
-                        /* 
-                         * Record the constraint "closer must be after other".
-                         * This relation becomes an obligation to maintain after
-                         * every change that affects the ordering.
-                         */
-                        if (relation_count >= relation_capacity) {
-                            int new_cap = relation_capacity * 2;
-                            int (*tmp_rel)[2] = (int(*)[2])realloc(after_relations, sizeof(int) * 2 * new_cap);
-                            if (tmp_rel) {
-                                after_relations = tmp_rel;
-                                relation_capacity = new_cap;
-                            }
-                        }
-                        if (relation_count < relation_capacity) {
-                            after_relations[relation_count][0] = closer;
-                            after_relations[relation_count][1] = other;
-                            relation_count++;
-                        }
-
-                        enforce_mandatory_after_relations(model, n, pos_of_face, relation_count, after_relations);
-                    }
-
-                    if (!automatic_mode) {
-                        printf("Check and repair running...\n"); fflush(stdout);
-                        printf("\n%s\n", instructions);
-                    }
-                }
-            }
-        }
-    }
-
-    free(pos_of_face);
-    free(after_relations);
-    printf("\ncheck_sort_repair: repairs=%d\n", repairs);
-    return repairs;
-}
-
-/* check_sort_repair_fast
- * ----------------------
- * Faster variant of check_sort_repair that:
- *  - uses the QuickDraw region intersection centroid (QD) as the test point,
- *  - uses ray_cast_distances() at that single point,
- *  - performs the same minimal forward-only reordering when the ray cast
- *    indicates the current sort order is incorrect.
- *
- * The intent is to keep the same repair strategy, but with fewer centroid
- * candidates and less per-pair overhead.
- */
-int check_sort_repair_fast(Model3D* model, int face_count) {
-    if (!model) return 0;
-    FaceArrays3D* faces = &model->faces;
-    if (face_count <= 0) return 0;
-
-    startgraph(mode); /* Required for QuickDraw region operations */
-    
-    int n = face_count;
-    int *pos_of_face = (int*)malloc(sizeof(int) * n);
-    if (!pos_of_face) {
-        endgraph();
-        return 0;
-    }
-
-    int relation_capacity = n + 16;
-    int relation_count = 0;
-    int (*after_relations)[2] = (int(*)[2])malloc(sizeof(int) * 2 * relation_capacity);
-    if (!after_relations) {
-        free(pos_of_face);
-        endgraph();
-        return 0;
-    }
-
-    MoveTo(3,10); printf("Computing repairs..."); /* Inform user that the batch test is running (prevents blank-screen confusion) */
-    
-    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
-
-    int repairs = 0;
-
-    for (int f1 = 0; f1 < n; ++f1) {
-        if (faces->display_flag[f1] == 0) continue;
-        if (cull_back_faces && faces->plane_d[f1] <= 0) continue;
-        for (int f2 = f1 + 1; f2 < n; ++f2) {
-            if (faces->display_flag[f2] == 0) continue;
-            if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
-
-            /* Quick Z reject: no 2D overlap is possible if depth ranges do not intersect */
-            if (faces->z_max[f1] <= faces->z_min[f2] || faces->z_max[f2] <= faces->z_min[f1]) continue;
-
-            /* Quick AABB reject */
-            int _ix0, _iy0, _ix1, _iy1;
-            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
-
-            /* Only consider true overlap (not touching) */
-            if (!projected_polygons_overlap(model, f1, f2)) continue;
-
-            /* Use QuickDraw region centroid (fast and representative) as first attempt. */
-            int cx = 0, cy = 0;
-            long long area2 = 0;
-            int got_centroid = 0;
-
-            if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &cx, &cy, &area2) && area2 != 0) {
-                got_centroid = 1;
-            }
-
-            if (!got_centroid) continue;
-
-            float tf1 = 0.0f, tf2 = 0.0f;
-            if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) continue;
-
-            int rc = 0;
-            if (tf1 < tf2) rc = -1;
-            else if (tf1 > tf2) rc = 1;
-            else rc = 0;
-            if (rc == 0) continue;
-
-            int closer = (rc == -1) ? f1 : f2;
-            int other  = (rc == -1) ? f2 : f1;
-            int pclos = pos_of_face[closer];
-            int pother = pos_of_face[other];
-            if (pclos <= pother) {
-                int tmp = faces->sorted_face_indices[pclos];
-                if (pclos < pother) {
-                    memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
-                    faces->sorted_face_indices[pother] = tmp;
-                    for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
-                    ++repairs;
-
-                    // Record required relation A after B and enforce all relations.
-                    if (relation_count >= relation_capacity) {
-                        int new_cap = relation_capacity * 2;
-                        int (*tmp_rel)[2] = (int(*)[2])realloc(after_relations, sizeof(int) * 2 * new_cap);
-                        if (tmp_rel) {
-                            after_relations = tmp_rel;
-                            relation_capacity = new_cap;
-                        }
-                    }
-                    if (relation_count < relation_capacity) {
-                        after_relations[relation_count][0] = closer;
-                        after_relations[relation_count][1] = other;
-                        relation_count++;
-                    }
-                    enforce_mandatory_after_relations(model, n, pos_of_face, relation_count, after_relations);
-                }
-            }
-        }
-    }
-    free(pos_of_face);
-    free(after_relations);
-    MoveTo(3,20); 
-    printf("Repairs done: repairs=%d\n", repairs); /* Inform user that repairs are done */
-    printf("Press any key to continue...\n");
-    keypress();
-    endgraph();
-    DoText(); /* Return to text mode */
-    return repairs;
-}
-
-segment "code02";
-/* projected_polygons_overlap
- * --------------------------
- * Purpose:
- *  - Given a model and two face indices, determine whether their projected
- *    2D polygons overlap on screen.
- * Important behavior:
- *  - **Touching** cases (shared edge or single-vertex contact) are treated as
- *    **NON-overlap** (the function returns 0). This mirrors the graphical
- *    intent: touching does not mean the polygons have positive-area intersection.
- * Algorithm:
- *  1) Quick reject using screen-space axis-aligned bbox (min/max X/Y).
- *  2) If bboxes overlap, test whether any edge of poly1 intersects any edge of poly2
- *     (proper segment intersection only, colinear/on-segment is ignored here).
- *  3) If no edge intersects, test containment: whether any vertex of poly1 lies inside poly2
- *     or vice versa (ray-casting point-in-polygon). Points falling exactly on an edge
- *     are treated as outside (not contained).
- * Returns:
- *  - 1 if polygons overlap (proper intersection or one contains the other)
- *  - 0 if disjoint or touching-only
- */
-static long long orient_ll(long long ax,long long ay,long long bx,long long by,long long cx,long long cy) {
-    return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);
-}
-static int on_seg_ll(long long ax,long long ay,long long bx,long long by,long long cx,long long cy) {
-    if (( (ax<=cx && cx<=bx) || (bx<=cx && cx<=ax) ) && ((ay<=cy && cy<=by) || (by<=cy && cy<=ay))) return 1;
-    return 0;
-}
-/* tolerance (in pixels) below which an intersection is considered too close
- * to a vertex/edge and thus ignored. Default set by user request to 1.0 px. */
-static double segs_intersect_tol_px = 1.0;
-
-/*
- * segs_intersect_int_dbl
- * ----------------------
- * Double-precision core used by the integer wrapper and unit tests.
- *
- * Steps and rationale (detailed) :
- * 1) Orientation test (proper intersection):
- *    - We round coordinates to the nearest integer when computing orientations
- *      (via floor(x+0.5)) in order to preserve the original integer semantics
- *      used elsewhere in the codebase (avoids surprising behaviour due to tiny
- *      floating-point perturbations when deciding "proper" orientation).
- *    - A proper intersection requires strict sign differences for the pair of
- *      orientations on each segment (standard robust test).
- *
- * 2) Intersection point computation:
- *    - If orientation indicates a proper intersection, we compute the exact
- *      intersection point in double precision (t parameter and point coords).
- *    - Guard against near-parallel segments using a small epsilon on the
- *      determinant (fabs(denom) < 1e-12) to avoid numerical instability.
- *
- * 3) Proximity filtering (pixel tolerance):
- *    - We consider a global tolerance `segs_intersect_tol_px` (in pixels).
- *    - If the computed intersection point lies within `tol` of any of the 4
- *      segment endpoints, we treat the intersection as spurious and return 0.
- *      This removes sub-pixel / endpoint-touch cases that would otherwise be
- *      reported as proper intersections due to integer orientation tests.
- *
- * 4) Endpoint-segment proximity test :
- *    - Additionally, if any of the 4 segment endpoints is within `tol` of
- *      the other segment (distance point→segment < tol), we also ignore the
- *      intersection (returned 0). This handles cases where an endpoint lies
- *      very near the interior of the other segment but rounding/orientation
- *      might have flagged a proper intersection.
- *
- * 5) Final decision : return 1 only if the intersection is proper and passes
- *    both proximity filters. This yields a conservative behavior tuned to
- *    avoid visual artifacts from sub-pixel intersections while preserving
- *    real, well-separated crossings.
- */
-/*
- * Compute squared distance (in fixed units) from point P(px,py) to segment AB (ax,ay)-(bx,by).
- * Returns an unsigned long long representing (distance_in_fixed_units)^2.
- * Implementation notes:
- *  - The function works entirely in integer arithmetic to avoid floating point.
- *  - We compute numsq = (wx*d - c*vx)^2 + (wy*d - c*vy)^2 and then divide by d^2,
- *    performing division before multiplying by FIXED_SCALE^2 to avoid overflow.
- */
-static unsigned long long point_seg_dist2_fixed_int(int px,int py,int ax,int ay,int bx,int by) {
-    long long vx = (long long)bx - (long long)ax, vy = (long long)by - (long long)ay;
-    long long wx = (long long)px - (long long)ax, wy = (long long)py - (long long)ay;
-    long long c = vx*wx + vy*wy;
-    long long d = vx*vx + vy*vy;
-    if (d == 0) {
-        long long dx0 = px - ax, dy0 = py - ay;
-        unsigned long long r = (unsigned long long)dx0*(unsigned long long)dx0 + (unsigned long long)dy0*(unsigned long long)dy0;
-        return r * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
-    }
-    if (c <= 0) {
-        long long dx0 = px - ax, dy0 = py - ay;
-        unsigned long long r = (unsigned long long)dx0*(unsigned long long)dx0 + (unsigned long long)dy0*(unsigned long long)dy0;
-        return r * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
-    } else if (c >= d) {
-        long long dx0 = px - bx, dy0 = py - by;
-        unsigned long long r = (unsigned long long)dx0*(unsigned long long)dx0 + (unsigned long long)dy0*(unsigned long long)dy0;
-        return r * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx) {
+    if (from < 0 || from >= n) return 0;
+    if (insert_idx < 0) insert_idx = 0;
+    if (insert_idx > n-1) insert_idx = n-1;
+    if (from == insert_idx) return 0;
+    int val = arr[from];
+    if (insert_idx < from) {
+        /* shift left region [insert_idx..from-1] right by 1 */
+        memmove(&arr[insert_idx+1], &arr[insert_idx], (from - insert_idx) * sizeof(int));
+        arr[insert_idx] = val;
     } else {
-        long long numx = wx * d - c * vx;
-        long long numy = wy * d - c * vy;
-        unsigned long long numsq = (unsigned long long)numx * (unsigned long long)numx + (unsigned long long)numy * (unsigned long long)numy;
-        unsigned long long den = (unsigned long long)d * (unsigned long long)d;
-        unsigned long long q = numsq / den;
-        unsigned long long rem = numsq % den;
-        unsigned long long scale2 = (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
-        unsigned long long out = q * scale2 + (rem * scale2) / den;
-        return out;
+        /* insert_idx > from: shift region [from+1..insert_idx] left by 1 */
+        memmove(&arr[from], &arr[from+1], (insert_idx - from) * sizeof(int));
+        arr[insert_idx] = val;
     }
-}
-
-static int segs_intersect_int_fixed64(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
-    long long o1 = orient_ll(x1,y1,x2,y2,x3,y3);
-    long long o2 = orient_ll(x1,y1,x2,y2,x4,y4);
-    long long o3 = orient_ll(x3,y3,x4,y4,x1,y1);
-    long long o4 = orient_ll(x3,y3,x4,y4,x2,y2);
-    /* Proper intersection only: require strict orientation differences */
-    if (!(((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0)))) return 0;
-
-    long long dx1 = x2 - x1, dy1 = y2 - y1;
-    long long dx2 = x4 - x3, dy2 = y4 - y3;
-    long long denom = dx1 * (-dy2) - dy1 * (-dx2);
-    if (denom == 0) return 0; /* numerically parallel */
-
-    long long tnum = (long long)(x3 - x1) * (-dy2) - (long long)(y3 - y1) * (-dx2);
-
-    /* intersection point in Fixed64 */
-    Fixed64 t_fixed = ((Fixed64)tnum << FIXED_SHIFT) / (Fixed64)denom;
-    Fixed64 ix_fixed = (((Fixed64)x1) << FIXED_SHIFT) + ((t_fixed * (((Fixed64)dx1) << FIXED_SHIFT)) >> FIXED_SHIFT);
-    Fixed64 iy_fixed = (((Fixed64)y1) << FIXED_SHIFT) + ((t_fixed * (((Fixed64)dy1) << FIXED_SHIFT)) >> FIXED_SHIFT);
-
-    /* tolerance in fixed units */
-    Fixed64 tol_fixed = (Fixed64)(segs_intersect_tol_px * (double)FIXED_SCALE + 0.5);
-    unsigned long long tol2_fixed = (unsigned long long)tol_fixed * (unsigned long long)tol_fixed; /* fixed^2 */
-
-    /* distance to endpoints (in fixed units squared) */
-    long long ddx, ddy; unsigned long long dist2u;
-    ddx = (long long)ix_fixed - ((long long)x1 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y1 << FIXED_SHIFT);
-    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
-    ddx = (long long)ix_fixed - ((long long)x2 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y2 << FIXED_SHIFT);
-    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
-    ddx = (long long)ix_fixed - ((long long)x3 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y3 << FIXED_SHIFT);
-    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
-    ddx = (long long)ix_fixed - ((long long)x4 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y4 << FIXED_SHIFT);
-    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
-
-
-
-    if (point_seg_dist2_fixed_int(x1,y1,x3,y3,x4,y4) < tol2_fixed) return 0;
-    if (point_seg_dist2_fixed_int(x2,y2,x3,y3,x4,y4) < tol2_fixed) return 0;
-    if (point_seg_dist2_fixed_int(x3,y3,x1,y1,x2,y2) < tol2_fixed) return 0;
-    if (point_seg_dist2_fixed_int(x4,y4,x1,y1,x2,y2) < tol2_fixed) return 0;
-
     return 1;
 }
 
-/* Double-based regression helpers removed: Fixed (integer) implementations are now authoritative.
- * The old `segs_intersect_int_dbl` and associated double point/segment helpers were deleted
- * to remove redundant floating-point paths and reduce maintenance surface.
+/* Optimized variant: performs the same remove+insert but updates an optional
+ * inverse map `pos_of_face` in a single pass to avoid a separate update loop.
+ * If `pos_of_face` is NULL, this behaves like the classic version (but using
+ * explicit loops instead of memmove so we can update positions inline).
  */
-
-static int segs_intersect_int(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
-    return segs_intersect_int_fixed64(x1,y1,x2,y2,x3,y3,x4,y4);
-}
-static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* vtx, int f, int n) {
-    int cnt = 0; int off = faces->vertex_indices_ptr[f];
-    for (int i = 0; i < n; ++i) {
-        int j = (i+1)%n;
-        int vi = faces->vertex_indices_buffer[off + i] - 1;
-        int vj = faces->vertex_indices_buffer[off + j] - 1;
-        int xi = vtx->x2d[vi], yi = vtx->y2d[vi];
-        int xj = vtx->x2d[vj], yj = vtx->y2d[vj];
-        /* If the point lies exactly on the edge, consider it OUTSIDE (no overlap).
-         * Use orient==0 + on-segment test to detect boundary points. */
-        if (orient_ll(xi, yi, xj, yj, px, py) == 0 && on_seg_ll(xi, yi, xj, yj, px, py)) return 0;
-        if (((yi > py) != (yj > py)) && (px < (long long)(xj - xi) * (py - yi) / (yj - yi) + xi)) cnt++;
-    }
-    return (cnt & 1);
-}
-
-/* Return 1 if faces f1 and f2 have identical 2D vertex sequences (allowing rotation
- * and reversed order). Comparison uses exact integer 2D coordinates. */
-static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1, int f2) {
-    int n1 = faces->vertex_count[f1];
-    int n2 = faces->vertex_count[f2];
-    if (n1 != n2 || n1 <= 0) return 0;
-    int off1 = faces->vertex_indices_ptr[f1];
-    int off2 = faces->vertex_indices_ptr[f2];
-
-    /* Forward rotation check */
-    for (int shift = 0; shift < n1; ++shift) {
-        int ok = 1;
-        for (int k = 0; k < n1; ++k) {
-            int idx1 = faces->vertex_indices_buffer[off1 + k] - 1;
-            int idx2 = faces->vertex_indices_buffer[off2 + ((shift + k) % n1)] - 1;
-            if (idx1 < 0 || idx2 < 0) { ok = 0; break; }
-            if (vtx->x2d[idx1] != vtx->x2d[idx2] || vtx->y2d[idx1] != vtx->y2d[idx2]) { ok = 0; break; }
+static int move_element_remove_and_insert_pos(int *arr, int n, int from, int insert_idx, int *pos_of_face) {
+    if (from < 0 || from >= n) return 0;
+    if (insert_idx < 0) insert_idx = 0;
+    if (insert_idx > n-1) insert_idx = n-1;
+    if (from == insert_idx) return 0;
+    int val = arr[from];
+    if (insert_idx < from) {
+        /* shift right region [insert_idx..from-1] -> [insert_idx+1..from] */
+        for (int i = from; i > insert_idx; --i) {
+            arr[i] = arr[i-1];
+            if (pos_of_face) pos_of_face[arr[i]] = i;
         }
-        if (ok) return 1;
-    }
-
-    /* Reverse rotation check */
-    for (int shift = 0; shift < n1; ++shift) {
-        int ok = 1;
-        for (int k = 0; k < n1; ++k) {
-            int idx1 = faces->vertex_indices_buffer[off1 + k] - 1;
-            int idx2 = faces->vertex_indices_buffer[off2 + ((shift - k + n1) % n1)] - 1;
-            if (idx1 < 0 || idx2 < 0) { ok = 0; break; }
-            if (vtx->x2d[idx1] != vtx->x2d[idx2] || vtx->y2d[idx1] != vtx->y2d[idx2]) { ok = 0; break; }
+        arr[insert_idx] = val;
+        if (pos_of_face) pos_of_face[val] = insert_idx;
+    } else {
+        /* shift left region [from+1..insert_idx] -> [from..insert_idx-1] */
+        for (int i = from; i < insert_idx; ++i) {
+            arr[i] = arr[i+1];
+            if (pos_of_face) pos_of_face[arr[i]] = i;
         }
-        if (ok) return 1;
+        arr[insert_idx] = val;
+        if (pos_of_face) pos_of_face[val] = insert_idx;
     }
-    return 0;
+    return 1;
 }
 
-/* Unit tests for segs_intersect: run with command-line flag --run-segs-test */
-static int use_fixed_clipping = 1; /* enable Fixed64 clipping by default (non-invasive) */
-static void set_use_fixed_clipping(int v) { use_fixed_clipping = v ? 1 : 0; }
 
+// ============================================================================
+//  2. ORDERING TESTS & OVERLAP
+//  Geometric relation tests, polygon overlap, ray casting
+// ============================================================================
 
-
-static int segs_intersect_unit_tests(void) {
-    struct {
-        double x1,y1,x2,y2,x3,y3,x4,y4; int expect; const char *name;
-    } tests[] = {
-        {233.0,114.0, 98.0,88.0, 191.0,106.0, 212.0,101.0, 0, "case_7_vs_45"},
-        {0.0,0.0, 10.0,0.0, 5.0,-5.0, 5.0,5.0, 1, "orthogonal_mid"},
-        {0.0,0.0, 10.0,0.0, 9.1,-1.0, 9.1,1.0, 0, "near_endpoint"},
-        {0.0,0.0, 10.0,0.0, 10.0,-1.0, 10.0,1.0, 0, "touch_endpoint"},
-        {0.0,0.0, 10.0,0.0, 1.0,-1.0, 1.0,1.0, 1, "near_mid"}
-    };
-    int n = sizeof(tests)/sizeof(tests[0]);
-    printf("Running segs_intersect unit tests (tol=%.3f px)\n", segs_intersect_tol_px);
-    int failed = 0;
-    for (int i = 0; i < n; ++i) {
-        int res_fixed = segs_intersect_int((int)tests[i].x1,(int)tests[i].y1,(int)tests[i].x2,(int)tests[i].y2,(int)tests[i].x3,(int)tests[i].y3,(int)tests[i].x4,(int)tests[i].y4);
-        printf(" test %s: expected=%d fixed=%d\n", tests[i].name, tests[i].expect, res_fixed);
-        if (res_fixed != tests[i].expect) { printf("  -> FIXED FAIL\n"); failed++; } else printf("  -> FIXED PASS\n");
-    }
-    if (failed == 0) printf("All segs_intersect tests passed\n"); else printf("%d segs_intersect tests FAILED\n", failed);
-    return failed;
-}
-
-/*
- * projected_polygons_overlap_simple (legacy / simple overlap test)
- * ---------------------------------------------------------------
- * Purpose:
- *  - Provide a fast, legacy-style screen-space overlap test used historically
- *    by the renderer. It implements a straightforward sequence of inexpensive
- *    checks and avoids the more costly sampling+clipping steps found in the
- *    stricter `projected_polygons_overlap` implementation.
+/* projected_polygons_overlap
+ * --------------------------
  *
- * Algorithm summary (simple):
- *  1) Axis-aligned bbox quick-reject (if bboxes are disjoint -> NON-overlap)
- *  2) Edge-vs-edge *proper* intersection tests with per-edge bbox quick-reject
- *     (returns overlap on any proper intersection; colinear or endpoint-touching
- *     do not count as proper intersection)
- *  3) Containment checks via ray-casting for vertices that fall inside the
- *     other's bbox (points on edges count as OUTSIDE)
- *  - Returns 1 for detected intersection/containment, 0 otherwise.
+ * Parameters:
+ *  - model: pointer to the 3D model containing the faces
+ *  - f1: index of the first face
+ *  - f2: index of the second face
  *
- * Performance & semantics:
- *  - This variant is faster and tends to accept borderline overlaps (including
- *    small/degenerate cases) because it does not enforce a minimum clipped area
- *    threshold. It is thus useful for compatibility and to avoid strict rejections
- *    that can cause ordering artifacts in some meshes.
- *
- * projected_polygons_overlap (strict / precise overlap test)
- * ----------------------------------------------------------
- * Purpose:
- *  - A more conservative and precise overlap test that reduces false positives
- *    for touching or sub-pixel intersections.
- *
- * Algorithm summary (strict):
- *  1) Axis-aligned bbox quick-reject (same as simple)
- *  2) Edge intersection + containment quick checks; if these indicate a candidate
- *     intersection, the function samples a 3×3 grid of interior pixel centers in
- *     the integer intersection bbox (fast acceptance if any sample lies inside
- *     both polygons).
- *  3) If sampling fails, the strict algorithm performs exact polygon clipping
- *     (Sutherland–Hodgman) and computes the clipped polygon area. The overlap
- *     is accepted only if the clipped area >= MIN_INTERSECTION_AREA_PIXELS (1.0).
- *
- * Rationale & guidance:
- *  - Use `projected_polygons_overlap_simple` when you need legacy/compat behavior
- *    (performance or to reproduce older rendering decisions).
- *  - Use `projected_polygons_overlap` when you require conservative detection
- *    that treats touching-only or tiny intersections as NON-overlap.
- *
- * Backwards compatibility:
- *  - Historically some callers used the name `projected_polygons_overlapV0` to
- *    refer to the legacy behavior. `projected_polygons_overlap_simple` preserves
- *    that semantics. An alias may be provided for compatibility.
- */
-static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
-    if (!model) return 0;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-
-    int n1 = faces->vertex_count[f1];
-    int n2 = faces->vertex_count[f2];
-    if (n1 < 3 || n2 < 3) return 0;
-
-    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
-    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-    if (maxx1 < minx2 || maxx2 < minx1 || maxy1 < miny2 || maxy2 < miny1) return 0;
-
-    int off1 = faces->vertex_indices_ptr[f1];
-    int off2 = faces->vertex_indices_ptr[f2];
-
-    /* Edge-vs-edge proper intersection with per-edge bbox quick-reject.
-     * This avoids expensive orientation tests for clearly separated edges.
-     * We use <= in bbox checks so that touching-only edges are treated as
-     * non-overlapping (consistent with the semantics). */
-    for (int i = 0; i < n1; ++i) {
-        int i2 = (i+1) % n1;
-        int va = faces->vertex_indices_buffer[off1 + i] - 1;
-        int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
-        int ax = vtx->x2d[va], ay = vtx->y2d[va];
-        int bx = vtx->x2d[vb], by = vtx->y2d[vb];
-        int aminx = ax < bx ? ax : bx; int amaxx = ax > bx ? ax : bx;
-        int aminy = ay < by ? ay : by; int amaxy = ay > by ? ay : by;
-        for (int j = 0; j < n2; ++j) {
-            int j2 = (j+1) % n2;
-            int vc = faces->vertex_indices_buffer[off2 + j] - 1;
-            int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
-            int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
-            int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
-            int cminx = cx < dx ? cx : dx; int cmaxx = cx > dx ? cx : dx;
-            int cminy = cy < dy ? cy : dy; int cmaxy = cy > dy ? cy : dy;
-            /* quick reject if edge AABBs do not overlap (<= to consider touching as non-overlap) */
-            if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
-            if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) return 1;
-        }
-    }
-
-    // SUPPRESSION : Containment tests are disabled. 
-    //Risk: case where a face is completely contained in another may be missed (Z test will sort it)
-    /* Containment tests: only check if candidate point lies inside the other's bbox first
-     * (cheap) before doing the full ray-cast in point_in_poly_int. This skips expensive
-     * loops for points obviously outside the other polygon's bbox. */
-    // Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
-    // This avoids missing a containment when the polygon's first vertex lies on a shared
-    // boundary point (touching) which is treated as outside.
-    for (int ii = 0; ii < n1; ++ii) {
-        int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
-        if (vid < 0 || vid >= vtx->vertex_count) continue;
-        int px = vtx->x2d[vid], py = vtx->y2d[vid];
-        if (px < minx2 || px > maxx2 || py < miny2 || py > maxy2) continue;
-        if (point_in_poly_int(px, py, faces, vtx, f2, n2)) return 1;
-    }
-
-    for (int jj = 0; jj < n2; ++jj) {
-        int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
-        if (vid < 0 || vid >= vtx->vertex_count) continue;
-        int px = vtx->x2d[vid], py = vtx->y2d[vid];
-        if (px < minx1 || px > maxx1 || py < miny1 || py > maxy1) continue;
-        if (point_in_poly_int(px, py, faces, vtx, f1, n1)) return 1;
-    }
-
-    return 0;
-}
-
+ * Returns:
+ *  - 1 if the projected polygons of f1 and f2 overlap
+ *  - 0 if they do not overlap (including touching-only cases)
+ 
 /*
  * projected_polygons_overlap(model, f1, f2)
  * -----------------------------------------
@@ -2083,6 +1451,11 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
  * Debug hooks print clipping and centroid details when enabled.
  */
 segment "projected_polygons_overlap";
+
+/* Unit tests for segs_intersect: run with command-line flag --run-segs-test */
+static int use_fixed_clipping = 1; /* enable Fixed64 clipping by default (non-invasive) */
+static void set_use_fixed_clipping(int v) { use_fixed_clipping = v ? 1 : 0; }
+
 static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
@@ -2369,8 +1742,709 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     return 0;
 }
 
+/*
+ * projected_polygons_overlap_simple (legacy / simple overlap test)
+ * ---------------------------------------------------------------
+ * Purpose:
+ *  - Provide a fast, legacy-style screen-space overlap test used historically
+ *    by the renderer. It implements a straightforward sequence of inexpensive
+ *    checks and avoids the more costly sampling+clipping steps found in the
+ *    stricter `projected_polygons_overlap` implementation.
+ *
+ * Algorithm summary (simple):
+ *  1) Axis-aligned bbox quick-reject (if bboxes are disjoint -> NON-overlap)
+ *  2) Edge-vs-edge *proper* intersection tests with per-edge bbox quick-reject
+ *     (returns overlap on any proper intersection; colinear or endpoint-touching
+ *     do not count as proper intersection)
+ *  3) Containment checks via ray-casting for vertices that fall inside the
+ *     other's bbox (points on edges count as OUTSIDE)
+ *  - Returns 1 for detected intersection/containment, 0 otherwise.
+ *
+ * Performance & semantics:
+ *  - This variant is faster and tends to accept borderline overlaps (including
+ *    small/degenerate cases) because it does not enforce a minimum clipped area
+ *    threshold. It is thus useful for compatibility and to avoid strict rejections
+ *    that can cause ordering artifacts in some meshes.
+ *
+ * projected_polygons_overlap (strict / precise overlap test)
+ * ----------------------------------------------------------
+ * Purpose:
+ *  - A more conservative and precise overlap test that reduces false positives
+ *    for touching or sub-pixel intersections.
+ *
+ * Algorithm summary (strict):
+ *  1) Axis-aligned bbox quick-reject (same as simple)
+ *  2) Edge intersection + containment quick checks; if these indicate a candidate
+ *     intersection, the function samples a 3×3 grid of interior pixel centers in
+ *     the integer intersection bbox (fast acceptance if any sample lies inside
+ *     both polygons).
+ *  3) If sampling fails, the strict algorithm performs exact polygon clipping
+ *     (Sutherland–Hodgman) and computes the clipped polygon area. The overlap
+ *     is accepted only if the clipped area >= MIN_INTERSECTION_AREA_PIXELS (1.0).
+ *
+ * Rationale & guidance:
+ *  - Use `projected_polygons_overlap_simple` when you need legacy/compat behavior
+ *    (performance or to reproduce older rendering decisions).
+ *  - Use `projected_polygons_overlap` when you require conservative detection
+ *    that treats touching-only or tiny intersections as NON-overlap.
+ *
+ * Backwards compatibility:
+ *  - Historically some callers used the name `projected_polygons_overlapV0` to
+ *    refer to the legacy behavior. `projected_polygons_overlap_simple` preserves
+ *    that semantics. An alias may be provided for compatibility.
+ */
+static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    if (n1 < 3 || n2 < 3) return 0;
+
+    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+    if (maxx1 < minx2 || maxx2 < minx1 || maxy1 < miny2 || maxy2 < miny1) return 0;
+
+    int off1 = faces->vertex_indices_ptr[f1];
+    int off2 = faces->vertex_indices_ptr[f2];
+
+    /* Edge-vs-edge proper intersection with per-edge bbox quick-reject.
+     * This avoids expensive orientation tests for clearly separated edges.
+     * We use <= in bbox checks so that touching-only edges are treated as
+     * non-overlapping (consistent with the semantics). */
+    for (int i = 0; i < n1; ++i) {
+        int i2 = (i+1) % n1;
+        int va = faces->vertex_indices_buffer[off1 + i] - 1;
+        int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
+        int ax = vtx->x2d[va], ay = vtx->y2d[va];
+        int bx = vtx->x2d[vb], by = vtx->y2d[vb];
+        int aminx = ax < bx ? ax : bx; int amaxx = ax > bx ? ax : bx;
+        int aminy = ay < by ? ay : by; int amaxy = ay > by ? ay : by;
+        for (int j = 0; j < n2; ++j) {
+            int j2 = (j+1) % n2;
+            int vc = faces->vertex_indices_buffer[off2 + j] - 1;
+            int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
+            int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
+            int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
+            int cminx = cx < dx ? cx : dx; int cmaxx = cx > dx ? cx : dx;
+            int cminy = cy < dy ? cy : dy; int cmaxy = cy > dy ? cy : dy;
+            /* quick reject if edge AABBs do not overlap (<= to consider touching as non-overlap) */
+            if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
+            if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) return 1;
+        }
+    }
+
+    // SUPPRESSION : Containment tests are disabled. 
+    //Risk: case where a face is completely contained in another may be missed (Z test will sort it)
+    /* Containment tests: only check if candidate point lies inside the other's bbox first
+     * (cheap) before doing the full ray-cast in point_in_poly_int. This skips expensive
+     * loops for points obviously outside the other polygon's bbox. */
+    // Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
+    // This avoids missing a containment when the polygon's first vertex lies on a shared
+    // boundary point (touching) which is treated as outside.
+    for (int ii = 0; ii < n1; ++ii) {
+        int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
+        if (vid < 0 || vid >= vtx->vertex_count) continue;
+        int px = vtx->x2d[vid], py = vtx->y2d[vid];
+        if (px < minx2 || px > maxx2 || py < miny2 || py > maxy2) continue;
+        if (point_in_poly_int(px, py, faces, vtx, f2, n2)) return 1;
+    }
+
+    for (int jj = 0; jj < n2; ++jj) {
+        int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
+        if (vid < 0 || vid >= vtx->vertex_count) continue;
+        int px = vtx->x2d[vid], py = vtx->y2d[vid];
+        if (px < minx1 || px > maxx1 || py < miny1 || py > maxy1) continue;
+        if (point_in_poly_int(px, py, faces, vtx, f1, n1)) return 1;
+    }
+
+    return 0;
+}
 
 
+/* Plane-based pair relation used by `painter_correct` fast path:
+ * - Only evaluates geometric plane tests (equivalent to tests 4..7)
+ * - Returns -1 if f1 is before f2, 1 if f1 is after f2, 0 if inconclusive
+ *
+ * This avoids depth/bbox checks which are unnecessary for the local
+ * geometric decision in `painter_correct`.
+ */
+/* Specialized plane-only checks for painter_correct fast path
+ * ------------------------------------------------------------
+ * These functions implement the geometric depth tests from Newell-Sancha algorithm
+ * using only plane equations (no bounding box checks - caller must do those first).
+ *
+ * - pair_plane_after(f1,f2): returns 1 if f1 is geometrically after (in front of) f2
+ *   Implements Test6: all vertices of f2 on opposite side of f1's plane from observer
+ *   Falls back to Test7: all vertices of f1 on same side of f2's plane as observer
+ *
+ * - pair_plane_before(f1,f2): returns 1 if f1 is geometrically before (behind) f2  
+ *   Implements Test4: all vertices of f2 on same side of f1's plane as observer
+ *   Falls back to Test5: all vertices of f1 on opposite side of f2's plane from observer
+ *
+ * Both functions:
+ *   - Use Fixed64 arithmetic for plane equation evaluation
+ *   - Apply epsilon tolerance (0.01) to handle near-coplanar cases
+ *   - Return 0 if tests are inconclusive
+ *   - Are only valid for front-faces (plane_d > 0); back-faces need special handling
+ */
+
+static int pair_plane_before(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int k;
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+
+    /* Test4: Check if all vertices of f2 are on the same side of f1's plane as the observer.
+     * If observer is in front of f1 and all f2 vertices are also in front,
+     * then f2 occludes f1 -> f1 is before (should be drawn first). */
+    int obs_side1 = 0; int side; int all_same_side;
+    obs_side1 = 0; 
+    if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    if (obs_side1 != 0) {
+        all_same_side = 1;
+        for (k = 0; k < n2; ++k) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side1 != side) { all_same_side = 0; break; }
+        }
+        if (all_same_side) return 1;
+    }
+    /* Test5 fallback: Check if all vertices of f1 are on opposite side of f2's plane from observer.
+     * If observer is in front of f2 and all f1 vertices are behind f2's plane, then f1 is before f2. */
+    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
+    int obs_side2 = 0; int all_opposite_side = 0;
+    obs_side2 = 0; 
+    if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    if (obs_side2 != 0) {
+        all_opposite_side = 1;
+        for (k = 0; k < n1; ++k) {
+            int v = faces->vertex_indices_buffer[offset1+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d2;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side2 == side) { all_opposite_side = 0; break; }
+        }
+        if (all_opposite_side) return 1;
+    }
+    return 0;
+}
+
+static int pair_plane_after(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int k;
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+
+    /* Test6: Check if all vertices of f2 are on the opposite side of f1's plane from the observer.
+     * If observer is in front of f1 (d1 > 0) and all f2 vertices are behind f1's plane,
+     * then f1 occludes f2 -> f1 is after (should be drawn later). */
+    int obs_side1 = 0; int side; int all_opposite_side;
+    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    if (obs_side1 != 0) {
+        all_opposite_side = 1;
+        for (k = 0; k < n2; ++k) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side1 == side) { all_opposite_side = 0; break; }
+        }
+        if (all_opposite_side) return 1;
+    }
+    /* Test7 fallback: Check if all vertices of f1 are on the same side of f2's plane as the observer.
+     * If observer is in front of f2 and all f1 vertices are also in front, then f1 is after f2. */
+    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
+    int obs_side2 = 0; int all_same_side = 0;
+    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    if (obs_side2 != 0) {
+        all_same_side = 1;
+        for (k = 0; k < n1; ++k) {
+            int v = faces->vertex_indices_buffer[offset1+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d2;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side2 != side) { all_same_side = 0; break; }
+        }
+        if (all_same_side) return 1;
+    }
+    return 0;
+}
+
+segment "code03";
+
+/* Evaluate tests 1..7 individually for a pair (f1, f2).
+ * out[0]..out[6] will be filled with:
+ *   -1 => test concludes f1 is before f2
+ *    1 => test concludes f1 is after f2
+ *    0 => test inconclusive
+ */
+static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+    int k;
+
+    for (k = 0; k < 7; ++k) out[k] = 0;
+
+    // Test 1: depth separation
+    if (faces->z_max[f2] <= faces->z_min[f1]) out[0] = -1;
+    else if (faces->z_max[f1] <= faces->z_min[f2]) out[0] = 1;
+
+    // Test 2: X bbox separation
+    {
+        int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], minx2 = faces->minx[f2], maxx2 = faces->maxx[f2];
+        if (maxx1 <= minx2 || maxx2 <= minx1) out[1] = -1;
+    }
+
+    // Test 3: Y bbox separation
+    {
+        int miny1 = faces->miny[f1], maxy1 = faces->maxy[f1], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+        if (maxy1 <= miny2 || maxy2 <= miny1) out[2] = -1;
+    }
+
+    // Plane-based tests 4..7
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
+    int obs_side1 = 0; int obs_side2 = 0; int side; int all_same_side; int all_opposite_side;
+
+    // Test 4
+    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    if (obs_side1 != 0) {
+        all_same_side = 1;
+        for (k = 0; k < n2; ++k) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side1 != side) { all_same_side = 0; break; }
+        }
+        if (all_same_side) out[3] = -1; else out[3] = 0;
+    } else out[3] = 0;
+
+    // Test 5
+    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    if (obs_side2 != 0) {
+        all_opposite_side = 1;
+        for (k = 0; k < n1; ++k) {
+            int v = faces->vertex_indices_buffer[offset1+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d2;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side2 == side) { all_opposite_side = 0; break; }
+        }
+        if (all_opposite_side) out[4] = -1; else out[4] = 0;
+    } else out[4] = 0;
+
+    // Test 6
+    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
+    if (obs_side1 != 0) {
+        all_opposite_side = 1;
+        for (k = 0; k < n2; ++k) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side1 == side) { all_opposite_side = 0; break; }
+        }
+        if (all_opposite_side) out[5] = 1; else out[5] = 0;
+    } else out[5] = 0;
+
+    // Test 7
+    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
+    if (obs_side2 != 0) {
+        all_same_side = 1;
+        for (k = 0; k < n1; ++k) {
+            int v = faces->vertex_indices_buffer[offset1+k]-1;
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d2;
+            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
+            if (obs_side2 != side) { all_same_side = 0; break; }
+        }
+        if (all_same_side) out[6] = 1; else out[6] = 0;
+    } else out[6] = 0;
+}
+
+
+// RAY CAST & INSPECTOR IMPLEMENTATION 
+// Returns: 
+// 0 if error or undetermined
+// 1 if f1 farer than f2
+// -1 if f1 closer than f2
+/* Compute ray cast distances (tf) for faces f1 and f2 at screen coordinate (cx,cy).
+ * Returns 1 and fills *out_tf1/*out_tf2 on success, 0 if denom near zero (coplanar/parallel) or invalid.
+ */
+static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2) {
+    if (!model || !out_tf1 || !out_tf2) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
+    float proj_scale = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
+    float Dx = ((float)cx - (float)CENTRE_X) / proj_scale;
+    float Dy = ((float)CENTRE_Y - (float)cy) / proj_scale;
+    float Dz = 1.0f;
+    float A1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
+    float B1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
+    float C1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
+    float D1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
+    float A2 = (float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
+    float B2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
+    float C2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
+    float D2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
+    float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;
+    float denom2 = A2 * Dx + B2 * Dy + C2 * Dz;
+    if (fabsf(denom1) < 1e-6f || fabsf(denom2) < 1e-6f) return 0; /* coplanar or parallel */
+    *out_tf1 = -D1 / denom1;
+    *out_tf2 = -D2 / denom2;
+    return 1;
+}
+
+/* Ray cast at explicit screen coordinate (cx,cy) in projected 2D coords */
+static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
+    float tf1 = 0.0f, tf2 = 0.0f;
+    if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) return 0;
+    if (tf1 > tf2) return 1;  /* f1 is farther than f2 */
+    else if (tf1 < tf2) return -1; /* f1 is closer than f2 */
+    else return 0;
+}
+
+/* Hierarchical ray-cast: prefer QD centroid, then SH centroid, then bbox center */
+static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
+    if (!model) return 0;
+    int cx = 0, cy = 0; long long area2 = 0; int rc = 0; int fallback = 0;
+
+    /* 1) Prefer QuickDraw region centroid (most representative for complex overlaps) */
+    if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &cx, &cy, &area2) && area2 != 0) {
+        rc = ray_cast_at(model, f1, f2, cx, cy);
+        if (rc != 0) return rc;
+    }
+
+    /* 2) Try Sutherland–Hodgman centroid */
+    area2 = 0; fallback = 0;
+    if (compute_intersection_centroid_ordered_fixed_tryboth(model, f1, f2, &cx, &cy, &area2, &fallback) && area2 != 0) {
+        rc = ray_cast_at(model, f1, f2, cx, cy);
+        if (rc != 0) return rc;
+    }
+
+    /* 3) Fallback to bbox center */
+    if (compute_bbox_intersection_center(model, f1, f2, &cx, &cy)) {
+        return ray_cast_at(model, f1, f2, cx, cy);
+    }
+
+    return 0;
+}
+
+/* Compute center of intersection of two faces' projected axis-aligned bboxes.
+ * Returns 1 and writes (*outx,*outy) on success, 0 if no intersection or invalid ids.
+ */
+static int compute_bbox_intersection_center(Model3D* model, int f1, int f2, int *outx, int *outy) {
+    if (!model || !outx || !outy) return 0;
+    int ix0, iy0, ix1, iy1;
+    if (!compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1)) return 0;
+    *outx = (ix0 + ix1) / 2;
+    *outy = (iy0 + iy1) / 2;
+    return 1;
+}
+
+/* Compute axis-aligned integer intersection bbox of projected face bboxes.
+ * Returns 1 and fills (*ix0,*iy0,*ix1,*iy1) on success, 0 if no intersection.
+ */
+static int compute_bbox_intersection(Model3D* model, int f1, int f2, int *ix0, int *iy0, int *ix1, int *iy1) {
+    if (!model || !ix0 || !iy0 || !ix1 || !iy1) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
+    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+    int a0 = (minx1 > minx2) ? minx1 : minx2;
+    int a1 = (maxx1 < maxx2) ? maxx1 : maxx2;
+    int b0 = (miny1 > miny2) ? miny1 : miny2;
+    int b1 = (maxy1 < maxy2) ? maxy1 : maxy2;
+    if (a0 > a1 || b0 > b1) return 0;
+    *ix0 = a0; *iy0 = b0; *ix1 = a1; *iy1 = b1;
+    return 1;
+}
+
+/* Integer point-in-polygon test using ray-crossing on integer vertex arrays.
+ * Returns 1 if point (px,py) is inside or on edge, 0 otherwise.
+ */
+static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const int vy[]) {
+    if (n < 3) return 0;
+    int inside = 0;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        int xi = vx[i], yi = vy[i];
+        int xj = vx[j], yj = vy[j];
+        /* Check if point is exactly on a vertex */
+        if (px == xi && py == yi) return 1;
+        /* Ray crossing: test if edge (j->i) crosses horizontal line at py */
+        int yi_gt_py = (yi > py);
+        int yj_gt_py = (yj > py);
+        if (yi_gt_py != yj_gt_py) {
+            /* Compute intersection X coordinate in integer-safe way: xi + (py - yi) * (xj - xi) / (yj - yi) */
+            long long dx = (long long)(xj - xi);
+            long long dy = (long long)(yj - yi);
+            long long lhs = (long long)(px - xi) * dy;
+            long long rhs = (long long)(py - yi) * dx;
+            if ((dy > 0 && lhs < rhs) || (dy < 0 && lhs > rhs)) inside = !inside;
+        }
+    }
+    return inside;
+}
+
+
+static long long orient_ll(long long ax,long long ay,long long bx,long long by,long long cx,long long cy) {
+    return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);
+}
+static int on_seg_ll(long long ax,long long ay,long long bx,long long by,long long cx,long long cy) {
+    if (( (ax<=cx && cx<=bx) || (bx<=cx && cx<=ax) ) && ((ay<=cy && cy<=by) || (by<=cy && cy<=ay))) return 1;
+    return 0;
+}
+/* tolerance (in pixels) below which an intersection is considered too close
+ * to a vertex/edge and thus ignored. Default set by user request to 1.0 px. */
+static double segs_intersect_tol_px = 1.0;
+/*
+ * segs_intersect_int_dbl
+ * ----------------------
+ * Double-precision core used by the integer wrapper and unit tests.
+ *
+ * Steps and rationale (detailed) :
+ * 1) Orientation test (proper intersection):
+ *    - We round coordinates to the nearest integer when computing orientations
+ *      (via floor(x+0.5)) in order to preserve the original integer semantics
+ *      used elsewhere in the codebase (avoids surprising behaviour due to tiny
+ *      floating-point perturbations when deciding "proper" orientation).
+ *    - A proper intersection requires strict sign differences for the pair of
+ *      orientations on each segment (standard robust test).
+ *
+ * 2) Intersection point computation:
+ *    - If orientation indicates a proper intersection, we compute the exact
+ *      intersection point in double precision (t parameter and point coords).
+ *    - Guard against near-parallel segments using a small epsilon on the
+ *      determinant (fabs(denom) < 1e-12) to avoid numerical instability.
+ *
+ * 3) Proximity filtering (pixel tolerance):
+ *    - We consider a global tolerance `segs_intersect_tol_px` (in pixels).
+ *    - If the computed intersection point lies within `tol` of any of the 4
+ *      segment endpoints, we treat the intersection as spurious and return 0.
+ *      This removes sub-pixel / endpoint-touch cases that would otherwise be
+ *      reported as proper intersections due to integer orientation tests.
+ *
+ * 4) Endpoint-segment proximity test :
+ *    - Additionally, if any of the 4 segment endpoints is within `tol` of
+ *      the other segment (distance point→segment < tol), we also ignore the
+ *      intersection (returned 0). This handles cases where an endpoint lies
+ *      very near the interior of the other segment but rounding/orientation
+ *      might have flagged a proper intersection.
+ *
+ * 5) Final decision : return 1 only if the intersection is proper and passes
+ *    both proximity filters. This yields a conservative behavior tuned to
+ *    avoid visual artifacts from sub-pixel intersections while preserving
+ *    real, well-separated crossings.
+ */
+/**
+ * Compute squared distance (in fixed units) from point P(px,py) to segment AB (ax,ay)-(bx,by).
+ * Returns an unsigned long long representing (distance_in_fixed_units)^2.
+ * Implementation notes:
+ *  - The function works entirely in integer arithmetic to avoid floating point.
+ *  - We compute numsq = (wx*d - c*vx)^2 + (wy*d - c*vy)^2 and then divide by d^2,
+ *    performing division before multiplying by FIXED_SCALE^2 to avoid overflow.
+ */
+static unsigned long long point_seg_dist2_fixed_int(int px,int py,int ax,int ay,int bx,int by) {
+    long long vx = (long long)bx - (long long)ax, vy = (long long)by - (long long)ay;
+    long long wx = (long long)px - (long long)ax, wy = (long long)py - (long long)ay;
+    long long c = vx*wx + vy*wy;
+    long long d = vx*vx + vy*vy;
+    if (d == 0) {
+        long long dx0 = px - ax, dy0 = py - ay;
+        unsigned long long r = (unsigned long long)dx0*(unsigned long long)dx0 + (unsigned long long)dy0*(unsigned long long)dy0;
+        return r * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+    }
+    if (c <= 0) {
+        long long dx0 = px - ax, dy0 = py - ay;
+        unsigned long long r = (unsigned long long)dx0*(unsigned long long)dx0 + (unsigned long long)dy0*(unsigned long long)dy0;
+        return r * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+    } else if (c >= d) {
+        long long dx0 = px - bx, dy0 = py - by;
+        unsigned long long r = (unsigned long long)dx0*(unsigned long long)dx0 + (unsigned long long)dy0*(unsigned long long)dy0;
+        return r * (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+    } else {
+        long long numx = wx * d - c * vx;
+        long long numy = wy * d - c * vy;
+        unsigned long long numsq = (unsigned long long)numx * (unsigned long long)numx + (unsigned long long)numy * (unsigned long long)numy;
+        unsigned long long den = (unsigned long long)d * (unsigned long long)d;
+        unsigned long long q = numsq / den;
+        unsigned long long rem = numsq % den;
+        unsigned long long scale2 = (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+        unsigned long long out = q * scale2 + (rem * scale2) / den;
+        return out;
+    }
+}
+
+static int segs_intersect_int_fixed64(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
+    long long o1 = orient_ll(x1,y1,x2,y2,x3,y3);
+    long long o2 = orient_ll(x1,y1,x2,y2,x4,y4);
+    long long o3 = orient_ll(x3,y3,x4,y4,x1,y1);
+    long long o4 = orient_ll(x3,y3,x4,y4,x2,y2);
+    /* Proper intersection only: require strict orientation differences */
+    if (!(((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0)))) return 0;
+
+    long long dx1 = x2 - x1, dy1 = y2 - y1;
+    long long dx2 = x4 - x3, dy2 = y4 - y3;
+    long long denom = dx1 * (-dy2) - dy1 * (-dx2);
+    if (denom == 0) return 0; /* numerically parallel */
+
+    long long tnum = (long long)(x3 - x1) * (-dy2) - (long long)(y3 - y1) * (-dx2);
+
+    /* intersection point in Fixed64 */
+    Fixed64 t_fixed = ((Fixed64)tnum << FIXED_SHIFT) / (Fixed64)denom;
+    Fixed64 ix_fixed = (((Fixed64)x1) << FIXED_SHIFT) + ((t_fixed * (((Fixed64)dx1) << FIXED_SHIFT)) >> FIXED_SHIFT);
+    Fixed64 iy_fixed = (((Fixed64)y1) << FIXED_SHIFT) + ((t_fixed * (((Fixed64)dy1) << FIXED_SHIFT)) >> FIXED_SHIFT);
+
+    /* tolerance in fixed units */
+    Fixed64 tol_fixed = (Fixed64)(segs_intersect_tol_px * (double)FIXED_SCALE + 0.5);
+    unsigned long long tol2_fixed = (unsigned long long)tol_fixed * (unsigned long long)tol_fixed; /* fixed^2 */
+
+    /* distance to endpoints (in fixed units squared) */
+    long long ddx, ddy; unsigned long long dist2u;
+    ddx = (long long)ix_fixed - ((long long)x1 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y1 << FIXED_SHIFT);
+    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
+    ddx = (long long)ix_fixed - ((long long)x2 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y2 << FIXED_SHIFT);
+    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
+    ddx = (long long)ix_fixed - ((long long)x3 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y3 << FIXED_SHIFT);
+    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
+    ddx = (long long)ix_fixed - ((long long)x4 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y4 << FIXED_SHIFT);
+    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
+
+
+
+    if (point_seg_dist2_fixed_int(x1,y1,x3,y3,x4,y4) < tol2_fixed) return 0;
+    if (point_seg_dist2_fixed_int(x2,y2,x3,y3,x4,y4) < tol2_fixed) return 0;
+    if (point_seg_dist2_fixed_int(x3,y3,x1,y1,x2,y2) < tol2_fixed) return 0;
+    if (point_seg_dist2_fixed_int(x4,y4,x1,y1,x2,y2) < tol2_fixed) return 0;
+
+    return 1;
+}
+
+/* Double-based regression helpers removed: Fixed (integer) implementations are now authoritative.
+ * The old `segs_intersect_int_dbl` and associated double point/segment helpers were deleted
+ * to remove redundant floating-point paths and reduce maintenance surface.
+ */
+static int segs_intersect_int(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
+    return segs_intersect_int_fixed64(x1,y1,x2,y2,x3,y3,x4,y4);
+}
+static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* vtx, int f, int n) {
+    int cnt = 0; int off = faces->vertex_indices_ptr[f];
+    for (int i = 0; i < n; ++i) {
+        int j = (i+1)%n;
+        int vi = faces->vertex_indices_buffer[off + i] - 1;
+        int vj = faces->vertex_indices_buffer[off + j] - 1;
+        int xi = vtx->x2d[vi], yi = vtx->y2d[vi];
+        int xj = vtx->x2d[vj], yj = vtx->y2d[vj];
+        /* If the point lies exactly on the edge, consider it OUTSIDE (no overlap).
+         * Use orient==0 + on-segment test to detect boundary points. */
+        if (orient_ll(xi, yi, xj, yj, px, py) == 0 && on_seg_ll(xi, yi, xj, yj, px, py)) return 0;
+        if (((yi > py) != (yj > py)) && (px < (long long)(xj - xi) * (py - yi) / (yj - yi) + xi)) cnt++;
+    }
+    return (cnt & 1);
+}
+
+/* Return 1 if faces f1 and f2 have identical 2D vertex sequences (allowing rotation
+ * and reversed order). Comparison uses exact integer 2D coordinates. */
+static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1, int f2) {
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    if (n1 != n2 || n1 <= 0) return 0;
+    int off1 = faces->vertex_indices_ptr[f1];
+    int off2 = faces->vertex_indices_ptr[f2];
+
+    /* Forward rotation check */
+    for (int shift = 0; shift < n1; ++shift) {
+        int ok = 1;
+        for (int k = 0; k < n1; ++k) {
+            int idx1 = faces->vertex_indices_buffer[off1 + k] - 1;
+            int idx2 = faces->vertex_indices_buffer[off2 + ((shift + k) % n1)] - 1;
+            if (idx1 < 0 || idx2 < 0) { ok = 0; break; }
+            if (vtx->x2d[idx1] != vtx->x2d[idx2] || vtx->y2d[idx1] != vtx->y2d[idx2]) { ok = 0; break; }
+        }
+        if (ok) return 1;
+    }
+
+    /* Reverse rotation check */
+    for (int shift = 0; shift < n1; ++shift) {
+        int ok = 1;
+        for (int k = 0; k < n1; ++k) {
+            int idx1 = faces->vertex_indices_buffer[off1 + k] - 1;
+            int idx2 = faces->vertex_indices_buffer[off2 + ((shift - k + n1) % n1)] - 1;
+            if (idx1 < 0 || idx2 < 0) { ok = 0; break; }
+            if (vtx->x2d[idx1] != vtx->x2d[idx2] || vtx->y2d[idx1] != vtx->y2d[idx2]) { ok = 0; break; }
+        }
+        if (ok) return 1;
+    }
+    return 0;
+}
+
+static int segs_intersect_unit_tests(void) {
+    struct {
+        double x1,y1,x2,y2,x3,y3,x4,y4; int expect; const char *name;
+    } tests[] = {
+        {233.0,114.0, 98.0,88.0, 191.0,106.0, 212.0,101.0, 0, "case_7_vs_45"},
+        {0.0,0.0, 10.0,0.0, 5.0,-5.0, 5.0,5.0, 1, "orthogonal_mid"},
+        {0.0,0.0, 10.0,0.0, 9.1,-1.0, 9.1,1.0, 0, "near_endpoint"},
+        {0.0,0.0, 10.0,0.0, 10.0,-1.0, 10.0,1.0, 0, "touch_endpoint"},
+        {0.0,0.0, 10.0,0.0, 1.0,-1.0, 1.0,1.0, 1, "near_mid"}
+    };
+    int n = sizeof(tests)/sizeof(tests[0]);
+    printf("Running segs_intersect unit tests (tol=%.3f px)\n", segs_intersect_tol_px);
+    int failed = 0;
+    for (int i = 0; i < n; ++i) {
+        int res_fixed = segs_intersect_int((int)tests[i].x1,(int)tests[i].y1,(int)tests[i].x2,(int)tests[i].y2,(int)tests[i].x3,(int)tests[i].y3,(int)tests[i].x4,(int)tests[i].y4);
+        printf(" test %s: expected=%d fixed=%d\n", tests[i].name, tests[i].expect, res_fixed);
+        if (res_fixed != tests[i].expect) { printf("  -> FIXED FAIL\n"); failed++; } else printf("  -> FIXED PASS\n");
+    }
+    if (failed == 0) printf("All segs_intersect tests passed\n"); else printf("%d segs_intersect tests FAILED\n", failed);
+    return failed;
+}
 
 static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
     /* Robust integer implementation for diagnostics and fixed-area comparisons.
@@ -2858,1055 +2932,2818 @@ static int compute_intersection_centroid_ordered_qd_fixed(Model3D* model, int su
     return 1;
 }
 
-segment "code03";
+// ============================================================================
+//  3. TRANSFORM & PROJECTION
+//  Observer-space transform, depth calculation, 2D projection
+// ============================================================================
 
-/* Evaluate tests 1..7 individually for a pair (f1, f2).
- * out[0]..out[6] will be filled with:
- *   -1 => test concludes f1 is before f2
- *    1 => test concludes f1 is after f2
- *    0 => test inconclusive
- */
-static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
-    int k;
+segment "code10";
+void processModelFast(Model3D* model, ObserverParams* params, const char* filename) {
+    int i;
 
-    for (k = 0; k < 7; ++k) out[k] = 0;
-
-    // Test 1: depth separation
-    if (faces->z_max[f2] <= faces->z_min[f1]) out[0] = -1;
-    else if (faces->z_max[f1] <= faces->z_min[f2]) out[0] = 1;
-
-    // Test 2: X bbox separation
-    {
-        int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], minx2 = faces->minx[f2], maxx2 = faces->maxx[f2];
-        if (maxx1 <= minx2 || maxx2 <= minx1) out[1] = -1;
-    }
-
-    // Test 3: Y bbox separation
-    {
-        int miny1 = faces->miny[f1], maxy1 = faces->maxy[f1], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-        if (maxy1 <= miny2 || maxy2 <= miny1) out[2] = -1;
-    }
-
-    // Plane-based tests 4..7
-    int n1 = faces->vertex_count[f1];
-    int n2 = faces->vertex_count[f2];
-    int offset1 = faces->vertex_indices_ptr[f1];
-    int offset2 = faces->vertex_indices_ptr[f2];
-    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
-    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
-    int obs_side1 = 0; int obs_side2 = 0; int side; int all_same_side; int all_opposite_side;
-
-    // Test 4
-    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
-    if (obs_side1 != 0) {
-        all_same_side = 1;
-        for (k = 0; k < n2; ++k) {
-            int v = faces->vertex_indices_buffer[offset2+k]-1;
-            Fixed64 acc = 0;
-            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-            acc += (Fixed64)d1;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-            if (obs_side1 != side) { all_same_side = 0; break; }
-        }
-        if (all_same_side) out[3] = -1; else out[3] = 0;
-    } else out[3] = 0;
-
-    // Test 5
-    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
-    if (obs_side2 != 0) {
-        all_opposite_side = 1;
-        for (k = 0; k < n1; ++k) {
-            int v = faces->vertex_indices_buffer[offset1+k]-1;
-            Fixed64 acc = 0;
-            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-            acc += (Fixed64)d2;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-            if (obs_side2 == side) { all_opposite_side = 0; break; }
-        }
-        if (all_opposite_side) out[4] = -1; else out[4] = 0;
-    } else out[4] = 0;
-
-    // Test 6
-    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
-    if (obs_side1 != 0) {
-        all_opposite_side = 1;
-        for (k = 0; k < n2; ++k) {
-            int v = faces->vertex_indices_buffer[offset2+k]-1;
-            Fixed64 acc = 0;
-            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-            acc += (Fixed64)d1;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-            if (obs_side1 == side) { all_opposite_side = 0; break; }
-        }
-        if (all_opposite_side) out[5] = 1; else out[5] = 0;
-    } else out[5] = 0;
-
-    // Test 7
-    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
-    if (obs_side2 != 0) {
-        all_same_side = 1;
-        for (k = 0; k < n1; ++k) {
-            int v = faces->vertex_indices_buffer[offset1+k]-1;
-            Fixed64 acc = 0;
-            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-            acc += (Fixed64)d2;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-            if (obs_side2 != side) { all_same_side = 0; break; }
-        }
-        if (all_same_side) out[6] = 1; else out[6] = 0;
-    } else out[6] = 0;
-}
-
-/* Plane-based pair relation used by `painter_correct` fast path:
- * - Only evaluates geometric plane tests (equivalent to tests 4..7)
- * - Returns -1 if f1 is before f2, 1 if f1 is after f2, 0 if inconclusive
- *
- * This avoids depth/bbox checks which are unnecessary for the local
- * geometric decision in `painter_correct`.
- */
-
-
-/* Specialized plane-only checks for painter_correct fast path
- * ------------------------------------------------------------
- * These functions implement the geometric depth tests from Newell-Sancha algorithm
- * using only plane equations (no bounding box checks - caller must do those first).
- *
- * - pair_plane_after(f1,f2): returns 1 if f1 is geometrically after (in front of) f2
- *   Implements Test6: all vertices of f2 on opposite side of f1's plane from observer
- *   Falls back to Test7: all vertices of f1 on same side of f2's plane as observer
- *
- * - pair_plane_before(f1,f2): returns 1 if f1 is geometrically before (behind) f2  
- *   Implements Test4: all vertices of f2 on same side of f1's plane as observer
- *   Falls back to Test5: all vertices of f1 on opposite side of f2's plane from observer
- *
- * Both functions:
- *   - Use Fixed64 arithmetic for plane equation evaluation
- *   - Apply epsilon tolerance (0.01) to handle near-coplanar cases
- *   - Return 0 if tests are inconclusive
- *   - Are only valid for front-faces (plane_d > 0); back-faces need special handling
- */
-
-static int pair_plane_after(Model3D* model, int f1, int f2) {
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 cos_h, sin_h, cos_v, sin_v, cos_w, sin_w;
+    Fixed32 x, y, z, zo, xo, yo;
+    Fixed32 inv_zo, x2d_temp, y2d_temp;
     
-    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
-    int k;
-    int n1 = faces->vertex_count[f1];
-    int n2 = faces->vertex_count[f2];
-    int offset1 = faces->vertex_indices_ptr[f1];
-    int offset2 = faces->vertex_indices_ptr[f2];
-    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+    // Direct table access - ultra-fast! (no function calls)
+    cos_h = cos_deg_int(params->angle_h);
+    sin_h = sin_deg_int(params->angle_h);
+    cos_v = cos_deg_int(params->angle_v);
+    sin_v = sin_deg_int(params->angle_v);
+    cos_w = cos_deg_int(params->angle_w);
+    sin_w = sin_deg_int(params->angle_w);
 
-    /* Test6: Check if all vertices of f2 are on the opposite side of f1's plane from the observer.
-     * If observer is in front of f1 (d1 > 0) and all f2 vertices are behind f1's plane,
-     * then f1 occludes f2 -> f1 is after (should be drawn later). */
-    int obs_side1 = 0; int side; int all_opposite_side;
-    obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
-    if (obs_side1 != 0) {
-        all_opposite_side = 1;
-        for (k = 0; k < n2; ++k) {
-            int v = faces->vertex_indices_buffer[offset2+k]-1;
-            Fixed64 acc = 0;
-            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-            acc += (Fixed64)d1;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-            if (obs_side1 == side) { all_opposite_side = 0; break; }
-        }
-        if (all_opposite_side) return 1;
-    }
-    /* Test7 fallback: Check if all vertices of f1 are on the same side of f2's plane as the observer.
-     * If observer is in front of f2 and all f1 vertices are also in front, then f1 is after f2. */
-    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
-    int obs_side2 = 0; int all_same_side = 0;
-    obs_side2 = 0; if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
-    if (obs_side2 != 0) {
-        all_same_side = 1;
-        for (k = 0; k < n1; ++k) {
-            int v = faces->vertex_indices_buffer[offset1+k]-1;
-            Fixed64 acc = 0;
-            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-            acc += (Fixed64)d2;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-            if (obs_side2 != side) { all_same_side = 0; break; }
-        }
-        if (all_same_side) return 1;
-    }
-    return 0;
-}
+    // Pre-calculate all trigonometric products in Fixed32 - using 64-bit multiply
+    const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
+    const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
+    const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
+    const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
 
-/* globals used when autotest calls debug function without interaction */
-static int autopair_f1 = -1;
-static int autopair_f2 = -1;
-/* flag used to silence pair_plane_before_debug during autotest */
-static int pair_plane_before_debug_quiet = 0;
+    /* Precomputed rotation matrix - 9 coefficients */
+    Fixed32 M00, M01, M02;
+    Fixed32 M10, M11, M12;
+    Fixed32 M20, M21, M22;
 
-/* helper macros for guarded prints */
-#define PDBG(...) if(!pair_plane_before_debug_quiet) printf(__VA_ARGS__)
-#define PKEYP() if(!pair_plane_before_debug_quiet) keypress()
-
-
-/* debug version of pair_plane_before: prompts user, prints diagnostics */
-static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
-    FaceArrays3D* faces = &model->faces;
+    // Use global projection scale, which is synced with auto-fit when applied
+    Fixed32 scale = s_global_proj_scale_fixed;
+    const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
+    const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
+    Fixed32 distance = params->distance;
+    // Apply auto-scale if any
+    //distance = FIXED_MUL_64(distance, INT_TO_FIXED(4));
+    
+    // 100% Fixed32 loop - ZERO conversions, maximum speed!
     VertexArrays3D* vtx = &model->vertices;
+    Fixed32 *x_arr = vtx->x, *y_arr = vtx->y, *z_arr = vtx->z;
+    Fixed32 *xo_arr = vtx->xo, *yo_arr = vtx->yo, *zo_arr = vtx->zo;
+    int *x2d_arr = vtx->x2d, *y2d_arr = vtx->y2d;
+    int vcount = vtx->vertex_count;
 
-    /* if autopair values are set, use them quietly */
-    if (autopair_f1 >= 0 && autopair_f2 >= 0) {
-        f1 = autopair_f1;
-        f2 = autopair_f2;
+    long t_loop_start = GetTick();
+    
+    M20 = FIXED_NEG(cos_h_cos_v);
+    M21 = FIXED_NEG(sin_h_cos_v);
+    M22 = FIXED_NEG(sin_v);
+
+    if (params->angle_w == 0) {
+        M00 = FIXED_NEG(sin_h);
+        M01 = cos_h;
+        M02 = 0;
+        M10 = FIXED_NEG(cos_h_sin_v);
+        M11 = FIXED_NEG(sin_h_sin_v);
+        M12 = cos_v;
+    } else {
+        M00 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(cos_w), sin_h),
+                        FIXED_MUL_64(sin_w, cos_h_sin_v));
+        M01 = FIXED_SUB(FIXED_MUL_64(cos_w, cos_h),
+                        FIXED_MUL_64(sin_w, FIXED_NEG(sin_h_sin_v)));
+        M02 = FIXED_MUL_64(FIXED_NEG(sin_w), cos_v);
+        M10 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(sin_w), sin_h),
+                        FIXED_MUL_64(FIXED_NEG(cos_w), cos_h_sin_v));
+        M11 = FIXED_ADD(FIXED_MUL_64(sin_w, cos_h),
+                        FIXED_MUL_64(FIXED_NEG(cos_w), sin_h_sin_v));
+        M12 = FIXED_MUL_64(cos_w, cos_v);
     }
-    /* if running in silent/autotest mode, just forward to non-debug implementation */
-    if (pair_plane_before_debug_quiet) {
-        return pair_plane_before(model, f1, f2);
-    }
-    else {
-        PDBG("PAIR_DEBUG: enter two face indices f1 f2 (or any numbers): "); fflush(stdout);
-        if (scanf("%d %d", &f1, &f2) != 2) {
-            PDBG("invalid input\n"); PKEYP(); return 0;
+
+
+    for (i = 0; i < vcount; i++) {
+        x = x_arr[i];
+        y = y_arr[i];
+        z = z_arr[i];
+
+        zo = FIXED_ADD(
+                FIXED_ADD(
+                    FIXED_ADD(FIXED_MUL_64(M20, x),
+                            FIXED_MUL_64(M21, y)),
+                    FIXED_MUL_64(M22, z)),
+                distance);
+
+        if (zo > 0) {
+            xo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M00, x),
+                                    FIXED_MUL_64(M01, y)),
+                        FIXED_MUL_64(M02, z));
+            yo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M10, x),
+                                    FIXED_MUL_64(M11, y)),
+                        FIXED_MUL_64(M12, z));
+            zo_arr[i] = zo;
+            xo_arr[i] = xo;
+            yo_arr[i] = yo;
+            inv_zo = FIXED_DIV_64(scale, zo);
+            x2d_arr[i] = FIXED_ROUND_TO_INT(
+                            FIXED_ADD(FIXED_MUL_64(xo, inv_zo), centre_x_f));
+            y2d_arr[i] = FIXED_ROUND_TO_INT(
+                            FIXED_SUB(centre_y_f, FIXED_MUL_64(yo, inv_zo)));
+        } else {
+            zo_arr[i] = zo;
+            xo_arr[i] = 0;
+            yo_arr[i] = 0;
+            x2d_arr[i] = -1;
+            y2d_arr[i] = -1;
         }
-        int c; while ((c = getchar()) != '\n' && c != EOF) ;
-        PDBG("\n PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
     }
 
-    // Use cached plane normals and d terms computed in calculateFaceDepths
-    int n1 = faces->vertex_count[f1];
-    int n2 = faces->vertex_count[f2];
-    int offset1 = faces->vertex_indices_ptr[f1];
-    int offset2 = faces->vertex_indices_ptr[f2];
-    int k;
-    /* convert planes to doubles for debug arithmetic */
-    double a1 = FIXED64_TO_FLOAT(faces->plane_a[f1]);
-    double b1 = FIXED64_TO_FLOAT(faces->plane_b[f1]);
-    double c1 = FIXED64_TO_FLOAT(faces->plane_c[f1]);
-    double d1 = FIXED64_TO_FLOAT(faces->plane_d[f1]);
-    double a2 = FIXED64_TO_FLOAT(faces->plane_a[f2]);
-    double b2 = FIXED64_TO_FLOAT(faces->plane_b[f2]);
-    double c2 = FIXED64_TO_FLOAT(faces->plane_c[f2]);
-    double d2 = FIXED64_TO_FLOAT(faces->plane_d[f2]);
-    double epsilon = 0.01;
+    long t_loop_end = GetTick();
 
-    int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
-    int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
-    int side;           // vertex side.
-    int all_same_side; // flag indicating whether all vertices are on the same side
-    int all_opposite_side; // flag indicating whether all vertices are on the opposite side
-    /* values will be computed as doubles below */
-
-    // ********************* TEST 4 *********************
-
-    // Test 4: Is f2 entirely on the same observer-side of f1's plane?
-    // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
-    //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
-    //   same side as the observer (within epsilon), then f2 is conclusively in front
-    //   of f1 (no swap required). If any vertex is on the opposite side, the test fails
-    //   and we continue to stronger tests.
-
-
-    PDBG("\n**** Test 4 : Testing faces %d and %d\n", f1, f2);
-    PDBG("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", a1, b1, c1, d1);
-    obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
-    if (d1 > epsilon) obs_side1 = 1; 
-    else if (d1 < -epsilon) obs_side1 = -1;
-    else goto skipT4_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
-    all_same_side = 1;
-
-    printf("FOR loop start\n");
-    printf("obs_side1 = %d\n", obs_side1);
-    printf("test_values for face %d must be of the same sign as obs_side1\n", f2);
-
-    for (k=0; k<n2; k++) {
-            int v = faces->vertex_indices_buffer[offset2+k]-1;
-            /* compute using doubles */
-            double vx = FIXED_TO_FLOAT(vtx->xo[v]);
-            double vy = FIXED_TO_FLOAT(vtx->yo[v]);
-            double vz = FIXED_TO_FLOAT(vtx->zo[v]);
-            double acc = a1 * vx + b1 * vy + c1 * vz + d1;
-
-            PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, vx, vy, vz);
-            PDBG("test_value = %f\n", acc);
-
-            if  (acc > epsilon) side = 1;
-            else if (acc < -epsilon) side = -1;
-            else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
-            if (obs_side1 != side) { 
-                // if a vertex is on the other side, break the loop
-                // and set the flag to 0 to indicate the test failed (move to next test)
-                all_same_side = 0; 
-                
-                    printf("Test 4 failed for faces %d and %d\n", f1, f2);
-                    keypress(); 
-                break; 
-                }
+    // Face sorting after transformation
+    long t_start, t_end;
+    t_start = GetTick();
+    calculateFaceDepths(model, NULL, model->faces.face_count);
+    if (shaded_by_orientation) {
+        computeOrientationShading(model);
     }
-
-        PDBG("FOR loop stop\n");
-
-    // test 4 passed
-    if (all_same_side) { 
-        PDBG("Test 4 passed for Faces %d and %d\n", f1, f2);
-        PKEYP();
-        return 1; // faces are ordered correctly, move to next pair
-    }
-
-    skipT4_debug:
-
-    // ********************* TEST 5 ********************
-    // Test 5: Is f1 entirely on the opposite side of f2's plane relative to the observer?
-    // - This is symmetric to Test 4: if every vertex of f1 is strictly on the opposite
-    //   side of f2's plane from the observer, then f1 is behind f2 and no swap is needed.
-    // - Both Test 4 and Test 5 are relatively cheap and frequently decisive on planar geometry.
+    t_end = GetTick();
 
 
-    PDBG("\n\nTest 5 : Testing faces %d and %d\n", f1, f2);
-    PDBG("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", a2, b2, c2, d2 );
+    if (framePolyOnly) goto skip_calc; // Skip face calculations for framed polygons only display
 
-    obs_side2 = 0; // sign of d2: +1, -1 or 0 (inconclusive)
-    if (d2 > epsilon) obs_side2 = 1; 
-    else if (d2 < -epsilon) obs_side2 = -1;
-    else return 0; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
-    all_opposite_side = 1;
+    // CRITICAL: Reset sorted_face_indices before each sort to prevent corruption
+    // for (i = 0; i < model->faces.face_count; i++) {
+    //     model->faces.sorted_face_indices[i] = i;
+    // }
+    // painter_newell_sancha 
+    t_start = GetTick();
+    if (painter_mode == PAINTER_MODE_FAST) {
+        painter_newell_sancha_fast(model, model->faces.face_count);
+    } else if (painter_mode == PAINTER_MODE_FIXED) {
+        painter_newell_sancha(model, model->faces.face_count);
+    } else if (painter_mode == PAINTER_MODE_CORRECT) {
+        /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
+        painter_correct(model, model->faces.face_count, 0);
+    } else if (painter_mode == PAINTER_MODE_GEO) {
+        painter_geoV2(model, model->faces.face_count);
+    } else if (painter_mode == PAINTER_MODE_CORRECTV2) {
+        /* painter_correctV2: experimental face splitting version */
+        painter_correctV2(model, model->faces.face_count, 0);
+    } 
+    t_end = GetTick();
 
-    PDBG("FOR loop start\n");
-    PDBG("obs_side2 = %d\n", obs_side2);
-    PDBG("test_values for face %d must be of the opposite sign as obs_side2\n", f1);
-
-    for (k = 0; k < n1; k++) {
-        int v = faces->vertex_indices_buffer[offset1 + k] - 1;
-        /* compute using doubles */
-        double vx = FIXED_TO_FLOAT(vtx->xo[v]);
-        double vy = FIXED_TO_FLOAT(vtx->yo[v]);
-        double vz = FIXED_TO_FLOAT(vtx->zo[v]);
-        double acc = a2 * vx + b2 * vy + c2 * vz + d2;
-
-        PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, vx, vy, vz);
-        PDBG("test_value = %f\n", acc);
-
-        if (acc > epsilon) side = 1;
-        else if (acc < -epsilon) side = -1;
-        //else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
-        // if (obs_side2 == side) {
-        //     // if a vertex is on the same side, break the loop
-        //     // and set the flag to 0 to indicate the test failed (move to next test)
-        //     all_opposite_side = 0;
-
-        //     printf("Test 5 failed for faces %d and %d\n", f1, f2);
-        //     keypress();
-        //     //break; 
-        //     }
-    }
-    PDBG("FOR loop stop\n");
-
-        // test 5 passed
-        if (all_opposite_side) { // faces are ordered correctly, move to next pair
-            PDBG("Test 5 passed for Faces %d and %d\n", f1, f2);
-            PKEYP();
-            return 1;
-        }
+    skip_calc:;
 }
 
+/**
+ * CALCULATING MINIMUM FACE DEPTHS AND VISIBILITY FLAGS
+ * =====================================================
+ * 
+ * This function calculates for each face:
+ * 1. The minimum depth (z_min) of all its vertices in the observer coordinate system
+ * 2. The display visibility flag based on vertex positions relative to camera
+ * 
+ * The z_min value is used for face sorting during rendering (painter's algorithm).
 
-/* pair_plane_geometric_tests
- * --------------------------------
- * Fixed-point debug wrapper for the normal `pair_plane_before()` ordering test.
- *
+ * We use minimum (closest point) for correct occlusion in the painter's algorithm.
+ * The display_flag is used to cull faces that have vertices behind the camera.
+ * 
+ * PARAMETERS:
+ *   vertices   : Array of vertices with coordinates in observer system
+ *   faces      : Array of faces to process  
+ *   face_count : Number of faces
+ * 
+ * PER-FACE DEPTH, BBOX, & PLANE COMPUTATION (calculateFaceDepths)
+ * ================================================================
  * Purpose:
- * - Provide a diagnostic version of the plane-based face ordering test that can
- *   be used interactively or in quiet/autotest mode.
- * - Print detailed debug output for plane coefficients, vertex-side comparisons,
- *   and test pass/fail decisions.
- * - Help developers understand why two faces are considered ordered or inconclusive.
+ *   Compute per-face metrics required by the painters and diagnostics:
+ *     - z_min, z_max and z_mean (observer-space depths) used for coarse sorting
+ *     - screen-space axis-aligned bounding box (min/max X/Y) used for cheap overlap tests
+ *     - planar coefficients (Newell method) A/B/C/D for robust face-plane tests
+ *     - `display_flag` indicating basic visibility (behind-camera or culled by plane test)
  *
- * Behavior:
- * - If `pair_plane_before_debug_quiet` is set, this function forwards directly to
- *   `pair_plane_before()` and suppresses interactive debugging.
- * - Otherwise it prompts the user for face indices (unless auto-pair values are set),
- *   then evaluates Tests 4 and 5 with verbose output.
- * - It uses cached plane coefficients from `calculateFaceDepths()` and converts them
- *   to doubles only for reporting, while the actual geometric decision logic is still
- *   conceptually the same as the underlying plane tests.
+ * Algorithm summary (per face):
+ *   1) Iterate vertices in observer-space (xo/yo/zo). If any vertex has zo <= 0, mark
+ *      `display_flag = 0` (non-displayable) to avoid projection artefacts.
+ *   2) Accumulate z_min/z_max and compute z_mean (used by initial z-sorting in the painter).
+ *   3) Compute the face's axis-aligned bbox from integer screen coords (x2d/y2d) for quick
+ *      overlap tests (used by Newell/Sancha tests 2 and 3).
+ *   4) Compute planar coefficients (A,B,C,D) using Newell's method; these are used to
+ *      perform finer pairwise tests and the optional **observer-space back-face culling**
+ *      if `cull_back_faces` is enabled (test D <= 0 indicates a back-face relative to observer).
  *
- * Test semantics:
- * - Test 4: Verify whether all vertices of face2 lie on the same observer-side
- *   of face1's plane. If so, face2 is in front of face1 and the ordering is confirmed.
- * - Test 5: Verify whether all vertices of face1 lie on the opposite observer-side
- *   of face2's plane. If so, face1 is behind face2 and the ordering is confirmed.
+ * Implementation notes:
+ *   - Plane coefficients are kept both in Fixed32 (for fixed-mode painter) and cached/converted
+ *     to float buffers for the FLOAT painter mode. Conversion flags track whether a float copy
+ *     is available to avoid repeated conversions.
+ *   - `display_flag == 1` means the face is eligible for drawing; `0` indicates it is either
+ *     behind the camera or culled by the observer-space back-face test when enabled.
+ *   - This function must be called AFTER vertex transforms into observer-space (e.g. by
+ *     `processModelFast()` or `transformToObserver()`), because it reads xo/yo/zo/x2d/y2d arrays.
  *
- * Note:
- * - This function is primarily a debug aid, not a production ordering routine.
- * - It prints per-vertex values and pauses via `PKEYP()` so the developer can inspect
- *   intermediate results.
+ * Performance & debug:
+ *   - The function optionally logs culling counts when not in PERFORMANCE_MODE.
+ *   - The function is intentionally designed to be O(n) over faces and linear in face vertex counts.
  */
-static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
-    FaceArrays3D* faces = &model->faces;
+segment "code14";
+void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
+    int i, j;
+    int culled_count = 0; // diagnostic: number of faces culled by back-face test (observer-space)
     VertexArrays3D* vtx = &model->vertices;
-    int test1state = 0, test2state = 0, test3state = 0, test4state = 0; /* 0=inconclusive, 1=passed, -1=failed */
-    int c;
+    FaceArrays3D* face_arrays = &model->faces;
 
-    if (f1 == -1 && f2 == -1) {
-        printf("PAIR_DEBUG: enter face index f1: "); fflush(stdout);
-        if (scanf("%d", &f1) != 1) {
-            printf("invalid input\n"); keypress(); return 0;
-        }
-        while ((c = getchar()) != '\n' && c != EOF) ;
+    for (i = 0; i < face_count; i++) {
+        Fixed32 z_min = FLOAT_TO_FIXED(9999.0);  // Initialize to very large value (closest)
+        Fixed32 z_max = FLOAT_TO_FIXED(-9999.0); // Initialize to very small value (farthest)
+        int display_flag = 1;
+        Fixed32 sum = 0;
+        int n = face_arrays->vertex_count[i];
+        int minx = 9999, maxx = -9999, miny = 9999, maxy = -9999;
 
-        printf("PAIR_DEBUG: enter face index f2: "); fflush(stdout);
-        if (scanf("%d", &f2) != 1) {
-            printf("invalid input\n"); keypress(); return 0;
-        }
-        while ((c = getchar()) != '\n' && c != EOF) ;
-    }
-    printf("\n=== Geometric test (using plane equations) comparing %d vs %d ===\n", f1, f2);
+        // Access indices from the packed buffer using the offset
+        int offset = face_arrays->vertex_indices_ptr[i];
 
-    // Use cached plane normals and d terms computed in calculateFaceDepths
-    int n1 = faces->vertex_count[f1];
-    int n2 = faces->vertex_count[f2];
-    int offset1 = faces->vertex_indices_ptr[f1];
-    int offset2 = faces->vertex_indices_ptr[f2];
-    int k;
-    Fixed64 a1 = faces->plane_a[f1];
-    Fixed64 b1 = faces->plane_b[f1];
-    Fixed64 c1 = faces->plane_c[f1];
-    Fixed64 d1 = faces->plane_d[f1];
-    Fixed64 a2 = faces->plane_a[f2];
-    Fixed64 b2 = faces->plane_b[f2];
-    Fixed64 c2 = faces->plane_c[f2];
-    Fixed64 d2 = faces->plane_d[f2];
+        // --- Newell accumulators (plane normal via ALL vertices, robust to concave faces) ---
+        Fixed64 a64 = 0, b64 = 0, c64 = 0, d64 = 0;
+        Fixed64 sumx64 = 0, sumy64 = 0, sumz64 = 0;
+        Fixed32 x_prev = 0, y_prev = 0, z_prev = 0;
+        Fixed32 x_first = 0, y_first = 0, z_first = 0;
+        Fixed32 xc = 0, yc = 0, zc = 0;
+        int valid_n = 0;
+        int have_prev = 0;
 
-    /* compute epsilon based on magnitude of the two plane normals
-       instead of scanning every vertex; this keeps value bounded even when
-       observer-space coordinates are large.
-       
-       Formula:
-       - norm1 = length(normal1)
-       - norm2 = length(normal2)
-       - epsf = max(norm1, norm2) * 0.001   (0.1% of the larger normal)
-       - epsf = max(epsf, 0.01)              (minimum tolerance)
-       - epsilon = convert epsf to Fixed32 scale
-    */
-    Fixed32 epsilon;
-    {
-        long t0 = GetTick();
-        double fa1 = FIXED64_TO_FLOAT(a1);
-        double fb1 = FIXED64_TO_FLOAT(b1);
-        double fc1 = FIXED64_TO_FLOAT(c1);
-        double fa2 = FIXED64_TO_FLOAT(a2);
-        double fb2 = FIXED64_TO_FLOAT(b2);
-        double fc2 = FIXED64_TO_FLOAT(c2);
-        double norm1 = sqrt(fa1*fa1 + fb1*fb1 + fc1*fc1);
-        double norm2 = sqrt(fa2*fa2 + fb2*fb2 + fc2*fc2);
-        double base = (norm1 > norm2) ? norm1 : norm2;
-        double epsf = base * 0.001;  /* 0.1% of larger normal length */
-        if (epsf < 0.01) epsf = 0.01;
-        epsilon = FLOAT_TO_FIXED((float)epsf);
-        long t1 = GetTick();
-        PDBG("Epsilon (calculated from plane normals) = %f n1=%f n2=%f ticks=%ld\n",
-               epsf, norm1, norm2, t1 - t0);
-    }
+        for (j = 0; j < n; j++) {
+            int vertex_idx = face_arrays->vertex_indices_buffer[offset + j] - 1;
+            if (vertex_idx >= 0) {
+                Fixed32 zo = vtx->zo[vertex_idx];
+                Fixed32 xo = vtx->xo[vertex_idx];
+                Fixed32 yo = vtx->yo[vertex_idx];
 
-    int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
-    int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
-    int side;           // vertex side.
-    int all_same_side; // flag indicating whether all vertices are on the same side of the observer
-    int all_opposite_side; // flag indicating whether all vertices are on the opposite side of the observer
-    /* test_value replaced by Fixed64 accumulators inside loops to avoid Fixed32 overflow */
+                if (zo < 0) display_flag = 0;
+                if (zo < z_min) z_min = zo;
+                if (zo > z_max) z_max = zo;
+                sum += zo;
 
-    // ********************* TEST 1 *********************
+                int x2d = vtx->x2d[vertex_idx];
+                int y2d = vtx->y2d[vertex_idx];
+                if (x2d < minx) minx = x2d;
+                if (x2d > maxx) maxx = x2d;
+                if (y2d < miny) miny = y2d;
+                if (y2d > maxy) maxy = y2d;
 
-    // Test 1: Is f2 entirely on the same observer-side of f1's plane?
-    // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
-    //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
-    //   same side as the observer (within epsilon), then f2 is conclusively in front
-    //   of f1 (no swap required). If any vertex is on the opposite side, the test fails
-    //   and we continue to stronger tests.
+                // centroid accumulation (Fixed64 to avoid overflow with many vertices)
+                sumx64 += (Fixed64)xo;
+                sumy64 += (Fixed64)yo;
+                sumz64 += (Fixed64)zo;
 
+                if (!have_prev) {
+                    x_first = xo; y_first = yo; z_first = zo;
+                    x_prev  = xo; y_prev  = yo; z_prev  = zo;
+                    have_prev = 1;
+                } else {
+                    Fixed32 dy = FIXED_SUB(y_prev, yo);
+                    Fixed32 dz = FIXED_SUB(z_prev, zo);
+                    Fixed32 dx = FIXED_SUB(x_prev, xo);
+                    Fixed32 sy = y_prev + yo;
+                    Fixed32 sz = z_prev + zo;
+                    Fixed32 sx = x_prev + xo;
 
-    PDBG("\n******** Test #1 : Testing if faces %d is in front of %d ********\n", f2, f1);
-    // PDBG("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", FIXED64_TO_FLOAT(a1), FIXED64_TO_FLOAT(b1), FIXED64_TO_FLOAT(c1), FIXED64_TO_FLOAT(d1));
-    obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
-    if (d1 > (Fixed64)epsilon) obs_side1 = 1; 
-    else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
-    else {
-        test1state = 0;
-        goto skipT1_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
-    }
-    all_same_side = 1;
-    int test1_effective_count = 0;
+                    a64 += (Fixed64)dy * sz;
+                    b64 += (Fixed64)dz * sx;
+                    c64 += (Fixed64)dx * sy;
 
-    printf("Observer side (obs_side1) = %d\n", obs_side1);
-    printf("If face %d entirely on the same observer-side of %d's plane, then\n", f2, f1);
-    printf("test_values for all vertices of face %d have the same sign as obs.side.\n", f2);
-
-    for (k=0; k<n2; k++) {
-            int v = faces->vertex_indices_buffer[offset2+k]-1;
-            /* Accumulate in 64-bit to avoid overflow (each product is >> FIXED_SHIFT to keep Fixed32 scale) */
-            Fixed64 acc = 0;
-            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-            acc += (Fixed64)d1; // d1 already Fixed32 scale
-
-            // PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
-            //        k, v+1,
-            //        FIXED_TO_FLOAT(vtx->xo[v]),
-            //        FIXED_TO_FLOAT(vtx->yo[v]),
-            //        FIXED_TO_FLOAT(vtx->zo[v]));
-
-            /* show raw fixed value, integer part (shifted) and float equivalent */
-            // PDBG("test_value (fixed64 raw) = %lld\n", (long long)acc);
-            // PDBG("test_value (fixed64 >>%d) = %lld\n", FIXED_SHIFT, (long long)(acc >> FIXED_SHIFT));
-
-            PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
-
-            if (acc > (Fixed64)epsilon) side = 1;
-            else if (acc < -(Fixed64)epsilon) side = -1;
-            else 
-            {
-                printf("==> ignored\n");   
-                continue; // ignore vertices that are effectively on the plane
+                    x_prev = xo; y_prev = yo; z_prev = zo;
+                }
+                valid_n++;
             }
+        }
 
-            test1_effective_count++;
-            if (obs_side1 == side) {
-                printf("==> OK\n");
-            }            
-
-            if (obs_side1 != side) {
-                /* if a vertex of f2 is on the opposite side of f1's plane than the observer,
-                 * Test #1 cannot conclude the ordering; continue to later tests. */
-                all_same_side = 0;
-                test1state = -1;
-                printf("==> KO\n");
-                PDBG("Test #1 failed for faces %d and %d\n", f1, f2);
-                PKEYP();
-                break;
+        if (!display_flag || n < 3 || valid_n < 3) {
+            // face is behind camera or degenerate: zero coefficients
+            face_arrays->plane_a[i] = 0;
+            face_arrays->plane_b[i] = 0;
+            face_arrays->plane_c[i] = 0;
+            face_arrays->plane_d[i] = 0;
+            if (shaded_by_orientation) {
+                face_shade_color[i] = COL_FILL_DEFAULT;
             }
-    }
-    // PDBG("FOR loop stop\n");
-    if (test1state != -1) {
-        if (test1_effective_count == 0) {
-            test1state = 0;
-        } else if (all_same_side) {
-            test1state = 1;
         } else {
-            test1state = -1;
-        }
-    }
-    if (test1state == 1) {
-        PDBG("Test #1 passed for Faces %d and %d\n", f1, f2);
-        PKEYP();
-    } else if (test1state == 0) {
-        PDBG("Test #1 inconclusive (all vertices ignored or observer on plane)\n");
-        PKEYP();
-    }
+            // close the Newell cycle: last valid vertex -> first valid vertex
+            Fixed32 dy = FIXED_SUB(y_prev, y_first);
+            Fixed32 dz = FIXED_SUB(z_prev, z_first);
+            Fixed32 dx = FIXED_SUB(x_prev, x_first);
+            Fixed32 sy = y_prev + y_first;
+            Fixed32 sz = z_prev + z_first;
+            Fixed32 sx = x_prev + x_first;
 
-    skipT1_debug:
+            a64 += (Fixed64)dy * sz;
+            b64 += (Fixed64)dz * sx;
+            c64 += (Fixed64)dx * sy;
 
-    // ********************* TEST #2 ********************
-    // Test #2: Is f1 entirely on the opposite side of f2's plane relative to the observer?
-    // - This is symmetric to Test #1: if every vertex of f1 is strictly on the opposite
-    //   side of f2's plane from the observer, then f1 is behind f2 and the ordering is confirmed.
-    // - This test is performed only if the observer is clearly on one side of f2's plane.
+            a64 >>= FIXED_SHIFT;
+            b64 >>= FIXED_SHIFT;
+            c64 >>= FIXED_SHIFT;
 
-    PDBG("\n******** Test #2 : Testing if faces %d is behind %d ********\n", f1, f2);
-    //PDBG("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", FIXED64_TO_FLOAT(a2), FIXED64_TO_FLOAT(b2), FIXED64_TO_FLOAT(c2), FIXED64_TO_FLOAT(d2));
+            xc = (Fixed32)(sumx64 / valid_n);
+            yc = (Fixed32)(sumy64 / valid_n);
+            zc = (Fixed32)(sumz64 / valid_n);
 
-    obs_side2 = 0;
-    if (d2 > (Fixed64)epsilon) obs_side2 = 1;
-    else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
-    if (obs_side2 == 0) {
-        test2state = 0;
-        goto skipT2_debug;
-    }
-    all_opposite_side = 1;
-    int test2_effective_count = 0;
+            d64 = -(((Fixed64)a64 * xc) + ((Fixed64)b64 * yc) + ((Fixed64)c64 * zc));
+            d64 >>= FIXED_SHIFT;
 
-    printf("Observer side = %d\n", obs_side2);
-    PDBG("If face %d is entirely on the opposite side of %d's plane, then\n", f1, f2);
-    PDBG("test_values for all vertices of face %d have opposite sign to obs. side.\n", f1);
+            face_arrays->plane_a[i] = a64;
+            face_arrays->plane_b[i] = b64;
+            face_arrays->plane_c[i] = c64;
+            face_arrays->plane_d[i] = d64;
 
-    for (k = 0; k < n1; k++) {
-        int v = faces->vertex_indices_buffer[offset1+k] - 1;
-        Fixed64 acc = 0;
-        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-        acc += (Fixed64)d2;
-
-        // PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
-        //      k, v+1,
-        //      FIXED_TO_FLOAT(vtx->xo[v]),
-        //      FIXED_TO_FLOAT(vtx->yo[v]),
-        //      FIXED_TO_FLOAT(vtx->zo[v]));
-
-        PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
-        // PDBG("test_value (float equiv)        = %f\n", FIXED64_TO_FLOAT(acc));
-
-        if (acc > (Fixed64)epsilon) side = 1;
-        else if (acc < -(Fixed64)epsilon) side = -1;
-        else 
-        {
-            printf("==> ignored\n");   
-            continue; // ignore vertices that are effectively on the plane
+            // Optional back-face culling in observer-space: if the plane D term is <= 0,
+            // the plane faces away from the observer (origin), so cull the face when enabled.
+            if (cull_back_faces && display_flag) {
+                if (d64 <= 0) {
+                    display_flag = 0;
+                    ++culled_count;
+                }
+            }
         }
 
-        test2_effective_count++;
-        if (obs_side2 != side) {
-            printf("==> OK\n");
-        }
-         else {
-            printf("==> KO\n");
-            all_opposite_side = 0;
-            test2state = -1;
-            PDBG("Test #2 failed for faces %d and %d\n", f1, f2);
-            PKEYP();
-            break;
-        }
-    }
-    // PDBG("FOR loop stop\n");
-
-    if (test2state != -1) {
-        if (test2_effective_count == 0) {
-            test2state = 0;
-        } else if (all_opposite_side) {
-            test2state = 1;
+        face_arrays->z_min[i] = z_min;  // Store minimum depth for this face (closest)
+        face_arrays->z_max[i] = z_max;  // Store maximum depth for this face (farthest)
+        face_arrays->display_flag[i] = display_flag;
+        if (n > 0) {
+            if (n == 4)      face_arrays->z_mean[i] = sum >> 2;
+            else if (n == 3) face_arrays->z_mean[i] = sum / 3;
+            else             face_arrays->z_mean[i] = sum / n;
+            face_arrays->minx[i] = minx;
+            face_arrays->maxx[i] = maxx;
+            face_arrays->miny[i] = miny;
+            face_arrays->maxy[i] = maxy;
         } else {
-            test2state = -1;
+            face_arrays->z_mean[i] = 0;
+            face_arrays->z_min[i] = 0;
+            face_arrays->z_max[i] = 0;
+            face_arrays->minx[i] = 0;
+            face_arrays->maxx[i] = 0;
+            face_arrays->miny[i] = 0;
+            face_arrays->maxy[i] = 0;
         }
     }
-    if (test2state == 1) {
-        PDBG("Test #2 passed for Faces %d and %d\n", f1, f2);
-        PKEYP();
-    } else if (test2state == 0) {
-        PDBG("Test #2 inconclusive (all vertices ignored or observer on plane)\n");
-        PKEYP();
-    }
-    skipT2_debug:
-
-    // ********************* TEST #3 ********************
-    // Test #3: Copy of Test #1 with faces swapped (check if f1 is in front of f2).
-    PDBG("\n******** Test #3 : Testing if faces %d is in front of %d ********\n", f1, f2);
-    obs_side1 = 0;
-    if (d2 > (Fixed64)epsilon) obs_side1 = 1;
-    else if (d2 < -(Fixed64)epsilon) obs_side1 = -1;
-    else {
-        test3state = 0;
-        goto skipT3_debug;
-    }
-    all_same_side = 1;
-    int test3_effective_count = 0;
-
-    printf("Observer side (obs_side1) = %d\n", obs_side1);
-    printf("If face %d entirely on the same observer-side of %d's plane, then\n", f1, f2);
-    printf("test_values for all vertices of face %d have the same sign as obs.side.\n", f1);
-
-    for (k = 0; k < n1; k++) {
-        int v = faces->vertex_indices_buffer[offset1+k] - 1;
-        Fixed64 acc = 0;
-        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-        acc += (Fixed64)d2;
-
-        PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
-        if (acc > (Fixed64)epsilon) side = 1;
-        else if (acc < -(Fixed64)epsilon) side = -1;
-        else {
-            printf("==> ignored\n");
-            continue;
-        }
-
-        test3_effective_count++;
-        if (obs_side1 == side) {
-            printf("==> OK\n");
-        }
-
-        if (obs_side1 != side) {
-            printf("==> KO\n");
-            all_same_side = 0;
-            test3state = -1;
-            PDBG("Test #3 failed for faces %d and %d\n", f1, f2);
-            PKEYP();
-            break;
-        }
-    }
-
-    if (test3state != -1) {
-        if (test3_effective_count == 0) {
-            test3state = 0;
-        } else if (all_same_side) {
-            test3state = 1;
-        } else {
-            test3state = -1;
-        }
-    }
-    if (test3state == 1) {
-        PDBG("Test #3 passed for Faces %d and %d\n", f1, f2);
-        PKEYP();
-    } else if (test3state == 0) {
-        PDBG("Test #3 inconclusive (all vertices ignored or observer on plane)\n");
-        PKEYP();
-    }
-
-    skipT3_debug:
-
-    // ********************* TEST #4 ********************
-    // Test #4: Copy of Test #2 with faces swapped (check if f2 is behind f1).
-    PDBG("\n******** Test #4 : Testing if faces %d is behind %d ********\n", f2, f1);
-    obs_side2 = 0;
-    if (d1 > (Fixed64)epsilon) obs_side2 = 1;
-    else if (d1 < -(Fixed64)epsilon) obs_side2 = -1;
-    if (obs_side2 == 0) {
-        test4state = 0;
-        goto skipT4_debug;
-    }
-    all_opposite_side = 1;
-    int test4_effective_count = 0;
-
-    printf("Observer side = %d\n", obs_side2);
-    PDBG("If face %d is entirely on the opposite side of %d's plane,\n", f2, f1);
-    PDBG("==> test_values for all vertices of face %d have opposite sign to obs. side.\n", f2);
-
-    for (k = 0; k < n2; k++) {
-        int v = faces->vertex_indices_buffer[offset2+k] - 1;
-        Fixed64 acc = 0;
-        acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-        acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-        acc += (Fixed64)d1;
-
-        PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
-        if (acc > (Fixed64)epsilon) side = 1;
-        else if (acc < -(Fixed64)epsilon) side = -1;
-        else {
-            printf("==> ignored\n");
-            continue;
-        }
-
-        test4_effective_count++;
-        if (obs_side2 != side) {
-            printf("==> OK\n");
-        } else {
-            printf("==> KO\n");
-            all_opposite_side = 0;
-            test4state = -1;
-            PDBG("Test #4 failed for faces %d and %d\n", f2, f1);
-            PKEYP();
-            break;
-        }
-    }
-
-    if (test4state != -1) {
-        if (test4_effective_count == 0) {
-            test4state = 0;
-        } else if (all_opposite_side) {
-            test4state = 1;
-        } else {
-            test4state = -1;
-        }
-    }
-    if (test4state == 1) {
-        PDBG("Test #4 passed for Faces %d and %d\n", f2, f1);
-        PKEYP();
-    } else if (test4state == 0) {
-        PDBG("Test #4 inconclusive (all vertices ignored or observer on plane)\n");
-        PKEYP();
-    }
-
-    skipT4_debug:
-
-
-    printf("\n**** SUMMARY for faces %d and %d: ****\n", f1, f2);
-    if (test1state == 1) printf("Test #1: face %d in front of %d => OK\n", f2, f1);
-    else if (test1state == -1) printf("Test #1: failed\n");
-    else printf("Test #1: inconclusive\n");
-    if (test2state == 1) printf("Test #2: face %d behind %d => OK\n", f1, f2);
-    else if (test2state == -1) printf("Test #2: failed\n");
-    else printf("Test #2: inconclusive\n");
-    if (test3state == 1) printf("Test #3: face %d in front of %d => OK\n", f1, f2);
-    else if (test3state == -1) printf("Test #3: failed\n");
-    else printf("Test #3: inconclusive\n");
-    if (test4state == 1) printf("Test #4: face %d behind %d => OK\n", f2, f1);
-    else if (test4state == -1) printf("Test #4: failed\n");
-    else printf("Test #4: inconclusive\n");
-    keypress();
-    if (test1state == 1 || test2state == 1) return 1; else return 0;
 }
 
-static int pair_plane_before(Model3D* model, int f1, int f2) {
-    FaceArrays3D* faces = &model->faces;
+segment "code19";
+// Simple helper: compute 2D projected coordinates from observer-space coords and a projection scale
+// Minimal version taking only Model3D* and angle_w (unused here)
+// - model: model containing vertices and x2d/y2d output arrays
+// - angle_w: ignored because observer-space rotation is already applied in processModelFast()
+// This function projects xo/yo/zo to screen coordinates and keeps face bboxes in sync.
+void compute2DFromObserver(Model3D* model, int angle_w) {
+    (void)angle_w; // angle_w is ignored here; projection uses already-rotated observer coords
     VertexArrays3D* vtx = &model->vertices;
-    
-    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
-    int k;
-    int n1 = faces->vertex_count[f1];
-    int n2 = faces->vertex_count[f2];
-    int offset1 = faces->vertex_indices_ptr[f1];
-    int offset2 = faces->vertex_indices_ptr[f2];
-    Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
+    int vcount = vtx->vertex_count;
+    Fixed32* xo = vtx->xo; Fixed32* yo = vtx->yo; Fixed32* zo = vtx->zo;
+    int* x2d_out = vtx->x2d; int* y2d_out = vtx->y2d;
+    Fixed32 scale = s_global_proj_scale_fixed;
+    // Update model's stored projection scale to reflect the scale used
+    model->auto_proj_scale = scale;
 
-    /* Test4: Check if all vertices of f2 are on the same side of f1's plane as the observer.
-     * If observer is in front of f1 and all f2 vertices are also in front,
-     * then f2 occludes f1 -> f1 is before (should be drawn first). */
-    int obs_side1 = 0; int side; int all_same_side;
-    obs_side1 = 0; 
-    if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
-    if (obs_side1 != 0) {
-        all_same_side = 1;
-        for (k = 0; k < n2; ++k) {
-            int v = faces->vertex_indices_buffer[offset2+k]-1;
-            Fixed64 acc = 0;
-            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-            acc += (Fixed64)d1;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-            if (obs_side1 != side) { all_same_side = 0; break; }
-        }
-        if (all_same_side) return 1;
-    }
-    /* Test5 fallback: Check if all vertices of f1 are on opposite side of f2's plane from observer.
-     * If observer is in front of f2 and all f1 vertices are behind f2's plane, then f1 is before f2. */
-    Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
-    int obs_side2 = 0; int all_opposite_side = 0;
-    obs_side2 = 0; 
-    if (d2 > (Fixed64)epsilon) obs_side2 = 1; else if (d2 < -(Fixed64)epsilon) obs_side2 = -1; else obs_side2 = 0;
-    if (obs_side2 != 0) {
-        all_opposite_side = 1;
-        for (k = 0; k < n1; ++k) {
-            int v = faces->vertex_indices_buffer[offset1+k]-1;
-            Fixed64 acc = 0;
-            acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
-            acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
-            acc += (Fixed64)d2;
-            if (acc > (Fixed64)epsilon) side = 1; else if (acc < -(Fixed64)epsilon) side = -1; else continue;
-            if (obs_side2 == side) { all_opposite_side = 0; break; }
-        }
-        if (all_opposite_side) return 1;
-    }
-    return 0;
-}
-
-// ===================== RAY CAST & INSPECTOR PROTOTYPES =====================
-int ray_cast(Model3D* model, int f1, int f2);
-// int check_sort(Model3D* model, int face_count);
-int check_sort_repair(Model3D* model, int face_count);
-// Prototypes only at the top
-// ===================== RAY CAST & INSPECTOR IMPLEMENTATION =====================
-// Returns: 0 if error or undetermined, 1 if t1 < t2, -1 if t1 > t2,
-
-// ===================== RAY CAST & INSPECTOR IMPLEMENTATION =====================
-// Returns: 
-// 0 if error or undetermined
-// 1 if t1 farer than t2
-// -1 if t1 closer than t2
-
-/* Ray cast at centroid of bbox intersection (default) */
-int ray_cast(Model3D* model, int f1, int f2) {
-    if (!model) return 0;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
-    // Internal calculations moved here, no more pointers needed
-    int minx1 = faces->minx[f1];
-    int maxx1 = faces->maxx[f1];
-    int miny1 = faces->miny[f1];
-    int maxy1 = faces->maxy[f1];
-    int minx2 = faces->minx[f2];
-    int maxx2 = faces->maxx[f2];
-    int miny2 = faces->miny[f2];
-    int maxy2 = faces->maxy[f2];
-    int ix0 = (minx1 > minx2) ? minx1 : minx2;
-    int ix1 = (maxx1 < maxx2) ? maxx1 : maxx2;
-    int iy0 = (miny1 > miny2) ? miny1 : miny2;
-    int iy1 = (maxy1 < maxy2) ? maxy1 : maxy2;
-    if (ix0 > ix1 || iy0 > iy1) return 0; // no intersection
-    int cx = (ix0 + ix1) / 2;
-    int cy = (iy0 + iy1) / 2;
-
-
-    /* Simplified: don't attempt centroid-based decision. Use bbox center directly. */
-    return ray_cast_at(model, f1, f2, cx, cy);
-}
-
-/* Compute ray cast distances (tf) for faces f1 and f2 at screen coordinate (cx,cy).
- * Returns 1 and fills *out_tf1/*out_tf2 on success, 0 if denom near zero (coplanar/parallel) or invalid.
- */
-static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2) {
-    if (!model || !out_tf1 || !out_tf2) return 0;
-    FaceArrays3D* faces = &model->faces;
-    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
-    float proj_scale = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
-    float Dx = ((float)cx - (float)CENTRE_X) / proj_scale;
-    float Dy = ((float)CENTRE_Y - (float)cy) / proj_scale;
-    float Dz = 1.0f;
-    float A1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
-    float B1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
-    float C1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
-    float D1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
-    float A2 = (float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
-    float B2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
-    float C2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
-    float D2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
-    float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;
-    float denom2 = A2 * Dx + B2 * Dy + C2 * Dz;
-    if (fabsf(denom1) < 1e-6f || fabsf(denom2) < 1e-6f) return 0; /* coplanar or parallel */
-    *out_tf1 = -D1 / denom1;
-    *out_tf2 = -D2 / denom2;
-    return 1;
-}
-
-/* Ray cast at explicit screen coordinate (cx,cy) in projected 2D coords */
-static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
-    float tf1 = 0.0f, tf2 = 0.0f;
-    if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) return 0;
-    if (tf1 > tf2) return 1;  /* f1 is farther than f2 */
-    else if (tf1 < tf2) return -1; /* f1 is closer than f2 */
-    else return 0;
-}
-
-/* Hierarchical ray-cast: prefer QD centroid, then SH centroid, then bbox center */
-static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
-    if (!model) return 0;
-    int cx = 0, cy = 0; long long area2 = 0; int rc = 0; int fallback = 0;
-
-    /* 1) Prefer QuickDraw region centroid (most representative for complex overlaps) */
-    if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &cx, &cy, &area2) && area2 != 0) {
-        rc = ray_cast_at(model, f1, f2, cx, cy);
-        if (rc != 0) return rc;
+    const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
+    const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
+    for (int i = 0; i < vcount; ++i) {
+        Fixed32 xo_i = xo[i];
+        Fixed32 yo_i = yo[i];
+        Fixed32 zo_i = zo[i];
+        Fixed32 inv_zo = FIXED_DIV_64(scale, zo_i);
+        Fixed32 x2d_temp = FIXED_ADD(FIXED_MUL_64(xo_i, inv_zo), centre_x_f);
+        Fixed32 y2d_temp = FIXED_SUB(centre_y_f, FIXED_MUL_64(yo_i, inv_zo));
+        x2d_out[i] = FIXED_ROUND_TO_INT(x2d_temp);
+        y2d_out[i] = FIXED_ROUND_TO_INT(y2d_temp);
     }
 
-    /* 2) Try Sutherland–Hodgman centroid */
-    area2 = 0; fallback = 0;
-    if (compute_intersection_centroid_ordered_fixed_tryboth(model, f1, f2, &cx, &cy, &area2, &fallback) && area2 != 0) {
-        rc = ray_cast_at(model, f1, f2, cx, cy);
-        if (rc != 0) return rc;
-    }
-
-    /* 3) Fallback to bbox center */
-    if (compute_bbox_intersection_center(model, f1, f2, &cx, &cy)) {
-        return ray_cast_at(model, f1, f2, cx, cy);
-    }
-
-    return 0;
+    /* Keep per-face 2D bounding boxes in sync with the newly computed x2d/y2d.
+     * This avoids stale bbox-based quick-rejects after interactive zoom/pan. */
+    updateFace2DBounds(model);
 }
 
-/* Compute center of intersection of two faces' projected axis-aligned bboxes.
- * Returns 1 and writes (*outx,*outy) on success, 0 if no intersection or invalid ids.
- */
-static int compute_bbox_intersection_center(Model3D* model, int f1, int f2, int *outx, int *outy) {
-    if (!model || !outx || !outy) return 0;
-    int ix0, iy0, ix1, iy1;
-    if (!compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1)) return 0;
-    *outx = (ix0 + ix1) / 2;
-    *outy = (iy0 + iy1) / 2;
-    return 1;
-}
-
-/* Compute axis-aligned integer intersection bbox of projected face bboxes.
- * Returns 1 and fills (*ix0,*iy0,*ix1,*iy1) on success, 0 if no intersection.
- */
-static int compute_bbox_intersection(Model3D* model, int f1, int f2, int *ix0, int *iy0, int *ix1, int *iy1) {
-    if (!model || !ix0 || !iy0 || !ix1 || !iy1) return 0;
-    FaceArrays3D* faces = &model->faces;
-    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
-    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
-    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-    int a0 = (minx1 > minx2) ? minx1 : minx2;
-    int a1 = (maxx1 < maxx2) ? maxx1 : maxx2;
-    int b0 = (miny1 > miny2) ? miny1 : miny2;
-    int b1 = (maxy1 < maxy2) ? maxy1 : maxy2;
-    if (a0 > a1 || b0 > b1) return 0;
-    *ix0 = a0; *iy0 = b0; *ix1 = a1; *iy1 = b1;
-    return 1;
-}
-
-/* Integer point-in-polygon test using ray-crossing on integer vertex arrays.
- * Returns 1 if point (px,py) is inside or on edge, 0 otherwise.
- */
-static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const int vy[]) {
-    if (n < 3) return 0;
-    int inside = 0;
-    for (int i = 0, j = n - 1; i < n; j = i++) {
-        int xi = vx[i], yi = vy[i];
-        int xj = vx[j], yj = vy[j];
-        /* Check if point is exactly on a vertex */
-        if (px == xi && py == yi) return 1;
-        /* Ray crossing: test if edge (j->i) crosses horizontal line at py */
-        int yi_gt_py = (yi > py);
-        int yj_gt_py = (yj > py);
-        if (yi_gt_py != yj_gt_py) {
-            /* Compute intersection X coordinate in integer-safe way: xi + (py - yi) * (xj - xi) / (yj - yi) */
-            long long dx = (long long)(xj - xi);
-            long long dy = (long long)(yj - yi);
-            long long lhs = (long long)(px - xi) * dy;
-            long long rhs = (long long)(py - yi) * dx;
-            if ((dy > 0 && lhs < rhs) || (dy < 0 && lhs > rhs)) inside = !inside;
-        }
-    }
-    return inside;
-}
-
-/* Helper: show model wireframe, highlight two faces and display a message (MoveTo + printf).
- * - Renders the model in wireframe, highlights `f1`/`f2`, performs MoveTo(3,198) then prints `msg`,
- *   waits for a key, and restores rendering state. Kept minimal and non-invasive.
- */
-static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const char* msg, int screenx, int screeny) {
+// Helper: recompute per-face 2D bounding boxes from the current `x2d/y2d` arrays
+// This is much cheaper than `calculateFaceDepths()` and is sufficient when only
+// the screen projection (scale/rotation/pan) changes.
+static void updateFace2DBounds(Model3D* model) {
     if (!model) return;
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
-    if (backup_flags == NULL) { printf("Memory allocation failed\n"); return; }
-    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
-    int old_frame = framePolyOnly;
+    int face_count = faces->face_count;
+
+    for (int fi = 0; fi < face_count; ++fi) {
+        int n = faces->vertex_count[fi];
+        if (n <= 0) {
+            faces->minx[fi] = faces->miny[fi] = 0;
+            faces->maxx[fi] = faces->maxy[fi] = 0;
+            continue;
+        }
+        int off = faces->vertex_indices_ptr[fi];
+        int minx = 9999, maxx = -9999, miny = 9999, maxy = -9999;
+        for (int k = 0; k < n; ++k) {
+            int vid = faces->vertex_indices_buffer[off + k] - 1;
+            if (vid < 0 || vid >= vtx->vertex_count) continue;
+            int x = vtx->x2d[vid];
+            int y = vtx->y2d[vid];
+            if (x < minx) minx = x;
+            if (x > maxx) maxx = x;
+            if (y < miny) miny = y;
+            if (y > maxy) maxy = y;
+        }
+        if (maxx == -9999) { minx = maxx = miny = maxy = 0; }
+        faces->minx[fi] = minx;
+        faces->maxx[fi] = maxx;
+        faces->miny[fi] = miny;
+        faces->maxy[fi] = maxy;
+    }
+}
+
+// Normalize auto-fit parameters so that observer distance becomes 150
+// by scaling model vertices and projection scale accordingly.
+//
+// For a model where auto-fit produced:
+//   D = auto_suggested_distance
+//   P = auto_suggested_proj_scale
+// the normalization applies:
+//   factor = D / 150
+//   new D = D * factor
+//   new P = P * factor
+//   vertices *= factor
+//
+// This keeps the apparent size on-screen constant while forcing the
+// observer distance to be 150.
+void normalizeAutoFitDistanceTo150(Model3D* model) {
+    if (model == NULL) return;
+    Fixed32 D = model->auto_suggested_distance;
+    Fixed32 P = model->auto_suggested_proj_scale;
+    if (D <= 0 || P <= 0) return;
+
+    const Fixed32 targetD = INT_TO_FIXED(150);
+    // Apply the pure “distance forced to 150 with unchanged on-screen size” formula:
+    //   factor = sqrt(150 / D)
+    // Here sqrt is required because screen projection is proportional to (P * M) / D,
+    // so scaling both M and P by k changes screen size by k^2.
+    float factor_f = sqrtf(FIXED_TO_FLOAT(targetD) / FIXED_TO_FLOAT(D));
+    if (factor_f <= 0.0f) return;
+    Fixed32 factor = FLOAT_TO_FIXED(factor_f);
+
+    // Scale model vertices
+    VertexArrays3D* vtx = &model->vertices;
+    for (int i = 0; i < vtx->vertex_count; ++i) {
+        vtx->x[i] = FIXED_MUL_64(vtx->x[i], factor);
+        vtx->y[i] = FIXED_MUL_64(vtx->y[i], factor);
+        vtx->z[i] = FIXED_MUL_64(vtx->z[i], factor);
+    }
+
+    // Update metadata to match the applied scaling
+    model->auto_suggested_distance = targetD;
+    model->auto_suggested_proj_scale = FIXED_MUL_64(P, factor);
+    model->auto_proj_scale = model->auto_suggested_proj_scale;
+    s_global_proj_scale_fixed = model->auto_proj_scale;
+    // Keep epsilon scaling (used in geometry tests) consistent with the forced distance.
+    current_observer_distance = targetD;
+
+    printf("Auto-fit normalized: D=%.4f P=%.2f factor=%.4f\n",
+        FIXED_TO_FLOAT(model->auto_suggested_distance),
+        FIXED_TO_FLOAT(model->auto_suggested_proj_scale),
+        FIXED_TO_FLOAT(factor));
+}
+
+
+// ============================================================================
+//  4. RENDERING (QuickDraw + Scanline Z-Buffer)
+// ============================================================================
+
+segment "code17";
+// Function to draw polygons with QuickDraw
+void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_count_total) {
+    int i, j;
+    VertexArrays3D* vtx = &model->vertices;
+    FaceArrays3D* faces = &model->faces;
+    Handle polyHandle;
+    DynamicPolygon *poly;
+    int min_x, max_x, min_y, max_y;
+    int valid_faces_drawn = 0;
+    int invalid_faces_skipped = 0;
+    int triangle_count = 0;
+    int quad_count = 0;
+    Pattern pat;
+    
+    // Precompute screen scale and screen bounds for culling
+    int screenScale = mode / 320;
+    int screenW = screenScale * (CENTRE_X * 2);
+    int screenH = screenScale * (CENTRE_Y * 2);
+
+    // Use global persistent handle to avoid repeated NewHandle/DisposeHandle
+    // Each call allocates fresh if needed, but reuses same handle block
+    if (globalPolyHandle == NULL) {
+        int max_polySize = 2 + 8 + (MAX_FACE_VERTICES * 4);  // Max for MAX_FACE_VERTICES vertices
+        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
+        if (globalPolyHandle == NULL) {
+            printf("Error: Unable to allocate global polygon handle\n");
+            return;
+        }
+    }
+    
+    polyHandle = globalPolyHandle;
+    
+    // Make sure handle is unlocked before locking
+    if (poly_handle_locked) { 
+        HUnlock(polyHandle); 
+        poly_handle_locked = 0; 
+    }
+    HLock(polyHandle); 
+    poly_handle_locked = 1;
+
+    SetPenMode(0);
+    // printf("\nDrawing polygons on screen:\n");
+    // printf("\nDrawing polygons on screen:\n");
+
+    // Set fill pen once per frame (reduces state changes)
+    SetSolidPenPat(COL_FILL_DEFAULT);
+
+    // Use sorted_face_indices to draw in correct depth order
+    // Draw ALL faces - painter's algorithm handles occlusion
+    int start_face = 0;
+    int max_faces_to_draw = face_count;
+    for (i = start_face; i < start_face + max_faces_to_draw; i++) {
+        int face_id = faces->sorted_face_indices[i];
+        if (faces->display_flag[face_id] == 0) continue;
+        if (faces->vertex_count[face_id] >= 3) {
+            int offset = faces->vertex_indices_ptr[face_id];
+            int vcount_face = faces->vertex_count[face_id];
+            int *indices_base = &faces->vertex_indices_buffer[offset];
+
+            // Quick validity pass: ensure all indices are valid to avoid undefined points
+            int all_valid = 1;
+            for (j = 0; j < vcount_face; ++j) {
+                int vi = indices_base[j] - 1;
+                if (vi < 0 || vi >= vtx->vertex_count) { all_valid = 0; break; }
+            }
+            if (!all_valid) { invalid_faces_skipped++; continue; }
+
+            // Calculate polySize for this specific face
+            int polySize = 2 + 8 + (vcount_face * 4);
+            poly = (DynamicPolygon *)*polyHandle;
+            poly->polySize = polySize;
+
+            // Cache arrays
+            int *x2d = vtx->x2d;
+            int *y2d = vtx->y2d;
+
+            // Initialize min/max with the first vertex to avoid sentinel checks
+            int first_vi = indices_base[0] - 1;
+            int x = x2d[first_vi];
+            int y = y2d[first_vi];
+            poly->polyPoints[0].h = screenScale * (x + pan_dx);
+            poly->polyPoints[0].v = y + pan_dy;
+            min_x = max_x = x;
+            min_y = max_y = y;
+
+            // Fill remaining points using cached data
+            for (j = 1; j < vcount_face; ++j) {
+                int vi = indices_base[j] - 1;
+                x = x2d[vi];
+                y = y2d[vi];
+                poly->polyPoints[j].h = screenScale * (x + pan_dx);
+                poly->polyPoints[j].v = y + pan_dy;
+                if (x < min_x) min_x = x;
+                if (x > max_x) max_x = x;
+                if (y < min_y) min_y = y;
+                if (y > max_y) max_y = y;
+            }
+
+            poly->polyBBox.h1 = min_x + pan_dx;
+            poly->polyBBox.v1 = min_y + pan_dy;
+            poly->polyBBox.h2 = max_x + pan_dx;
+            poly->polyBBox.v2 = max_y + pan_dy;
+
+            // Bounding-box culling (convert to screen pixels, apply pan)
+            int sc_min_x = screenScale * (min_x + pan_dx);
+            int sc_max_x = screenScale * (max_x + pan_dx);
+            int sc_min_y = (min_y + pan_dy);
+            int sc_max_y = (max_y + pan_dy);
+            if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) {
+                // Off-screen; skip drawing
+            } else {
+                if (framePolyOnly) {
+                    // Frame-only rendering (no fill)
+                    int frame_color;
+                    if (user_frame_color == 17) {
+                        // Same as fill color
+                        if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
+                            frame_color = random_fill_colors[face_id];
+                        } else if (user_fill_color >= 0) {
+                            frame_color = user_fill_color;
+                        } else {
+                            frame_color = COL_FILL_DEFAULT; // default fill color
+                        }
+                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
+                        frame_color = random_frame_colors[face_id];
+                    } else if (user_frame_color >= 0) {
+                        frame_color = user_frame_color;
+                    } else {
+                        frame_color = 7;
+                    }
+                    SetSolidPenPat(frame_color);
+                    FramePoly(polyHandle);
+                    SetSolidPenPat(COL_FILL_DEFAULT); // keep fill pen as default for next faces
+                } else {
+                    // Fill color
+                    int fill_color;
+                    if (shaded_by_orientation) {
+                        fill_color = face_shade_color[face_id];
+                    } else if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
+                        fill_color = random_fill_colors[face_id];
+                    } else if (user_fill_color >= 0) {
+                        fill_color = user_fill_color;
+                    } else {
+                        fill_color = COL_FILL_DEFAULT;
+                    }
+                    SetSolidPenPat(fill_color);
+                    GetPenPat(pat);
+                    FillPoly(polyHandle, pat);
+                    
+                    // Frame color
+                    int frame_color;
+                    if (user_frame_color == 17) {
+                        // Same as fill color
+                        frame_color = fill_color;
+                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
+                        frame_color = random_frame_colors[face_id];
+                    } else if (user_frame_color >= 0) {
+                        frame_color = user_frame_color;
+                    } else {
+                        frame_color = COL_FRAME;
+                    }
+                    SetSolidPenPat(frame_color);
+                    FramePoly(polyHandle);
+                    SetSolidPenPat(COL_FILL_DEFAULT); // restore fill pen
+                }
+                valid_faces_drawn++;
+                if (vcount_face == 3) triangle_count++;
+                else if (vcount_face == 4) quad_count++;
+            }
+        } else {
+            invalid_faces_skipped++;
+        }
+    }
+}
+
+// drawPolygons_jitter: same behavior as drawPolygons but applies a small random
+// pixel offset (0..jitter_max) to each vertex 2D coordinate prior to drawing.
+// This function mirrors `drawPolygons()` but applies per-vertex jitter at render time.
+void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total) {
+    if (!model) return;
+    VertexArrays3D* vtx = &model->vertices;
+
+    int vcount = vertex_count_total;
+    if (vcount <= 0) { drawPolygons(model, vertex_count, face_count, vertex_count_total); return; }
+
+    // Backup original coordinates
+    int *saved_x = (int*)malloc(vcount * sizeof(int));
+    int *saved_y = (int*)malloc(vcount * sizeof(int));
+    if (!saved_x || !saved_y) {
+        if (saved_x) free(saved_x);
+        if (saved_y) free(saved_y);
+        // Fallback to normal draw
+        drawPolygons(model, vertex_count, face_count, vertex_count_total);
+        return;
+    }
+
+    for (int i = 0; i < vcount; ++i) {
+        saved_x[i] = vtx->x2d[i];
+        saved_y[i] = vtx->y2d[i];
+        int dx = rand() % (jitter_max + 1); // 0..jitter_max
+        int dy = rand() % (jitter_max + 1);
+        vtx->x2d[i] = saved_x[i] + dx;
+        vtx->y2d[i] = saved_y[i] + dy;
+    }
+
+    // Draw using modified coordinates
+    drawPolygons(model, vertex_count, face_count, vertex_count_total);
+
+    // Restore original coordinates
+    for (int i = 0; i < vcount; ++i) {
+        vtx->x2d[i] = saved_x[i];
+        vtx->y2d[i] = saved_y[i];
+    }
+
+    free(saved_x);
+    free(saved_y);
+}// Diagnostic: Frame in white all polygons listed in `inconclusive_pairs`.
+
+// Draw a single face (by face index) using the same QuickDraw path as drawPolygons
+// - respects face validity and display_flag
+// - uses globalPolyHandle and poly_handle_locked like drawPolygons
+segment "code16";
+void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    if (face_id < 0 || face_id >= faces->face_count) return;
+    if (faces->display_flag[face_id] == 0) return;
+    int vcount_face = faces->vertex_count[face_id];
+    if (vcount_face < 3) return;
+
+    int offset = faces->vertex_indices_ptr[face_id];
+    int *indices_base = &faces->vertex_indices_buffer[offset];
+
+    // Quick validity pass
+    for (int j = 0; j < vcount_face; ++j) {
+        int vi = indices_base[j] - 1;
+        if (vi < 0 || vi >= vtx->vertex_count) return; // invalid face -> nothing to draw
+    }
+
+    // Ensure global handle exists
+    if (globalPolyHandle == NULL) {
+        int max_polySize = 2 + 8 + (4 * 4);  // Max for quad (4 vertices)
+        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
+        if (globalPolyHandle == NULL) {
+            printf("Error: Unable to allocate global polygon handle\n");
+            return;
+        }
+    }
+
+    Handle polyHandle = globalPolyHandle;
+    if (poly_handle_locked) { HUnlock(polyHandle); poly_handle_locked = 0; }
+    HLock(polyHandle); poly_handle_locked = 1;
+
+    DynamicPolygon *poly = (DynamicPolygon *)*polyHandle;
+    int polySize = 2 + 8 + (vcount_face * 4);
+    poly->polySize = polySize;
+
+    int *x2d = vtx->x2d;
+    int *y2d = vtx->y2d;
+
+    // Initialize first point
+    int first_vi = indices_base[0] - 1;
+    int px = x2d[first_vi];
+    int py = y2d[first_vi];
+    poly->polyPoints[0].h = mode / 320 * (px + pan_dx);
+    poly->polyPoints[0].v = py + pan_dy;
+    int min_x = px, max_x = px, min_y = py, max_y = py;
+
+    for (int j = 1; j < vcount_face; ++j) {
+        int vi = indices_base[j] - 1;
+        px = x2d[vi];
+        py = y2d[vi];
+        poly->polyPoints[j].h = mode / 320 * (px + pan_dx);
+        poly->polyPoints[j].v = py + pan_dy;
+        if (px < min_x) min_x = px;
+        if (px > max_x) max_x = px;
+        if (py < min_y) min_y = py;
+        if (py > max_y) max_y = py;
+    }
+
+    poly->polyBBox.h1 = min_x + pan_dx;
+    poly->polyBBox.v1 = min_y + pan_dy;
+    poly->polyBBox.h2 = max_x + pan_dx;
+    poly->polyBBox.v2 = max_y + pan_dy;
+
+    int screenScale = mode / 320;
+    int screenW = screenScale * (CENTRE_X * 2);
+    int screenH = screenScale * (CENTRE_Y * 2);
+
+    int sc_min_x = screenScale * (min_x + pan_dx);
+    int sc_max_x = screenScale * (max_x + pan_dx);
+    int sc_min_y = (min_y + pan_dy);
+    int sc_max_y = (max_y + pan_dy);
+    if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) {
+        // Off-screen; nothing to draw
+    } else {
+        if (fillPenPat >= 0) {
+            SetSolidPenPat(fillPenPat);
+            Pattern pat;
+            GetPenPat(pat);
+            FillPoly(polyHandle, pat);
+            SetSolidPenPat(COL_FRAME);
+            FramePoly(polyHandle);
+            SetSolidPenPat(COL_FILL_DEFAULT);
+        } else if (framePolyOnly) {
+            /* Draw explicit solid wireframe using MoveTo/LineTo to avoid dotted
+             * outlines produced by FramePoly in certain pen/pattern states. */
+            SetPenMode(0); // PenMode = Copy ==> avoid dotted lines
+            SetSolidPenPat(COL_FRAME);
+            FramePoly(polyHandle);
+            // int first_h = poly->polyPoints[0].h;
+            // int first_v = poly->polyPoints[0].v;
+            // MoveTo(first_h, first_v);
+            // for (int kk = 1; kk < vcount_face; ++kk) {
+            //     LineTo(poly->polyPoints[kk].h, poly->polyPoints[kk].v);
+            // }
+            // LineTo(first_h, first_v);
+            SetSolidPenPat(COL_FILL_DEFAULT);
+        } else {
+            Pattern pat;
+            GetPenPat(pat);
+            FillPoly(polyHandle, pat);
+            SetSolidPenPat(COL_FRAME);
+            FramePoly(polyHandle);
+            SetSolidPenPat(COL_FILL_DEFAULT);
+        }
+
+        // Draw face index centered in the polygon using QuickDraw MoveTo + DrawString
+        if (show_index) {
+            int center_x = (min_x + max_x) / 2;
+            int center_y = (min_y + max_y) / 2;
+            // Use same transformation as polygon points: horizontal scaled, vertical and pan applied
+            int screenCx = screenScale * (center_x + pan_dx);
+            int screenCy = center_y + pan_dy;
+
+            char tmp[32];
+            int len = snprintf(tmp, sizeof(tmp), "%d", face_id);
+            if (len > 15) len = 15; // fit into Pascal string buffer
+            unsigned char pstr[16];
+            pstr[0] = (unsigned char)len;
+            memcpy(&pstr[1], tmp, len);
+
+            MoveTo(screenCx, screenCy);
+            DrawString(pstr);
+        }
+    }
+}
+
+// Draw only the face index label for a given face without rendering the polygon geometry.
+// This is used by the face inspector to overlay face numbers once all faces are visible.
+void drawFaceIndex(Model3D* model, int face_id) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    if (face_id < 0 || face_id >= faces->face_count) return;
+    if (faces->display_flag[face_id] == 0) return;
+    int vcount_face = faces->vertex_count[face_id];
+    if (vcount_face < 3) return;
+
+    int offset = faces->vertex_indices_ptr[face_id];
+    int *indices_base = &faces->vertex_indices_buffer[offset];
+    int min_x = 999999, max_x = -999999, min_y = 999999, max_y = -999999;
+    for (int j = 0; j < vcount_face; ++j) {
+        int vi = indices_base[j] - 1;
+        if (vi < 0 || vi >= vtx->vertex_count) return;
+        int x = vtx->x2d[vi];
+        int y = vtx->y2d[vi];
+        if (x < min_x) min_x = x;
+        if (x > max_x) max_x = x;
+        if (y < min_y) min_y = y;
+        if (y > max_y) max_y = y;
+    }
+
+    int screenScale = mode / 320;
+    int center_x = (min_x + max_x) / 2;
+    int center_y = (min_y + max_y) / 2;
+    int screenCx = screenScale * (center_x + pan_dx);
+    int screenCy = center_y + pan_dy;
+
+    char tmp[32];
+    int len = snprintf(tmp, sizeof(tmp), "%d", face_id);
+    if (len > 15) len = 15;
+    unsigned char pstr[16];
+    pstr[0] = (unsigned char)len;
+    memcpy(&pstr[1], tmp, len);
+
+    Pattern savedPat;
+    GetPenPat(savedPat);
+    SetSolidPenPat(COL_FRAME);
+    MoveTo(screenCx, screenCy);
+    DrawString(pstr);
+    SetPenPat(savedPat);
+}
+
+// This helper iterates the recorded ambiguous pairs and draws a white outline around both
+// polygons in each pair so developers can visually inspect cases where the painter could
+// not conclusively determine a stable order. It is a pure rendering aid (no state changes
+// beyond drawing) and is invoked only in diagnostic/debug modes or on explicit user request.
+void frameInconclusivePairs(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    if (inconclusive_pairs == NULL || inconclusive_pairs_count == 0) return;
+
+    // Ensure global handle exists (allocate based on maximum supported vertices)
+    if (globalPolyHandle == NULL) {
+        int max_polySize = 2 + 8 + (MAX_FACE_VERTICES * 4);
+        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
+        if (globalPolyHandle == NULL) {
+            printf("Error: Unable to allocate global polygon handle\n");
+            return;
+        }
+    }
+
+    Handle polyHandle = globalPolyHandle;
+    if (poly_handle_locked) { HUnlock(polyHandle); poly_handle_locked = 0; }
+    HLock(polyHandle); poly_handle_locked = 1;
+
+    DynamicPolygon *poly = (DynamicPolygon *)*polyHandle;
+
+    // Iterate the inconclusive pairs and frame both faces (face1 and face2)
+    for (int p = 0; p < inconclusive_pairs_count; ++p) {
+        int pair_faces[2] = { inconclusive_pairs[p].face1, inconclusive_pairs[p].face2 };
+        for (int pf = 0; pf < 2; ++pf) {
+            int face_id = pair_faces[pf];
+            if (face_id < 0 || face_id >= faces->face_count) continue;
+            if (faces->display_flag[face_id] == 0) continue;
+            int vcount_face = faces->vertex_count[face_id];
+            if (vcount_face < 3 || vcount_face > MAX_FACE_VERTICES) continue;
+
+            int offset = faces->vertex_indices_ptr[face_id];
+            int *indices_base = &faces->vertex_indices_buffer[offset];
+
+            // Quick validity pass
+            int all_valid = 1;
+            for (int j = 0; j < vcount_face; ++j) {
+                int vi = indices_base[j] - 1;
+                if (vi < 0 || vi >= vtx->vertex_count) { all_valid = 0; break; }
+            }
+            if (!all_valid) continue;
+
+            // Build polygon using the same conventions as drawPolygons (screenScale applied to X)
+            int screenScale = mode / 320;
+            int polySize = 2 + 8 + (vcount_face * 4);
+            poly->polySize = polySize;
+
+            int first_vi = indices_base[0] - 1;
+            int px = vtx->x2d[first_vi];
+            int py = vtx->y2d[first_vi];
+            poly->polyPoints[0].h = screenScale * (px + pan_dx);
+            poly->polyPoints[0].v = py + pan_dy;
+            int min_x = px, max_x = px, min_y = py, max_y = py;
+
+            for (int j = 1; j < vcount_face; ++j) {
+                int vi = indices_base[j] - 1;
+                px = vtx->x2d[vi];
+                py = vtx->y2d[vi];
+                poly->polyPoints[j].h = screenScale * (px + pan_dx);
+                poly->polyPoints[j].v = py + pan_dy;
+                if (px < min_x) min_x = px;
+                if (px > max_x) max_x = px;
+                if (py < min_y) min_y = py;
+                if (py > max_y) max_y = py;
+            }
+
+            poly->polyBBox.h1 = min_x;
+            poly->polyBBox.v1 = min_y;
+            poly->polyBBox.h2 = max_x;
+            poly->polyBBox.v2 = max_y;
+
+            // Bounding-box culling (convert to screen pixels)
+            int screenW = screenScale * (CENTRE_X * 2);
+            int screenH = screenScale * (CENTRE_Y * 2);
+            int sc_min_x = screenScale * min_x;
+            int sc_max_x = screenScale * max_x;
+            int sc_min_y = screenScale * min_y;
+            int sc_max_y = screenScale * max_y;
+            if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) continue;
+
+            // Frame polygon in white (use same pen as drawPolygons framing)
+            SetSolidPenPat(COL_LIGHT_GREEN);
+            Pattern pat;
+            GetPenPat(pat);
+            FillPoly(polyHandle, pat);
+            SetSolidPenPat(COL_YELLOW);
+            FramePoly(polyHandle);
+        }
+    }
+
+    // Keep handle locked (consistent with drawing code)
+}
+
+// Generate random colors for all faces
+void generate_random_colors(int face_count) {
+    if (face_count <= 0) return;
+    
+    // Ensure capacity
+    if (random_colors_capacity < face_count) {
+        random_fill_colors = (unsigned char*)realloc(random_fill_colors, face_count);
+        random_frame_colors = (unsigned char*)realloc(random_frame_colors, face_count);
+        random_colors_capacity = face_count;
+    }
+    
+    // Generate random colors (1-15, skip 0 which is black background)
+    for (int i = 0; i < face_count; i++) {
+        random_fill_colors[i] = (rand() % 15) + 1;
+        random_frame_colors[i] = (rand() % 15) + 1;
+    }
+}
+
+segment "code24";
+/* display_model_face_ids
+ * ----------------------
+ * Draw the model in wireframe and overlay each face id centered on its polygon.
+ * Implementation details:
+ *  - Sets `framePolyOnly = 1` to render the wireframe for clarity,
+ *  - Ensures all faces are visible, draws polygon frames, then calls `drawFace`
+ *    with `show_index == 1` for each face to render the numeric ID in the center.
+ */
+void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename) {
+    if (!model || !params) return;
+    FaceArrays3D* faces = &model->faces;
+    if (faces->face_count <= 0) { printf("No faces in model\n"); return; }
 
     startgraph(mode);
-    framePolyOnly = 1; /* wireframe */
-    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
-    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
-    else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
 
-    unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
-    faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
+    // Backup display flags
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+
+    int old_frame = framePolyOnly;
+    framePolyOnly = 1; // wireframe for clear labels
+
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+
+    int screenScale = mode / 320;
+    // Draw each face in the current sorted order (use existing faces->sorted_face_indices)
+    for (int si = 0; si < faces->face_count; ++si) {
+        int f = faces->sorted_face_indices[si];
+        if (!faces->display_flag[f]) continue;
+        // Draw face filled with green (fillPenPat = 10)
+        drawFace(model, f, COL_LIGHT_GREEN, 0);
+
+        // Compute integer bounding box center (use same logic as drawFace)
+        int offset = faces->vertex_indices_ptr[f];
+        int n = faces->vertex_count[f];
+        int min_x = 999999, max_x = -999999, min_y = 999999, max_y = -999999;
+        for (int k = 0; k < n; ++k) {
+            int vi = faces->vertex_indices_buffer[offset + k] - 1;
+            if (vi < 0 || vi >= model->vertices.vertex_count) continue;
+            int x = model->vertices.x2d[vi];
+            int y = model->vertices.y2d[vi];
+            if (x < min_x) min_x = x; if (x > max_x) max_x = x; if (y < min_y) min_y = y; if (y > max_y) max_y = y;
+        }
+        if (min_x <= max_x && min_y <= max_y) {
+            int center_x = (min_x + max_x) / 2;
+            int center_y = (min_y + max_y) / 2;
+            int screenCx = screenScale * (center_x + pan_dx);
+            int screenCy = center_y + pan_dy;
+
+            char tmp[32];
+            int len = snprintf(tmp, sizeof(tmp), "%d", f);
+            if (len > 15) len = 15;
+            unsigned char pstr[16];
+            pstr[0] = (unsigned char)len;
+            memcpy(&pstr[1], tmp, len);
+
+            // Draw index in green
+            SetSolidPenPat(COL_LIGHT_GREEN);
+            MoveTo(screenCx, screenCy);
+            DrawString(pstr);
+            SetSolidPenPat(COL_FILL_DEFAULT);
+        }
+    }
+
+    MoveTo(5, 195);
+    printf("Press any key to return\n");
+    keypress();
+    endgraph();
+    DoText();
+
+    // Restore
+    framePolyOnly = old_frame;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+}
+
+
+// --- Scanline Z-Buffer ---
+
+// Alternative renderer, triggered by a dedicated key (e.g. Z/z) in the main
+// viewer loop. Entirely additive: does not touch processModelFast,
+// calculateFaceDepths, or the existing painter's-algorithm pipeline. Consumes
+// the same already-computed vtx->x2d/y2d/zo and faces->vertex_indices_buffer.
+//
+// PIXEL PLOT: was done by MoveTo(x,y)+LineTo(x,y) (QuickDraw II, same point =
+// single pixel), replaced with inline 65816
+// assembly later (direct SHR nibble read-modify-write), once this scanline
+// logic is validated. Marked below with "PLOT PIXEL HERE".
+//
+// DEPTH PRECISION: this Z-buffer is kept entirely in native float (NOT
+// Fixed32) on purpose. Diagnosed with a real case (two perpendicular faces
+// of the model, ids 13 and 18, whose observer-space depths interleave within
+// less than 1% of each other in their screen overlap region) - a Fixed32
+// round-trip for inv_z was not resolving such close depth conflicts
+// correctly, causing consistently wrong occlusion between those faces
+// regardless of rotation. Float32 has far more usable relative precision at
+// this magnitude, so all inv_z math below stays in float from vertex
+// computation through to the buffer comparison itself.
+//
+// Adapt SCREEN_WIDTH/SCREEN_HEIGHT and MAX_SPAN_INTERSECTIONS to your
+// actual constants/limits.
+
+typedef struct {
+    int x;        // screen-space x of the intersection
+    float inv_z;  // interpolated 1/z at that intersection (native float)
+} ScanIntersection;
+
+// Extracted verbatim from drawPolygons's fill/frame color logic, so the
+// scanline Z-buffer renderer reproduces the exact same user choices
+// (default colors, user overrides, orientation shading, palette cycling).
+
+int getFaceFillColor(int face_id) {
+    int fill_color;
+    if (shaded_by_orientation) {
+        fill_color = face_shade_color[face_id];
+    } else if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
+        fill_color = random_fill_colors[face_id];
+    } else if (user_fill_color >= 0) {
+        fill_color = user_fill_color;
+    } else {
+        fill_color = COL_FILL_DEFAULT;
+    }
+    return fill_color;
+}
+
+int getFaceFrameColor(int face_id, int fill_color) {
+    int frame_color;
+    if (user_frame_color == 17) {
+        frame_color = fill_color;
+    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
+        frame_color = random_frame_colors[face_id];
+    } else if (user_frame_color >= 0) {
+        frame_color = user_frame_color;
+    } else {
+        frame_color = COL_FRAME;
+    }
+    return frame_color;
+}
+
+void drawPixel(int x, int y, int color)
+{
+    int offset;
+    unsigned char value;
+
+    color &= 0x0F;
+
+    /* Offset (0..31999) into SHR bank $E1 memory - computed in C,
+       passed to assembly via the X register (16-bit, plenty of range) */
+    offset = y * 160 + (x >> 1);
+
+    asm {
+        sep     #0x20        ; 8-bit accumulator
+
+        ldx     offset       ; X = byte offset (index register stays 16-bit)
+        lda     0xE12000,x    ; read the byte containing both pixels
+                             ; (absolute LONG indexed addressing - bank $E1
+                             ; is baked into the instruction itself, no
+                             ; pointer variable involved at all)
+
+        pha                  ; save original byte
+
+        lda     x
+        and     #0x01
+        bne     pixel_odd
+
+        /* x EVEN: pixel = high nibble */
+        pla
+        and     #0x0F
+        sta     value
+
+        lda     color
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        and     #0xF0
+        ora     value
+        sta     0xE12000,x
+        bra     done
+
+pixel_odd:
+        /* x ODD: pixel = low nibble */
+        pla
+        and     #0xF0
+        sta     value
+
+        lda     color
+        and     #0x0F
+        ora     value
+        sta     0xE12000,x
+
+done:
+        rep     #0x20
+    }
+}
+
+void renderModelScanlineZBuffer(Model3D* model) {
+    VertexArrays3D* vtx = &model->vertices;
+    FaceArrays3D* faces = &model->faces;
+    int vcount = vtx->vertex_count;
+    int fcount = faces->face_count;
+    int y, f, i;
+
+    // --- 1/z per vertex, recomputed locally once per call (not stored
+    // elsewhere; existing pipeline untouched). Perspective-correct depth
+    // interpolation needs 1/z, which is linear in screen space - z itself
+    // is not. Kept in float (see header comment on precision). ---
+    static float* inv_z = NULL;
+    static int inv_z_capacity = 0;
+    if (inv_z_capacity < vcount) {
+        if (inv_z) free(inv_z);
+        inv_z = (float*)malloc(vcount * sizeof(float));
+        inv_z_capacity = vcount;
+    }
+    for (i = 0; i < vcount; i++) {
+        float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
+        inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
+    }
+
+    // --- One-scanline Z-buffer, reused every line (320 floats only,
+    // not a full-screen buffer) ---
+    static float zbuffer_line[SCREEN_WIDTH];
+
+    ScanIntersection hits[MAX_SPAN_INTERSECTIONS];
+
+    SetPenMode(0);
+    applyPalette(palette);
+
+    for (y = 0; y < SCREEN_HEIGHT; y++) {
+        int screenY = y + pan_dy;
+        if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
+
+        for (i = 0; i < SCREEN_WIDTH; i++) zbuffer_line[i] = -1.0f; // nothing drawn yet
+
+        for (f = 0; f < fcount; f++) {
+            int n, offt, k, hit_count;
+
+            if (!faces->display_flag[f]) continue;
+            n = faces->vertex_count[f];
+            if (n < 3) continue;
+            if (y < faces->miny[f] || y > faces->maxy[f]) continue;
+
+            offt = faces->vertex_indices_ptr[f];
+            hit_count = 0;
+
+            // --- Gather all edge/scanline intersections for this face ---
+            // Standard scan-conversion rule (y1 <= y < y2, taking edge
+            // direction into account) avoids double-counting a vertex that
+            // sits exactly on the scanline - this also makes concave faces
+            // (e.g. the star) work correctly via pair-wise (even-odd) fill,
+            // same principle as the Newell/shoelace robustness discussed
+            // earlier for orientation.
+            for (k = 0; k < n; k++) {
+                int k2 = (k + 1 < n) ? (k + 1) : 0; // avoid modulo (no native op on 65816)
+                int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
+                int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
+
+                int y1 = vtx->y2d[vid1];
+                int y2 = vtx->y2d[vid2];
+                int x1 = vtx->x2d[vid1];
+                int x2 = vtx->x2d[vid2];
+
+                int ylo = (y1 < y2) ? y1 : y2;
+                int yhi = (y1 < y2) ? y2 : y1;
+                if (y < ylo || y >= yhi) continue; // half-open range, skips horizontal edges too
+
+                // linear interpolation fraction along the edge in screen space
+                float t = (float)(y - y1) / (float)(y2 - y1);
+                int xi = x1 + (int)((x2 - x1) * t + 0.5f);
+
+                // 1/z is linear in screen space along this edge (perspective-
+                // correct interpolation) - plain float lerp, no Fixed32
+                // round-trip (see header comment).
+                float izf = inv_z[vid1] + (inv_z[vid2] - inv_z[vid1]) * t;
+
+                if (hit_count < MAX_SPAN_INTERSECTIONS) {
+                    hits[hit_count].x = xi;
+                    hits[hit_count].inv_z = izf;
+                    hit_count++;
+                }
+            }
+
+            if (hit_count < 2) continue;
+
+            // --- Sort intersections by x (simple insertion sort - hit_count
+            // is small, typically <= number of face vertices) ---
+            {
+                int a, b;
+                for (a = 1; a < hit_count; a++) {
+                    ScanIntersection key = hits[a];
+                    b = a - 1;
+                    while (b >= 0 && hits[b].x > key.x) {
+                        hits[b + 1] = hits[b];
+                        b--;
+                    }
+                    hits[b + 1] = key;
+                }
+            }
+
+            // --- Pair up consecutive intersections (even-odd rule) and
+            // fill each span with a Z-test per pixel ---
+            {
+                int p;
+                for (p = 0; p + 1 < hit_count; p += 2) {
+                    int xa = hits[p].x;
+                    int xb = hits[p + 1].x;
+                    float iza = hits[p].inv_z;
+                    float izb = hits[p + 1].inv_z;
+                    int x;
+
+                    if (xa == xb) continue; // degenerate span
+
+                    // Color depends only on the face (f), never on x/y -
+                    // compute once per span instead of once per pixel.
+                    {
+                        int fillColor = getFaceFillColor(f);
+                        int frameColor = getFaceFrameColor(f, fillColor);
+
+                        // iz_here varies linearly across the span - compute
+                        // the per-pixel step ONCE (one division), then just
+                        // add it each pixel instead of recomputing a full
+                        // division + multiplication every pixel. This is
+                        // the hottest loop in the function (executed once
+                        // per pixel drawn, vs once per span/edge for the
+                        // other optimizations), so this is where the real
+                        // cost was.
+                        float dIz = (izb - iza) / (float)(xb - xa);
+                        float iz_here = iza;
+
+                        for (x = xa; x <= xb; x++) {
+                            int screenX = x + pan_dx;
+                            if (screenX >= 0 && screenX < SCREEN_WIDTH) {
+                                if (iz_here > zbuffer_line[x]) {
+                                    zbuffer_line[x] = iz_here;
+
+                                    // --- PLOT PIXEL HERE ---
+                                    if (x == xa || x == xb) {
+                                        drawPixel(screenX, screenY, frameColor);
+                                    } else {
+                                        drawPixel(screenX, screenY, fillColor);
+                                    }
+                                }
+                            }
+                            iz_here += dIz;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+// ============================================================================
+//  5. PALETTE & COLOR MANAGEMENT
+// ============================================================================
+
+void SetColor(int palette_num, int color_index, int r, int g, int b)
+{
+    unsigned long offset;
+    unsigned int  color_word;
+    
+    /* Chaque palette = 16 couleurs × 2 octets = 32 octets */
+    offset = (long)palette_num * 32L + (long)color_index * 2L;
+    
+    /* Encode R, G, B into nibbles (0-15 each) */
+    color_word = ((unsigned int)r << 8) | 
+                 ((unsigned int)g << 4) | 
+                 (unsigned int)b;
+    
+    /* Write into video RAM (bank $E1) */
+    *((unsigned int *)(0xE19E00L + offset)) = color_word;
+}
+
+GS_Palette ReadPalette(int palette_num)
+{
+    GS_Palette  pal;
+    int         i;
+    unsigned int *src;
+
+    /* Chaque palette fait 16 × 2 octets = 32 octets */
+    src = (unsigned int *)(PALETTE_BASE + (long)palette_num * 32L);
+
+    for (i = 0; i < 16; i++)
+        pal.color[i] = src[i];
+
+    return pal;
+}
+
+void applyPalette(int palette_num)
+{
+    if (palette_num < 0 || palette_num >= 16) palette_num = 0;
+
+    Word color_table[16];
+    for (int color_index = 0; color_index < 16; ++color_index) {
+        color_table[color_index] = (Word)palettes[palette_num].color[color_index];
+    }
+
+    SetColorTable(0, color_table);
+}
+
+void initPalettes(void)
+{
+    palette0_loaded = 0;
+
+    for (int p = 1; p < 16; ++p) {
+        for (int i = 0; i < 16; ++i) {
+            palettes[p].color[i] = paletteGradientColor(p, i);
+        }
+    }
+}
+
+segment "code20";
+void DoColor() {
+        Rect r;
+        unsigned char pstr[4];  // Pascal string: [length][characters...]]
+
+        SetRect (&r, 0, 1, mode / 320 *10, 11);
+        for (int i = 0; i < 16; i++) {
+            SetSolidPenPat(i);
+            PaintRect(&r);
+
+            if (i == 0) {
+                SetSolidPenPat(COL_WHITE); // White frame for black background
+                FrameRect(&r);
+            }
+
+            MoveTo(r.h1, r.v2+10);
+            // Create a Pascal string to display the number
+            if (i < 10) {
+                pstr[0] = 1;           // Length: 1 character
+                pstr[1] = '0' + i;     // Digit 0-9
+            } else {
+                pstr[0] = 2;           // Length: 2 characters
+                pstr[1] = '0' + (i / 10);      // Tens (1 for 10-15)
+                pstr[2] = '0' + (i % 10);      // Units (0-5 for 10-15)
+            }
+            DrawString(pstr);
+            OffsetRect(&r, 20, 0);
+        }
+}
+
+
+// ============================================================================
+//  6. DEBUG & INSPECTION TOOLS
+// ============================================================================
+
+void debug_two_faces(Model3D* model, int f1, int f2) {
+    startgraph(mode);
     drawFace(model, f1, COL_LIGHT_GREEN, 1);
-    drawFace(model, f2, COL_ORANGE, 1);
-    faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
+    keypress();
+    drawFace(model, f2, COL_LIGHT_GREEN, 1);
+    keypress();
+    endgraph();
+    DoText();
+}
 
-    MoveTo(screenx, screeny);
-    printf("%s", msg);
-    // Wait for key
-    int key = getkeypress ();
+segment "code05";
+/* inspect_faces_before
+ * --------------------
+ * Purpose:
+ *  - Interactively inspect faces that are placed BEFORE a selected face in the
+ *    painter's ordered list but that the pairwise tests conclude should be AFTER.
+ * Behavior:
+ *  - Prompts the user for a face id, locates it in `sorted_face_indices` and checks
+ *    faces earlier in the ordered list using `pair_order_relation` and `evaluate_pair_tests`.
+ *  - Prints a compact per-face diagnostic and offers a wireframe preview with the
+ *    selected face highlighted (green) and misplaced faces highlighted (orange).
+ */
+void inspect_faces_before(Model3D* model, ObserverParams* params, const char* filename) {
+    if (!model || !params) return;
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+    if (face_count <= 0) { printf("No faces in model\n"); return; }
+
+    /* Title / welcome (text-mode) */
+    printf("Inspector: inspect faces placed BEFORE a selected face (diagnostics)\n\n");
+
+    // Ensure back-face culling on and recompute depths & ordering
+    // helper: enable culling and run painter sort; returns previous culling state
+    int old_cull = cull_back_faces;
+    cull_back_faces = 1;
+
+    // Prompt user for face id
+    printf("Enter face id (0..%d) to inspect: ", face_count - 1);
+    int sel = -1;
+    if (scanf("%d", &sel) != 1) {
+        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
+        printf("Input cancelled\n");
+        cull_back_faces = old_cull; return;
+    }
+    // consume remaining chars on the line (newline) to avoid disturbing later fgets()
+    {
+        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
+    }
+    // Use the exact number provided by the user (do not convert 1-based to 0-based)
+    int target_face = sel;
+    if (target_face < 0 || target_face >= face_count) { printf("Invalid face id\n"); cull_back_faces = old_cull; return; }
+
+    // Find position of target_face in the sorted array
+    int pos = -1;
+    for (int i = 0; i < face_count; ++i) {
+        if (faces->sorted_face_indices[i] == target_face) { pos = i; break; }
+    }
+    if (pos < 0) { printf("Selected face is not in sorted list\n"); cull_back_faces = old_cull; return; }
+
+    // Inform user about target position
+    printf("Selected face %d is at position %d in the ordered list (total faces = %d)\n", target_face, pos, face_count);
+
+    // Ensure variables are visible throughout the function (used later for preview)
+    int* misplaced = NULL;
+    int misplaced_count = 0;
+
+    // Check faces placed before the selected face (only consider visible faces)
+    misplaced = (int*)malloc(face_count * sizeof(int));
+    misplaced_count = 0;
+    int checked = 0, rel_neg = 0, rel_pos = 0, rel_zero = 0, bbox_skipped = 0;
+    for (int i = 0; i < pos; ++i) {
+        int f = faces->sorted_face_indices[i];
+        // Bounding-box quick rejection: if separated on X or Y, skip - no overlap
+        if (faces->maxx[f] <= faces->minx[target_face] || faces->maxx[target_face] <= faces->minx[f]
+            || faces->maxy[f] <= faces->miny[target_face] || faces->maxy[target_face] <= faces->miny[f]) {
+            bbox_skipped++; continue;
+        }
+        checked++;
+        int rel = pair_order_relation(model, f, target_face);
+        if (rel == -1) rel_neg++; else if (rel == 1) rel_pos++; else rel_zero++;
+        if (rel == 1) { // this face should be after target -> misplaced
+            misplaced[misplaced_count++] = f;
+        }
+    }
+
+    printf("%d \"before\" faces (total): checked=%d ; bbox_skipped=%d ; should_be_before(-1): %d ;  should_be_after(+1): %d (misplaced: %d) ; inconclusive: %d\n",
+           pos, checked, bbox_skipped, rel_neg, rel_pos, misplaced_count, rel_zero);
+
+    printf("%d misplaced faces relative to face %d : ", misplaced_count, target_face);
+    for (int i = 0; i < misplaced_count; ++i) {
+        int f = misplaced[i];
+        // Find position of the misplaced face in the sorted list (1-based for readability)
+        int pos_in_sorted = -1;
+        for (int si = 0; si < faces->face_count; ++si) {
+            if (faces->sorted_face_indices[si] == f) { pos_in_sorted = si; break; }
+        }
+        if (pos_in_sorted >= 0) printf("%d (pos=%d)", f, pos_in_sorted + 1);
+        else printf("%d (pos=?)", f);
+        if (i < misplaced_count - 1) printf(",");
+    }
+    /* Report overlapping subset among misplaced faces (global summary) */
+    int overlap_count = 0;
+    int *overlaps = NULL;
+    if (misplaced_count > 0) {
+        overlaps = (int*)malloc(sizeof(int) * misplaced_count);
+        for (int i = 0; i < misplaced_count; ++i) {
+            int f = misplaced[i];
+            if (projected_polygons_overlap(model, f, target_face)) overlaps[overlap_count++] = f;
+        }
+    }
+    printf("\n");
+    if (overlap_count > 0) {
+        printf("Overlap with target: %d face(s):", overlap_count);
+        for (int i = 0; i < overlap_count; ++i) printf(" %d", overlaps[i]);
+        printf("\n");
+    } else {
+        printf("Overlap with target: none\n");
+    }
+    // Note: overlaps will be freed at the end of the function
+
+    printf("\n");
+    keypress();
+
+    // For each misplaced face, evaluate tests 1..7 and display which succeeded/failed/inconclusive
+    for (int mi = 0; mi < misplaced_count; ++mi) {
+        int f = misplaced[mi];
+        int tests[7];
+        evaluate_pair_tests(model, f, target_face, tests);
+
+        // Build readable lists
+        char passed[128]; passed[0] = '\0';
+        char failed[128]; failed[0] = '\0';
+        char incon[128]; incon[0] = '\0';
+        int pcount = 0, fcount = 0, icount = 0;
+        for (int t = 0; t < 7; ++t) {
+            if (tests[t] == 1) {
+                if (pcount) strncat(passed, ",", sizeof(passed)-strlen(passed)-1);
+                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(passed, tmp, sizeof(passed)-strlen(passed)-1); pcount++;
+            } else if (tests[t] == -1) {
+                if (fcount) strncat(failed, ",", sizeof(failed)-strlen(failed)-1);
+                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(failed, tmp, sizeof(failed)-strlen(failed)-1); fcount++;
+            } else {
+                if (icount) strncat(incon, ",", sizeof(incon)-strlen(incon)-1);
+                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(incon, tmp, sizeof(incon)-strlen(incon)-1); icount++;
+            }
+        }
+        if (pcount == 0) strncpy(passed, "(none)", sizeof(passed));
+        if (fcount == 0) strncpy(failed, "(none)", sizeof(failed));
+        if (icount == 0) strncpy(incon, "(none)", sizeof(incon));
+
+        char after_list[64]; after_list[0] = '\0';
+        char before_list[64]; before_list[0] = '\0';
+        char incon_list[64]; incon_list[0] = '\0';
+        int after_count = 0, before_count = 0, incon_count = 0;
+        for (int t = 0; t < 7; ++t) {
+            if (tests[t] == 1) {
+                if (after_count) strncat(after_list, ",", sizeof(after_list)-strlen(after_list)-1);
+                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(after_list, tmp, sizeof(after_list)-strlen(after_list)-1);
+                after_count++; 
+            } else if (tests[t] == -1) {
+                if (before_count) strncat(before_list, ",", sizeof(before_list)-strlen(before_list)-1);
+                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(before_list, tmp, sizeof(before_list)-strlen(before_list)-1);
+                before_count++;
+            } else {
+                if (incon_count) strncat(incon_list, ",", sizeof(incon_list)-strlen(incon_list)-1);
+                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(incon_list, tmp, sizeof(incon_list)-strlen(incon_list)-1);
+                incon_count++;
+            }
+        }
+
+        // Compact grouped output (single-line)
+        if (before_count == 0) strncpy(before_list, "(none)", sizeof(before_list));
+        if (after_count == 0) strncpy(after_list, "(none)", sizeof(after_list));
+        if (incon_count == 0) strncpy(incon_list, "(none)", sizeof(incon_list));
+
+        printf("Face %d: BEFORE tests: %s; AFTER tests: %s; inconclusive: %s\n", f, before_list, after_list, incon_list);
+        
+        // Conclusion lines (keep existing style)
+        if (after_count == 0 && before_count == 0) {
+            printf("  Overall: inconclusive (no decisive tests)\n");
+        } else {
+            if (after_count) printf("Concluded: Face %d (selected) should be AFTER face %d (tests: %s)\n\n", target_face, f, after_list);
+            if (before_count) printf("Concluded: Face %d (selected) should be BEFORE face %d (tests: %s)\n\n", target_face, f, before_list);
+        }
+    }
+
+    printf("\nPress a key to preview model with highlight selected and misplaced faces (if any).\n");
+    keypress();
+    startgraph(mode);
+
+    // Backup display flags
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+
+    // 1) Show entire model in wireframe
+    int old_frame = framePolyOnly;
+    framePolyOnly = 1; // wireframe
+    // Wireframe preview: handled via the `framePolyOnly` flag and `drawPolygons()` (no separate `processModelWireframe()` function)
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+
+
+    // 2) Overlay misplaced faces in orange (pen 6)
+    for (int i = 0; i < misplaced_count; ++i) {
+        int f = misplaced[i];
+        faces->display_flag[f] = 1;
+        drawFace(model, f, COL_ORANGE, 0);
+    }
+
+    // 3) Overlay: selected face in green (pen 10)
+    // Ensure target face is visible for drawFace
+    faces->display_flag[target_face] = 1;
+    drawFace(model, target_face, COL_LIGHT_GREEN, 1);
+
+    MoveTo(2, 195);
+    printf("%d face(s) should be after face %d, %d overlap%s\n", misplaced_count, target_face, overlap_count, overlap_count > 1 ? "s" : "");
+    keypress();
+    endgraph();
+    DoText();
+
+    // Restore state
+    framePolyOnly = old_frame;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+
+    // If there are misplaced faces, offer to fix by moving target before the smallest index
+    if (misplaced_count > 0) {
+        printf("\nPress 'A' to move face %d considering ALL misplaced faces, 'O' for overlaps only, or any other key to skip: ", target_face);
+        int key = getkeypress ();
+        
+        if (key == 'A' || key == 'a' || key == 'O' || key == 'o') {
+            int min_pos = face_count; // start with max possible
+            int target_to_move_before = -1;
+            int use_overlaps = (key == 'O' || key == 'o');
+            
+            // Determine which list to use and check if available
+            if (use_overlaps && overlap_count == 0) {
+                printf("\nNo overlaps to process.\n");
+            } else {
+                // Find the smallest position among selected faces
+                int count_to_check = use_overlaps ? overlap_count : misplaced_count;
+                int *faces_to_check = use_overlaps ? overlaps : misplaced;
+                
+                for (int i = 0; i < count_to_check; ++i) {
+                    int f = faces_to_check[i];
+                    // Find position in sorted list
+                    for (int si = 0; si < face_count; ++si) {
+                        if (faces->sorted_face_indices[si] == f) {
+                            if (si < min_pos) {
+                                min_pos = si;
+                                target_to_move_before = f;
+                            }
+                            break;
+                        }
+                    }
+                }
+                
+                if (target_to_move_before >= 0 && min_pos < face_count) {
+                    printf("\nMoving face %d (currently at pos %d) to position %d (before face %d) - mode: %s...\n", 
+                           target_face, pos, min_pos, target_to_move_before, use_overlaps ? "overlaps" : "all");
+                    
+                    // Move target_face to min_pos (before the misplaced face with smallest index)
+                    move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, min_pos);
+                    
+                    printf("Done! Face %d has been moved.\n", target_face);
+                    printf("Press any key to continue...\n");
+                    keypress();
+                } else {
+                    printf("\nError: could not determine target position.\n");
+                }
+            }
+        } else {
+            printf("\nSkipped.\n");
+        }
+    }
+
+    if (overlaps) free(overlaps);
+    free(misplaced);
+    cull_back_faces = old_cull;
+}
+
+/* inspect_faces_after
+ * -------------------
+ * Purpose:
+ *  - Interactively inspect faces that are placed AFTER a selected face in the
+ *    painter's ordered list but that the pairwise tests conclude should be BEFORE.
+ * Behavior:
+ *  - Prompts the user for a face id, locates it in `sorted_face_indices` and checks
+ *    visible faces later in the ordered list using `pair_order_relation` and `evaluate_pair_tests`.
+ *  - Prints a compact per-face diagnostic and offers a wireframe preview with the
+ *    selected face highlighted (green) and misplaced faces highlighted (pink).
+ */
+ void inspect_faces_after(Model3D* model, ObserverParams* params, const char* filename) {
+    if (!model || !params) return;
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+    if (face_count <= 0) { printf("No faces in model\n"); return; }
+
+    int old_cull = cull_back_faces;
+    cull_back_faces = 1;
+
+    /* Title / welcome (text-mode) */
+    printf("Inspector: inspect faces placed AFTER a selected face (diagnostics)\n\n");
+
+    printf("Enter face id (0..%d) to inspect AFTER-list: ", face_count - 1);
+    int sel = -1;
+
+    if (scanf("%d", &sel) != 1) {
+        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
+        printf("Input cancelled\n");
+        cull_back_faces = old_cull; return;
+    }
+    // consume remaining chars on the line (newline) to avoid disturbing later fgets()
+    {
+        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
+    }
+    int target_face = sel;
+    if (target_face < 0 || target_face >= face_count) { printf("Invalid face id\n"); cull_back_faces = old_cull; return; }
+
+    int pos = -1;
+    for (int i = 0; i < face_count; ++i) if (faces->sorted_face_indices[i] == target_face) { pos = i; break; }
+    if (pos < 0) { printf("Selected face is not in sorted list\n"); cull_back_faces = old_cull; return; }
+
+    int* misplaced = (int*)malloc(face_count * sizeof(int)); int misplaced_count = 0;
+    int checked = 0, rel_neg = 0, rel_pos = 0, rel_zero = 0, bbox_skipped = 0;
+    for (int i = pos + 1; i < face_count; ++i) {
+        int f = faces->sorted_face_indices[i];
+        // Bounding-box quick rejection: if separated on X or Y, skip - no overlap
+        if (faces->maxx[f] <= faces->minx[target_face] || faces->maxx[target_face] <= faces->minx[f]
+            || faces->maxy[f] <= faces->miny[target_face] || faces->maxy[target_face] <= faces->miny[f]) {
+            bbox_skipped++; continue;
+        }
+        int rel = pair_order_relation(model, f, target_face); // correct parameter order
+        checked++;
+        if (rel == -1) rel_neg++; else if (rel == 1) rel_pos++; else rel_zero++;
+        if (rel == -1) { // f should be before target -> misplaced
+            misplaced[misplaced_count++] = f;
+        }
+    }
+
+    printf("%d \"before\" faces (total): checked=%d ; bbox_skipped=%d ; should_be_before(-1): %d ;  should_be_after(+1): %d (misplaced: %d) ; inconclusive: %d\n",
+           pos, checked, bbox_skipped, rel_neg, rel_pos, misplaced_count, rel_zero);
+
+    printf("%d misplaced faces relative to face %d : ", misplaced_count, target_face);
+    for (int i = 0; i < misplaced_count; ++i) {
+        int f = misplaced[i];
+        int pos_in_sorted = -1;
+        for (int si = 0; si < faces->face_count; ++si) {
+            if (faces->sorted_face_indices[si] == f) { pos_in_sorted = si; break; }
+        }
+        if (pos_in_sorted >= 0) printf("%d (pos=%d)", f, pos_in_sorted + 1);
+        else printf("%d (pos=?)", f);
+        if (i < misplaced_count - 1) printf(",");
+    }
+    printf("\n");
+
+    /* Report overlapping subset among the misplaced list (global summary) */
+    int overlap_count = 0;
+    int *overlaps = NULL;
+    if (misplaced_count > 0) {
+        overlaps = (int*)malloc(sizeof(int) * misplaced_count);
+        for (int i = 0; i < misplaced_count; ++i) {
+            int f = misplaced[i];
+            if (projected_polygons_overlap(model, f, target_face)) overlaps[overlap_count++] = f;
+        }
+    }
+    if (overlap_count > 0) {
+        printf("Overlap with target: %d face(s):", overlap_count);
+        for (int i = 0; i < overlap_count; ++i) printf(" %d", overlaps[i]);
+        printf("\n");
+    } else {
+        printf("Overlap with target: none\n");
+    }
+    // Note: overlaps will be freed at the end of the function
+    printf("\n");
+    keypress();
+
+    for (int ai = 0; ai < misplaced_count; ++ai) {
+        int f = misplaced[ai];
+        // Quick bbox rejection: if separated on X or Y, skip detailed tests
+        if (faces->maxx[f] <= faces->minx[target_face] || faces->maxx[target_face] <= faces->minx[f]
+            || faces->maxy[f] <= faces->miny[target_face] || faces->maxy[target_face] <= faces->miny[f]) {
+            printf("Face %d: skipped (axis-aligned bbox separation)\n", f);
+            continue;
+        }
+
+        int tests[7]; evaluate_pair_tests(model, f, target_face, tests);
+
+        char passed_t[128]; passed_t[0] = '\0';
+        char failed_t[128]; failed_t[0] = '\0';
+        char incon_t[128]; incon_t[0] = '\0';
+        int pcount_t = 0, fcount_t = 0, icount_t = 0;
+        for (int t = 0; t < 7; ++t) {
+            if (tests[t] == 1) { if (pcount_t) strncat(passed_t, ",", sizeof(passed_t)-strlen(passed_t)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(passed_t, tmp, sizeof(passed_t)-strlen(passed_t)-1); pcount_t++; }
+            else if (tests[t] == -1) { if (fcount_t) strncat(failed_t, ",", sizeof(failed_t)-strlen(failed_t)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(failed_t, tmp, sizeof(failed_t)-strlen(failed_t)-1); fcount_t++; }
+            else { if (icount_t) strncat(incon_t, ",", sizeof(incon_t)-strlen(incon_t)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(incon_t, tmp, sizeof(incon_t)-strlen(incon_t)-1); icount_t++; }
+        }
+        if (pcount_t == 0) strncpy(passed_t, "(none)", sizeof(passed_t));
+        if (fcount_t == 0) strncpy(failed_t, "(none)", sizeof(failed_t));
+        if (icount_t == 0) strncpy(incon_t, "(none)", sizeof(incon_t));
+
+        char after_list_str[64]; after_list_str[0] = '\0';
+        char before_list_str[64]; before_list_str[0] = '\0';
+        char incon_list_str[64]; incon_list_str[0] = '\0';
+        int after_count_t = 0, before_count_t = 0, incon_count_t = 0;
+        for (int t = 0; t < 7; ++t) {
+            if (tests[t] == 1) { if (after_count_t) strncat(after_list_str, ",", sizeof(after_list_str)-strlen(after_list_str)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(after_list_str, tmp, sizeof(after_list_str)-strlen(after_list_str)-1); after_count_t++; }
+            else if (tests[t] == -1) { if (before_count_t) strncat(before_list_str, ",", sizeof(before_list_str)-strlen(before_list_str)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(before_list_str, tmp, sizeof(before_list_str)-strlen(before_list_str)-1); before_count_t++; }
+            else { if (incon_count_t) strncat(incon_list_str, ",", sizeof(incon_list_str)-strlen(incon_list_str)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(incon_list_str, tmp, sizeof(incon_list_str)-strlen(incon_list_str)-1); incon_count_t++; }
+        }
+        if (before_count_t == 0) strncpy(before_list_str, "(none)", sizeof(before_list_str));
+        if (after_count_t == 0) strncpy(after_list_str, "(none)", sizeof(after_list_str));
+        if (incon_count_t == 0) strncpy(incon_list_str, "(none)", sizeof(incon_list_str));
+
+        printf("Face %d: BEFORE tests: %s; AFTER tests: %s; inconclusive: %s\n", f, before_list_str, after_list_str, incon_list_str);
+        if (after_count_t == 0 && before_count_t == 0) {
+            printf("  Overall: inconclusive (no decisive tests)\n");
+        } else {
+            if (before_count_t) printf("Concluded: Face %d should be BEFORE face %d (tests: %s)\n\n", f, target_face, before_list_str);
+            if (after_count_t) printf("Concluded: Face %d should be AFTER face %d (tests: %s)\n\n", f, target_face, after_list_str);
+        }
+    }
+
+    // Offer a preview (always, as in inspect_faces_before)
+    printf("\nPress a key to preview model with highlight selected and misplaced faces (if any).\n");
+    keypress();
+    startgraph(mode);
+
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+
+    int old_frame = framePolyOnly;
+    framePolyOnly = 1; // wireframe
+    // Wireframe preview: handled via the `framePolyOnly` flag and `drawPolygons()` (no separate `processModelWireframe()` function)
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+
+    for (int i = 0; i < misplaced_count; ++i) {
+        int f = misplaced[i];
+        faces->display_flag[f] = 1;
+        drawFace(model, f, COL_PALE_PURPLE, 0);
+    }
+    faces->display_flag[target_face] = 1;
+    drawFace(model, target_face, COL_LIGHT_GREEN, 1);
+
+
+    MoveTo(2, 195);
+    printf("%d face(s) should be before face %d, %d overlap%s\n", misplaced_count, target_face, overlap_count, overlap_count > 1 ? "s" : "");
+    keypress();
+    endgraph();
+    DoText();
 
     framePolyOnly = old_frame;
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
-    endgraph(); DoText();
-    return key;
+
+    // If there are misplaced faces, offer to fix by moving target after the largest index
+    if (misplaced_count > 0) {
+        printf("\nPress 'A' to move face %d considering ALL misplaced faces, 'O' for overlaps only, or any other key to skip: ", target_face);
+        int key = getkeypress ();
+        
+        if (key == 'A' || key == 'a' || key == 'O' || key == 'o') {
+            int max_pos = -1;
+            int target_to_move_after = -1;
+            int use_overlaps = (key == 'O' || key == 'o');
+            
+            // Determine which list to use and check if available
+            if (use_overlaps && overlap_count == 0) {
+                printf("\nNo overlaps to process.\n");
+            } else {
+                // Find the largest position among selected faces
+                int count_to_check = use_overlaps ? overlap_count : misplaced_count;
+                int *faces_to_check = use_overlaps ? overlaps : misplaced;
+                
+                for (int i = 0; i < count_to_check; ++i) {
+                    int f = faces_to_check[i];
+                    // Find position in sorted list
+                    for (int si = 0; si < face_count; ++si) {
+                        if (faces->sorted_face_indices[si] == f) {
+                            if (si > max_pos) {
+                                max_pos = si;
+                                target_to_move_after = f;
+                            }
+                            break;
+                        }
+                    }
+                }
+                
+                if (target_to_move_after >= 0 && max_pos >= 0) {
+                    printf("\nMoving face %d (currently at pos %d) to position %d (after face %d) - mode: %s...\n", 
+                           target_face, pos, max_pos, target_to_move_after, use_overlaps ? "overlaps" : "all");
+                    
+                    // Move target_face to max_pos (after the misplaced face with largest index)
+                    move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, max_pos);
+                    
+                    printf("Done! Face %d has been moved.\n", target_face);
+                    printf("Press any key to continue...\n");
+                    keypress();
+                } else {
+                    printf("\nError: could not determine target position.\n");
+                }
+            }
+        } else {
+            printf("\nSkipped.\n");
+        }
+    }
+
+    if (overlaps) free(overlaps);
+    free(misplaced);
+    cull_back_faces = old_cull;
+}
+
+segment "code04";
+/* showFace
+ * --------
+ * Purpose:
+ *  - Display a single face in filled mode (green) over the wireframe model.
+ * Behavior:
+ *  - Prompts user for a face id (0..face_count-1).
+ *  - Draws the entire model in wireframe mode.
+ *  - Overlays the selected face in filled green (pen 10).
+ *  - Navigate: Left/Right arrows = prev/next face ID
+ *              Up/Down arrows = next/prev position in sorted list
+ *  - ESC to exit
+ */
+void showFace(Model3D* model, ObserverParams* params, const char* filename) {
+    if (!model || !params) return;
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+    if (face_count <= 0) { printf("No faces in model\n"); return; }
+
+    // Prompt user for face id
+    printf("Enter face id (0..%d) to display: ", face_count - 1);
+    int sel = -1;
+    if (scanf("%d", &sel) != 1) {
+        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
+        printf("Input cancelled\n");
+        return;
+    }
+    // consume remaining chars on the line
+    {
+        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
+    }
+    
+    int target_face = sel;
+    if (target_face < 0 || target_face >= face_count) {
+        printf("Invalid face id\n");
+        return;
+    }
+
+    printf("=> Face %d\n\n", target_face);
+    printf("Use arrow keys to navigate (Left/Right: face ID, Up/Down: sorted list)\n");
+    printf("Press SPACE to show detailed info about the selected face (hide/restore/restoreAll are there).\n");
+    printf("Press N to toggle the face normal display.\n");
+    printf("Use any other key to exit.\n\n");
+
+    printf("Press any key to show model...\n");
+    keypress();
+    
+    // Backup display flags
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+
+    int old_frame = framePolyOnly;
+    framePolyOnly = 1; // wireframe mode
+    int show_normal = 0; // toggled by N/n
+    
+    // Navigation loop
+    int quit = 0;
+    while (!quit) {
+        startgraph(mode);
+        
+        // Draw entire model in wireframe
+        if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
+
+        // Overlay selected face in filled green (pen 10)
+        // If the face is currently hidden, draw it in gray instead using its
+        // saved vertex count, without permanently restoring it (geometry itself
+        // was never modified by hideFace, only vertex_count was zeroed).
+        if (faces->vertex_count[target_face] > 0) {
+            faces->display_flag[target_face] = 1;
+            drawFace(model, target_face, COL_LIGHT_GREEN, 0);
+        } else if (faces->saved_vertex_count[target_face] > 0) {
+            int saved_vc = faces->saved_vertex_count[target_face];
+            int saved_df = faces->display_flag[target_face];
+
+            faces->vertex_count[target_face] = saved_vc;
+            faces->display_flag[target_face] = 1;
+            drawFace(model, target_face, COL_GREY, 0);
+
+            // revert: keep the face hidden, saved_vertex_count untouched
+            faces->vertex_count[target_face] = 0;
+            faces->display_flag[target_face] = saved_df;
+        }
+
+        // --- Draw the face normal (toggle: N/n) ---
+        // Centroid and plane coefficients (A,B,C) are already in observer
+        // space (computed from vtx->xo/yo/zo in calculateFaceDepths), so we
+        // only need the observer->screen projection step from
+        // processModelFast (rotation is already applied), not the full
+        // rotation matrix.
+        if (show_normal) {
+            int offt2 = faces->vertex_indices_ptr[target_face];
+            int vn2 = faces->vertex_count[target_face];
+            // if face is hidden, use saved_vertex_count
+            if ((vn2 == 0) && (faces->saved_vertex_count[target_face] > 0)) {vn2 = faces->saved_vertex_count[target_face]; }
+
+            // NOTE: fixed - a bare "continue" here would skip endgraph()/getkeypress()
+            // for the rest of this loop iteration (main while(!quit) loop, not a
+            // sub-loop), leaving the graphics context unbalanced and the loop
+            // spinning without ever waiting for a key. Wrap the rest of the
+            // normal-drawing logic in "if (vn2 >= 3)" instead.
+            if (vn2 >= 3) {
+                int k2;
+                Fixed64 sx64 = 0, sy64 = 0, sz64 = 0;
+
+                for (k2 = 0; k2 < vn2; ++k2) {
+                    int vid2 = faces->vertex_indices_buffer[offt2 + k2] - 1;
+                    sx64 += (Fixed64)model->vertices.xo[vid2];
+                    sy64 += (Fixed64)model->vertices.yo[vid2];
+                    sz64 += (Fixed64)model->vertices.zo[vid2];
+                }
+
+                float cxo = FIXED_TO_FLOAT((Fixed32)(sx64 / vn2));
+                float cyo = FIXED_TO_FLOAT((Fixed32)(sy64 / vn2));
+                float czo = FIXED_TO_FLOAT((Fixed32)(sz64 / vn2));
+
+                float na = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
+                float nb = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
+                float nc = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
+                float nlen = (float)sqrt((double)(na * na + nb * nb + nc * nc));
+
+                if (nlen > 0.0001f) {
+                    // visual length of the normal arrow, in observer-space units
+                    // -- tune to your model's typical scale
+                    const float NORMAL_VISUAL_LENGTH = 50.0f;
+                    float ex = cxo + (na / nlen) * NORMAL_VISUAL_LENGTH;
+                    float ey = cyo + (nb / nlen) * NORMAL_VISUAL_LENGTH;
+                    float ez = czo + (nc / nlen) * NORMAL_VISUAL_LENGTH;
+
+                    Fixed32 cxo_fx = FLOAT_TO_FIXED(cxo);
+                    Fixed32 cyo_fx = FLOAT_TO_FIXED(cyo);
+                    Fixed32 czo_fx = FLOAT_TO_FIXED(czo);
+                    Fixed32 exo_fx = FLOAT_TO_FIXED(ex);
+                    Fixed32 eyo_fx = FLOAT_TO_FIXED(ey);
+                    Fixed32 ezo_fx = FLOAT_TO_FIXED(ez);
+
+                    int c_x2d = -1, c_y2d = -1, e_x2d = -1, e_y2d = -1;
+
+                    if (czo_fx > 0) {
+                        Fixed32 inv_zo_c = FIXED_DIV_64(s_global_proj_scale_fixed, czo_fx);
+                        c_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(cxo_fx, inv_zo_c), INT_TO_FIXED(CENTRE_X)));
+                        c_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(cyo_fx, inv_zo_c)));
+                    }
+                    if (ezo_fx > 0) {
+                        Fixed32 inv_zo_e = FIXED_DIV_64(s_global_proj_scale_fixed, ezo_fx);
+                        e_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(exo_fx, inv_zo_e), INT_TO_FIXED(CENTRE_X)));
+                        e_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(eyo_fx, inv_zo_e)));
+                    }
+
+                    // Draw face nomal
+                     {
+                        SetSolidPenPat(COL_YELLOW);
+                        // SetSolidPenPat(15); // White
+                        MoveTo(c_x2d + pan_dx, c_y2d + pan_dy);
+                        LineTo(e_x2d + pan_dx, e_y2d + pan_dy);
+                    }
+                }
+            }
+        }
+
+        // Annotate only the selected face ID after the full model is drawn
+        drawFaceIndex(model, target_face);
+
+        // Find position in sorted list for display
+        int pos_in_sorted = -1;
+        for (int i = 0; i < face_count; ++i) {
+            if (faces->sorted_face_indices[i] == target_face) {
+                pos_in_sorted = i;
+                break;
+            }
+        }
+
+        MoveTo(2, 188);
+        // Orientation: front vs back (observer-space d > 0 => front)
+        if (pos_in_sorted >= 0) {
+            printf("Face %d (sorted pos %d) [%s]", target_face, pos_in_sorted, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+        } else {
+            printf("Face %d [%s]", target_face, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+        }
+        if (faces->vertex_count[target_face] == 0) {
+            printf(" [HIDDEN]");
+        }
+        printf("\nArrows: navigate,  N: normal, SPACE: options");
+        
+        // Wait for key
+        int key = getkeypress ();
+        
+        endgraph();
+        
+        // Process key - only arrow keys continue, any other key exits
+        if (key == 8) { // Left arrow - previous face ID
+            target_face--;
+            if (target_face < 0) target_face = face_count - 1;
+        } else if (key == 21) { // Right arrow - next face ID
+            target_face++;
+            if (target_face >= face_count) target_face = 0;
+        } else if (key == 11) { // Up arrow - next position in sorted list
+            if (pos_in_sorted >= 0 && pos_in_sorted < face_count - 1) {
+                target_face = faces->sorted_face_indices[pos_in_sorted + 1];
+            }
+        } else if (key == 10) { // Down arrow - previous position in sorted list
+            if (pos_in_sorted > 0) {
+                target_face = faces->sorted_face_indices[pos_in_sorted - 1];
+            }
+        } else if (key == 'N' || key == 'n') {
+            show_normal = !show_normal;
+            continue;
+        } else if (key == 32) { // Space - show textual details about the face
+            // Switch to text mode and print detailed info, then return to graphics on keypress
+            DoText();
+            int vn = faces->vertex_count[target_face];
+            int effective_vn = (vn == 0 && faces->saved_vertex_count[target_face] > 0)
+                    ? faces->saved_vertex_count[target_face] : vn;
+            printf("\n=== Face detail (ID=%d) ===\n\n", target_face);
+            // printf("Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",
+            // Plane equation (float)
+            {
+                float a = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
+                float b = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
+                float c = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
+                float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
+                printf("Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
+            }
+            printf("Z min: %.6f   ;   ", FIXED_TO_FLOAT(faces->z_min[target_face]));
+            printf("Z mean: %.6f   ;   ", FIXED_TO_FLOAT(faces->z_mean[target_face]));
+            printf("Z max: %.6f\n\n", FIXED_TO_FLOAT(faces->z_max[target_face]));
+            if (pos_in_sorted >= 0) printf("Position in sorted list: %d\n", pos_in_sorted);
+
+            if (vn == 0) {
+                printf("Vertex count: %d (hidden - showing %d saved vertices)\n\n", vn, effective_vn);
+            } else {
+                printf("Vertex count: %d\n\n", vn);
+            }
+            int offt = faces->vertex_indices_ptr[target_face];
+
+            for (int k = 0; k < effective_vn; ++k) {
+                int vid = faces->vertex_indices_buffer[offt + k] - 1;
+                printf("vertex[%d] idx=%d model=(%f,%f,%f) obs=(%f,%f,%f) x2d=%d y2d=%d\n",
+                       k, vid,
+                       FIXED_TO_FLOAT(model->vertices.x[vid]), FIXED_TO_FLOAT(model->vertices.y[vid]), FIXED_TO_FLOAT(model->vertices.z[vid]),
+                       FIXED_TO_FLOAT(model->vertices.xo[vid]), FIXED_TO_FLOAT(model->vertices.yo[vid]), FIXED_TO_FLOAT(model->vertices.zo[vid]),
+                       model->vertices.x2d[vid], model->vertices.y2d[vid]);
+            }
+
+            printf("\nPress 'F' to save to file Face%d.txt, 'V' to reverse vertex order,\n", target_face);
+            printf("'H' to hide, 'R' to restore, 'A' to restore all, any other key to return to graphics...\n");
+            fflush(stdout);
+            int tkey = getkeypress ();
+
+            if (tkey == 'F' || tkey == 'f') {
+                char fname[64]; sprintf(fname, "Face%d.txt", target_face);
+                FILE *out = fopen(fname, "w");
+                if (out) {
+                    fprintf(out, "Face %d\n", target_face);
+                    if (pos_in_sorted >= 0) fprintf(out, "Position in sorted list: %d\n", pos_in_sorted);
+                    if (vn == 0) {
+                        fprintf(out, "Vertex count: %d (hidden - showing %d saved vertices)\n", vn, effective_vn);
+                    } else {
+                        fprintf(out, "Vertex count: %d\n", vn);
+                    }
+                    for (int k = 0; k < effective_vn; ++k) {
+                        int vid = faces->vertex_indices_buffer[offt + k] - 1;
+                        fprintf(out, "v[%d] idx=%d model=(%f,%f,%f) obs=(%f,%f,%f) x2d=%d y2d=%d\n",
+                                k, vid,
+                                FIXED_TO_FLOAT(model->vertices.x[vid]), FIXED_TO_FLOAT(model->vertices.y[vid]), FIXED_TO_FLOAT(model->vertices.z[vid]),
+                                FIXED_TO_FLOAT(model->vertices.xo[vid]), FIXED_TO_FLOAT(model->vertices.yo[vid]), FIXED_TO_FLOAT(model->vertices.zo[vid]),
+                                model->vertices.x2d[vid], model->vertices.y2d[vid]);
+                    }
+                    float a = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
+                    float b = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
+                    float c = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
+                    float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
+                    fprintf(out, "Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
+                    fprintf(out, "Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",
+                            (vn == 0) ? "HIDDEN" : "NOT HIDDEN");
+                    if (vn == 0) {
+                        fprintf(out, "Saved vertex count (before hide): %d\n", faces->saved_vertex_count[target_face]);
+                    }
+                    fprintf(out, "Z min: %.6f\n", FIXED_TO_FLOAT(faces->z_min[target_face]));
+                    fprintf(out, "Z mean: %.6f\n", FIXED_TO_FLOAT(faces->z_mean[target_face]));
+                    fprintf(out, "Z max: %.6f\n", FIXED_TO_FLOAT(faces->z_max[target_face]));
+                    fclose(out);
+                    printf("Saved to %s\n", fname); fflush(stdout);
+                } else {
+                    printf("Error: unable to open %s for writing\n", fname); fflush(stdout);
+                }
+                printf("Press any key to return to graphics...\n"); fflush(stdout);
+                int tmpk = getkeypress ();
+
+                // Return to graphics (loop will redraw)
+                continue;
+            }  
+            else if (tkey == 'V' || tkey == 'v') {
+                // printf("Reversing vertex order...\n"); // useless since now face order reversing is instantaneous.
+                reverseFaceVertexOrder(model, target_face);
+                backup_flags[target_face] = faces->display_flag[target_face];
+                printf("Face %d vertex order reversed.\n\n", target_face);
+                printf("Press any key to return to graphics...\n"); fflush(stdout);
+                int tmpk = getkeypress ();
+                // Return to graphics (loop will redraw)
+                continue;
+            } else if (tkey == 'H' || tkey == 'h') {
+                // Hide the currently selected face (vertex_count saved for later restore)
+                hideFace(model, target_face);
+                backup_flags[target_face] = faces->display_flag[target_face];
+                printf("Face %d hidden.\n\n", target_face);
+                printf("Press any key to return to graphics...\n"); fflush(stdout);
+                int tmpk = getkeypress ();
+                continue;
+            } else if (tkey == 'R' || tkey == 'r') {
+                // Restore the currently selected face and recompute its plane/display_flag
+                // (the model may have rotated since it was hidden)
+                restoreFace(model, target_face);
+                calculateFaceDepths(model, NULL, faces->face_count);
+                backup_flags[target_face] = faces->display_flag[target_face];
+                printf("Face %d restored.\n\n", target_face);
+                printf("Press any key to return to graphics...\n"); fflush(stdout);
+                int tmpk = getkeypress ();
+                continue;
+            } else if (tkey == 'A' || tkey == 'a') {
+                // Restore every hidden face, then a single global recompute
+                restoreAllFaces(model);
+                calculateFaceDepths(model, NULL, faces->face_count);
+                for (int k2 = 0; k2 < faces->face_count; ++k2) backup_flags[k2] = faces->display_flag[k2];
+                printf("All faces restored.\n\n");
+                printf("Press any key to return to graphics...\n"); fflush(stdout);
+                int tmpk = getkeypress ();
+                continue;
+            } else {
+                // Any other key returns to graphics
+                continue;
+            }
+        } else {
+            // Any other key exits
+            quit = 1;
+        }
+    }
+    
+    DoText();
+
+    // Restore state
+    framePolyOnly = old_frame;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+}
+
+static void reverseFaceVertexOrder(Model3D* model, int face_idx) {
+    if (!model || face_idx < 0) return;
+    FaceArrays3D* faces = &model->faces;
+    if (face_idx >= faces->face_count) return;
+
+    int n = faces->vertex_count[face_idx];
+    if (n < 3) return;
+    int off = faces->vertex_indices_ptr[face_idx];
+    for (int i = 0; i < n / 2; ++i) {
+        int tmp = faces->vertex_indices_buffer[off + i];
+        faces->vertex_indices_buffer[off + i] = faces->vertex_indices_buffer[off + n - 1 - i];
+        faces->vertex_indices_buffer[off + n - 1 - i] = tmp;
+    }
+    
+    // set new plane coefs
+    faces->plane_a[face_idx] = -faces->plane_a[face_idx];
+    faces->plane_b[face_idx] = -faces->plane_b[face_idx];
+    faces->plane_c[face_idx] = -faces->plane_c[face_idx];
+    faces->plane_d[face_idx] = -faces->plane_d[face_idx];
+    
+    // set display_flag accordingly
+    {
+        int behind_camera = (faces->z_min[face_idx] < 0);
+        if (behind_camera) {
+            faces->display_flag[face_idx] = 0;
+        } else if (cull_back_faces && faces->plane_d[face_idx] <= 0) {
+            faces->display_flag[face_idx] = 0;
+        } else {
+            faces->display_flag[face_idx] = 1;
+        }
+    }
+    
+    // XXXX useless since new calculateFaceDepths using all vertices to calculte orientation.
+        // calculateFaceDepths(model, NULL, faces->face_count);
+        // painter_newell_sancha_fast(model, faces->face_count); ==> was useless anyway
+}
+
+void hideFace(Model3D* model, int face_idx) {
+    FaceArrays3D* faces = &model->faces;
+    if (faces->vertex_count[face_idx] > 0) {
+        faces->saved_vertex_count[face_idx] = faces->vertex_count[face_idx];
+    }
+    faces->display_flag[face_idx] = 0;
+    faces->vertex_count[face_idx] = 0;
+}
+
+void restoreFace(Model3D* model, int face_idx) {
+    FaceArrays3D* faces = &model->faces;
+    // double condition : la face doit être ACTUELLEMENT masquée (vertex_count==0)
+    // ET avoir une sauvegarde valide — empêche d'écraser une face jamais masquée
+    // si saved_vertex_count contenait une valeur garbage
+    if (faces->vertex_count[face_idx] == 0 && faces->saved_vertex_count[face_idx] > 0) {
+        faces->vertex_count[face_idx] = faces->saved_vertex_count[face_idx];
+        faces->saved_vertex_count[face_idx] = 0;
+    }
+}
+
+void restoreAllFaces(Model3D* model) {
+    FaceArrays3D* faces = &model->faces;
+    int i;
+    for (i = 0; i < faces->face_count; ++i) {
+        if (faces->vertex_count[i] == 0 && faces->saved_vertex_count[i] > 0) {
+            faces->vertex_count[i] = faces->saved_vertex_count[i];
+            faces->saved_vertex_count[i] = 0;
+        }
+    }
+}
+
+/* Helper: enforce mandatory after-relations.
+ * This mechanism preserves the invariant simply: after a move discovered by
+ * `check_sort_repair`, it records the relation 'a after b'.
+ * If a later move changes the global order, it revalidates all recorded
+ * relations and adjusts the list to explicitly restore `a` after `b`.
+ *
+ * By design, this code is conservative: it applies relations one by one and
+ * restarts the pass after each correction to avoid skipping a relation that
+ * would become invalid after a move.
+ */
+static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of_face, int relation_count, const int (*relations)[2]) {
+    if (!model || !pos_of_face || !relations) return;
+    FaceArrays3D* faces = &model->faces;
+
+    for (int i = 0; i < relation_count; ++i) {
+        int a = relations[i][0];
+        int b = relations[i][1];
+
+        // Skip invalid or out-of-bounds relations
+        if (a < 0 || a >= n || b < 0 || b >= n) continue;
+
+        int pa = pos_of_face[a];
+        int pb = pos_of_face[b];
+
+        // If a is not after b, move a immediately after b
+        if (pa <= pb) {
+            int tmp = faces->sorted_face_indices[pa];
+            memmove(&faces->sorted_face_indices[pa], &faces->sorted_face_indices[pa + 1], sizeof(int) * (pb - pa));
+            faces->sorted_face_indices[pb] = tmp;
+
+            // Repair the position table in O(delta)
+            for (int k = pa; k <= pb; ++k) {
+                pos_of_face[faces->sorted_face_indices[k]] = k;
+            }
+
+            // Restart from zero to ensure the next relation is evaluated on the
+            // updated order (simple convergence guarantee).
+            i = -1;
+        }
+    }
+}
+
+/* pair_order_relation
+ * -------------------
+ * Purpose:
+ *  - Apply the same per-pair tests used by the painter (tests 1..7) to decide
+ *    whether two faces are conclusively ordered.
+ * Behavior / Return values:
+ *  - returns -1 if f1 is conclusively BEFORE f2
+ *  - returns  1 if f1 is conclusively AFTER f2
+ *  - returns  0 if inconclusive
+ * Notes:
+ *  - Uses depth (z_min/z_max), axis-aligned bbox separation (X/Y) and plane-based
+ *    vertex-side tests (observer-side checks) mirroring painter logic.
+ */
+segment "code01";
+static int pair_order_relation(Model3D* model, int f1, int f2) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
+
+    // Test 1: depth separation
+    if (faces->z_max[f2] <= faces->z_min[f1]) return -1; // f1 before f2
+    if (faces->z_max[f1] <= faces->z_min[f2]) return 1;  // f1 after f2
+
+    // Test 2/3: bbox separation (symmetric)
+    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+    if (maxx1 <= minx2) return -1; // f1 left of f2
+    if (maxx2 <= minx1) return 1;  // f1 right of f2
+    if (maxy1 <= miny2) return -1; // f1 below f2
+    if (maxy2 <= miny1) return 1;  // f1 above f2
+
+    // plane-only geometry tests factored out into helper
+    int geo = geometric_face_relation(model, f1, f2);
+    if (geo != 0) return geo;
+    /* swapped orientation covers the symmetric tests (5 & 7 in the old
+       numbering).  Invert the result because the arguments are reversed. */
+    geo = geometric_face_relation(model, f2, f1);
+    if (geo != 0) return -geo;
+
+    // Non-conclusive
+    return 0;
 }
 
 
+/* check_sort_repair
+ * -----------------
+ * Minimal deterministic repair of face ordering. For each pair that
+ * `check_sort` would report as a mismatch, move the offending face by
+ * a single minimal step so the ordering matches `ray_cast`:
+ *  - If ray_cast == -1 (f1 closer than f2), ensure f1 is immediately AFTER f2.
+ *  - If ray_cast ==  1 (f1 farther  than f2), ensure f1 is immediately BEFORE f2.
+ * Returns the number of repairs performed.
+ */
+int check_sort_repair(Model3D* model, int face_count) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (face_count <= 0) return 0;
+
+    int n = face_count;
+    int *pos_of_face = (int*)malloc(sizeof(int) * n);
+    if (!pos_of_face) return 0;
+    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+
+    /* Mandatory relations recorded during the repair pass.
+     * Each entry is [a,b] meaning: a must come after b in
+     * faces->sorted_face_indices (pos[a] > pos[b]).
+     *
+     * This implements the requested mechanism: if A was moved after B, the
+     * constraint is preserved and is continuously checked when other moves may
+     * reorder B.
+     */
+    int relation_capacity = n + 16;
+    int relation_count = 0;
+    int (*after_relations)[2] = (int(*)[2])malloc(sizeof(int) * 2 * relation_capacity);
+    if (!after_relations) {
+        free(pos_of_face);
+        return 0;
+    }
+
+    int repairs = 0;
+    const char* instructions = "\nWhen graphics is displayed  :\nESC=abort, RETURN=automatic mode (no graphics), N=skip, any other key = continue.\n\n";
+    int automatic_mode = 0; /* 0=graphical inspect, 1=automatic (no graphics) */
+
+    printf("%s", instructions);
+    for (int f1 = 0; f1 < n; ++f1) {
+        printf("%d ", f1);
+        if (faces->display_flag[f1] == 0) continue;
+        if (cull_back_faces && faces->plane_d[f1] <= 0) continue;
+        for (int f2 = f1 + 1; f2 < n; ++f2) {
+            if (faces->display_flag[f2] == 0) continue;
+            if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
+
+            /* Quick Z reject: no 2D overlap is possible if depth ranges do not intersect */
+            if (faces->z_max[f1] <= faces->z_min[f2] || faces->z_max[f2] <= faces->z_min[f1]) continue;
+
+            /* Quick AABB reject using existing helper */
+            int _ix0, _iy0, _ix1, _iy1;
+            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
+
+            // If projected polygons do not overlap (touching considered non-overlap), skip
+            if (!projected_polygons_overlap(model, f1, f2)) continue;
+
+            int pos1 = pos_of_face[f1];
+            int pos2 = pos_of_face[f2];
+            /* Try both intersection centroids (both orders) and prefer the one
+             * with the larger positive clipped area. If the selected point yields
+             * an indeterminate ray_cast (rc==0), try the other centroid, then
+             * finally fall back to bbox-center as last resort. This mirrors the
+             * inspector's behaviour but is slightly more tolerant (tries multiple
+             * candidates) to avoid missing detectable inversions.
+             */
+            int cx = 0, cy = 0;
+            int point_source = 0; /* 1=cent1, 2=cent2, 3=bbox */
+            int rc = 0;
+
+            /* Try a lightweight geometry test first, before running SH clipping. */
+            {
+                int geo = geo_face_order(model, f1, f2);
+                if (geo != 0) {
+                    /* geo_face_order returns -1 if f1 is before f2, 1 if f1 is after f2.
+                     * check_sort_repair uses rc == -1 to mean f1 is in front.
+                     * Invert the sign to match raycast semantics.
+                     */
+                    rc = (geo == -1) ? 1 : -1;
+                    point_source = 4; /* geo */
+                }
+            }
+
+            long long a1 = 0, a2 = 0;
+            int cx1 = 0, cy1 = 0, cx2 = 0, cy2 = 0;
+            int have1 = 0;
+            int have2 = 0;
+
+            /* Only perform SH centroid clipping if the geometry test is inconclusive. */
+            if (rc == 0) {
+                have1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &cx1, &cy1, &a1) && a1 > 0;
+                if (have1) {
+                    cx = cx1; cy = cy1; point_source = 1;
+                    {
+                        float _tf1 = 0.0f, _tf2 = 0.0f;
+                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                        } else rc = 0;
+                    }
+                }
+            }
+
+            if (rc == 0) {
+                have2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &cx2, &cy2, &a2) && a2 > 0;
+                if (!have1 && have2) {
+                    cx = cx2; cy = cy2; point_source = 2;
+                    {
+                        float _tf1 = 0.0f, _tf2 = 0.0f;
+                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                        } else rc = 0;
+                    }
+                } else if (have1 && have2 && rc == 0) {
+                    cx = cx2; cy = cy2; point_source = 2;
+                    {
+                        float _tf1 = 0.0f, _tf2 = 0.0f;
+                        if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                            if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                        } else rc = 0;
+                    }
+                }
+            }
+
+            // Potential extension: if geo is also indeterminate, we could try a
+            // QuickDraw-based centroid raycast here using the QD intersection
+            // centroid computed by compute_intersection_centroid_ordered_qd_fixed.
+            // That would look something like:
+            //
+            //   if (rc == 0 && use_qd) {
+            //       int qd_cx = 0, qd_cy = 0;
+            //       long long qd_area2 = 0;
+            //       if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &qd_cx, &qd_cy, &qd_area2) && qd_area2 != 0) {
+            //           float _tf1 = 0.0f, _tf2 = 0.0f;
+            //           if (ray_cast_distances(model, f1, f2, qd_cx, qd_cy, &_tf1, &_tf2)) {
+            //               if (_tf1 < _tf2) rc = -1;
+            //               else if (_tf1 > _tf2) rc = 1;
+            //               else rc = 0;
+            //           }
+            //       }
+            //   }
+            //
+            // We leave it commented because it may slow down check_sort_repair too much.
+
+            /* Last resort: bbox center */
+            if (rc == 0) {
+                int ix0 = _ix0; int ix1 = _ix1; int iy0 = _iy0; int iy1 = _iy1;
+                cx = (ix0 + ix1) / 2; cy = (iy0 + iy1) / 2; point_source = 3;
+                {
+                    float _tf1 = 0.0f, _tf2 = 0.0f;
+                    if (ray_cast_distances(model, f1, f2, cx, cy, &_tf1, &_tf2)) {
+                        if (_tf1 < _tf2) rc = -1; else if (_tf1 > _tf2) rc = 1; else rc = 0;
+                    } else rc = 0;
+                    
+                }
+            }
+
+            if (debug_overlap_subj == f1 && debug_overlap_clip == f2) {
+                if (point_source == 1) printf("check_sort_repair: using centroid f1->f2 (%d,%d) area1=%lld\n", cx, cy, a1);
+                else if (point_source == 2) printf("check_sort_repair: using centroid f2->f1 (%d,%d) area2=%lld\n", cx, cy, a2);
+                else if (point_source == 4) printf("check_sort_repair: using geo_face_order decision (%d,%d)\n", cx, cy);
+                else printf("check_sort_repair: using bbox-center (%d,%d)\n", cx, cy);
+            }
+            if (rc == 0) continue; // undetermined
+
+            if (rc == -1 || rc == 1) {
+                /* Single-direction strategy: always move the *closer* face forward
+                 * (towards higher indices) to be immediately AFTER the other face.
+                 */
+                int closer = (rc == -1) ? f1 : f2;
+                int other  = (rc == -1) ? f2 : f1;
+                int pclos = pos_of_face[closer];
+                int pother = pos_of_face[other];
+                if (pclos <= pother) {
+                    int tmp = faces->sorted_face_indices[pclos];
+                    if (!automatic_mode) {
+                        char msg[160];
+                        snprintf(msg, sizeof(msg), "Face %d after face %d ? \n(N=skip, ESC=abort, RET=auto, other=apply)", closer, other);
+                        int _k = show_inspect_faces_with_message(model, closer, other, msg, 3, 188);
+                        if (_k == 27) { /* ESC */ free(pos_of_face); free(after_relations); return repairs; }
+                        if (_k == 'N' || _k == 'n') {
+                            // skip move, continue to next pair
+                            if (!automatic_mode) {
+                                printf("Check and repair running...\n"); fflush(stdout);
+                                printf("\n%s\n", instructions);
+                                printf("Face %d\n", f1);
+                            }
+                            continue;
+                        }
+                        if (_k == 13 || _k == 10) { /* RETURN/ENTER */
+                            automatic_mode = 1;
+                            // Fall through to move execution, but also show text status for return.
+                            if (!automatic_mode) {
+                                printf("Check and repair running...\n"); fflush(stdout);
+                                printf("\n%s\n", instructions);
+                                printf("Face %d\n", f1);
+                            }
+                        }
+                    }
+
+                    if (pclos < pother) {
+                        memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
+                        faces->sorted_face_indices[pother] = tmp;
+                        for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
+                        ++repairs;
+
+                        /* 
+                         * Record the constraint "closer must be after other".
+                         * This relation becomes an obligation to maintain after
+                         * every change that affects the ordering.
+                         */
+                        if (relation_count >= relation_capacity) {
+                            int new_cap = relation_capacity * 2;
+                            int (*tmp_rel)[2] = (int(*)[2])realloc(after_relations, sizeof(int) * 2 * new_cap);
+                            if (tmp_rel) {
+                                after_relations = tmp_rel;
+                                relation_capacity = new_cap;
+                            }
+                        }
+                        if (relation_count < relation_capacity) {
+                            after_relations[relation_count][0] = closer;
+                            after_relations[relation_count][1] = other;
+                            relation_count++;
+                        }
+
+                        enforce_mandatory_after_relations(model, n, pos_of_face, relation_count, after_relations);
+                    }
+
+                    if (!automatic_mode) {
+                        printf("Check and repair running...\n"); fflush(stdout);
+                        printf("\n%s\n", instructions);
+                    }
+                }
+            }
+        }
+    }
+
+    free(pos_of_face);
+    free(after_relations);
+    printf("\ncheck_sort_repair: repairs=%d\n", repairs);
+    return repairs;
+}
+
+/* check_sort_repair_fast
+ * ----------------------
+ * Faster variant of check_sort_repair that:
+ *  - uses the QuickDraw region intersection centroid (QD) as the test point,
+ *  - uses ray_cast_distances() at that single point,
+ *  - performs the same minimal forward-only reordering when the ray cast
+ *    indicates the current sort order is incorrect.
+ *
+ * The intent is to keep the same repair strategy, but with fewer centroid
+ * candidates and less per-pair overhead.
+ */
+int check_sort_repair_fast(Model3D* model, int face_count) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (face_count <= 0) return 0;
+
+    startgraph(mode); /* Required for QuickDraw region operations */
+    
+    int n = face_count;
+    int *pos_of_face = (int*)malloc(sizeof(int) * n);
+    if (!pos_of_face) {
+        endgraph();
+        return 0;
+    }
+
+    int relation_capacity = n + 16;
+    int relation_count = 0;
+    int (*after_relations)[2] = (int(*)[2])malloc(sizeof(int) * 2 * relation_capacity);
+    if (!after_relations) {
+        free(pos_of_face);
+        endgraph();
+        return 0;
+    }
+
+    MoveTo(3,10); printf("Computing repairs..."); /* Inform user that the batch test is running (prevents blank-screen confusion) */
+    
+    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+
+    int repairs = 0;
+
+    for (int f1 = 0; f1 < n; ++f1) {
+        if (faces->display_flag[f1] == 0) continue;
+        if (cull_back_faces && faces->plane_d[f1] <= 0) continue;
+        for (int f2 = f1 + 1; f2 < n; ++f2) {
+            if (faces->display_flag[f2] == 0) continue;
+            if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
+
+            /* Quick Z reject: no 2D overlap is possible if depth ranges do not intersect */
+            if (faces->z_max[f1] <= faces->z_min[f2] || faces->z_max[f2] <= faces->z_min[f1]) continue;
+
+            /* Quick AABB reject */
+            int _ix0, _iy0, _ix1, _iy1;
+            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
+
+            /* Only consider true overlap (not touching) */
+            if (!projected_polygons_overlap(model, f1, f2)) continue;
+
+            /* Use QuickDraw region centroid (fast and representative) as first attempt. */
+            int cx = 0, cy = 0;
+            long long area2 = 0;
+            int got_centroid = 0;
+
+            if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &cx, &cy, &area2) && area2 != 0) {
+                got_centroid = 1;
+            }
+
+            if (!got_centroid) continue;
+
+            float tf1 = 0.0f, tf2 = 0.0f;
+            if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) continue;
+
+            int rc = 0;
+            if (tf1 < tf2) rc = -1;
+            else if (tf1 > tf2) rc = 1;
+            else rc = 0;
+            if (rc == 0) continue;
+
+            int closer = (rc == -1) ? f1 : f2;
+            int other  = (rc == -1) ? f2 : f1;
+            int pclos = pos_of_face[closer];
+            int pother = pos_of_face[other];
+            if (pclos <= pother) {
+                int tmp = faces->sorted_face_indices[pclos];
+                if (pclos < pother) {
+                    memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
+                    faces->sorted_face_indices[pother] = tmp;
+                    for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
+                    ++repairs;
+
+                    // Record required relation A after B and enforce all relations.
+                    if (relation_count >= relation_capacity) {
+                        int new_cap = relation_capacity * 2;
+                        int (*tmp_rel)[2] = (int(*)[2])realloc(after_relations, sizeof(int) * 2 * new_cap);
+                        if (tmp_rel) {
+                            after_relations = tmp_rel;
+                            relation_capacity = new_cap;
+                        }
+                    }
+                    if (relation_count < relation_capacity) {
+                        after_relations[relation_count][0] = closer;
+                        after_relations[relation_count][1] = other;
+                        relation_count++;
+                    }
+                    enforce_mandatory_after_relations(model, n, pos_of_face, relation_count, after_relations);
+                }
+            }
+        }
+    }
+    free(pos_of_face);
+    free(after_relations);
+    MoveTo(3,20); 
+    printf("Repairs done: repairs=%d\n", repairs); /* Inform user that repairs are done */
+    printf("Press any key to continue...\n");
+    keypress();
+    endgraph();
+    DoText(); /* Return to text mode */
+    return repairs;
+}
+
+/* Interactive inspector: single UI to run the full diagnostic battery on a face pair.
+ * - Displays model in wireframe and highlights f1 (green) and f2 (orange) with face numbers.
+ * - Runs all tests (uses QuickDraw-only tests while in graphical mode).
+ * - Stores textual results in memory and only prints them when user presses SPACE.
+ * - Keyboard: ESC=return, Left/Right/Up/Down navigation (custom wrap rules), SPACE=show text.
+ */
+segment "inspect_face_pair_ui";
 /* Helper: geometric painter-based order wrapper
  * ------------------------------------------------
  * Returns: -1 if f1 is before f2, 1 if f1 is after f2, 0 if undetermined
  * Behavior: runs pair_plane_before/after and, if inconclusive, retries with faces swapped.
  */
-
 static int geo_face_order(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     int r = 0;
@@ -3947,194 +5784,6 @@ static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py) {
     if (r == 1) return 2;      /* f2 closer */
     return 0;
 }
-
-/* Core diagnostic: performs the ordered suite of tests (text-mode safe unless use_qd=1)
- * Tests executed in the order requested by the UI design and records textual lines.
- */
-segment "compare_faces_diagnostic";
-/* Helper: dump diagnostic results into a text file (appends).
- * The filename uses the convention f<id1>VSf<id2>.txt so each pair gets
- * its own file.  A header line and all saved result_text entries are
- * written before closing the file.
- */
-static void dump_compare_results_to_file(const CompareFacesResult *out, int f1, int f2) {
-    if (!out) return;
-    char fname[64];
-    sprintf(fname, "f%dVSf%d.txt", f1, f2);
-    FILE *f = fopen(fname, "a");
-    if (!f) return;
-    fprintf(f, "=== Face pair: f%d vs f%d ===\n", f1, f2);
-    for (int i = 0; i < out->results_count; ++i) {
-        fprintf(f, "%s\n", out->results_text[i]);
-    }
-    fprintf(f, "\n");
-    fclose(f);
-}
-
-static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out) {
-    if (!model || !out) return;
-    FaceArrays3D* faces = &model->faces;
-    memset(out, 0, sizeof(*out));
-
-    /* 1) Z-range test (timed) */
-    {
-        long t_z_start = GetTick();
-        if (faces->z_max[f2] <= faces->z_min[f1]) {
-            out->z_verdict = 1; long t_z_end = GetTick();
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d (%ld ticks)", f1, f2, t_z_end - t_z_start);
-        } else if (faces->z_max[f1] <= faces->z_min[f2]) {
-            out->z_verdict = 2; long t_z_end = GetTick();
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d (%ld ticks)", f2, f1, t_z_end - t_z_start);
-        } else {
-            out->z_verdict = 0; long t_z_end = GetTick();
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: Undetermined (%ld ticks)", t_z_end - t_z_start);
-        }
-    }
-
-    /* 2) bbox overlap (timed) */
-    int ix0=0, iy0=0, ix1=0, iy1=0;
-    {
-        long t_bbox_start = GetTick();
-        int bbox_res = compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1);
-        long t_bbox_end = GetTick();
-        if (bbox_res) {
-            out->bbox_ok = 1; out->bbox_ix0 = ix0; out->bbox_iy0 = iy0; out->bbox_ix1 = ix1; out->bbox_iy1 = iy1;
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: yes (rect=%d,%d - %d,%d) (%ld ticks)", ix0, iy0, ix1, iy1, t_bbox_end - t_bbox_start);
-        } else {
-            out->bbox_ok = 0;
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: no (%ld ticks)", t_bbox_end - t_bbox_start);
-        }
-    }
-
-    /* 3) polygon overlap (only if bbox overlap, timed) */
-    if (out->bbox_ok) {
-        long t_poly_start = GetTick();
-        int p_overlap = projected_polygons_overlap(model, f1, f2);
-        long t_poly_end = GetTick();
-        /* compare: poly_overlap trace removed */
-        if (p_overlap) {
-            out->poly_overlap = 1;
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap: yes");
-        } else {
-            out->poly_overlap = 0;
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap: no");
-        }
-    } else {
-        out->poly_overlap = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons: skipped (bbox non-overlap)");
-    }
-
-    /* 4) 3D geometry (painter tests via plane relations, timed) */
-    {
-        long t_geo_start = GetTick();
-        int geo = geo_face_order(model, f1, f2);
-        long t_geo_end = GetTick();
-        /* geo == -1 means f1 is behind f2, so f2 is in front */
-        if (geo == -1) { out->geo_verdict = 2; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d (%ld ticks)", f2, f1, t_geo_end - t_geo_start); }
-        else if (geo == 1) { out->geo_verdict = 1; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d (%ld ticks)", f1, f2, t_geo_end - t_geo_start); }
-        else { out->geo_verdict = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: Undetermined (%ld ticks)", t_geo_end - t_geo_start); }
-    }
-
-    /* If polygons do not overlap, mark tests 5..9 as non-applicable (N/A) */
-    if (!out->poly_overlap) {
-        out->sh_centroid_ok = 0; out->sh_area2 = 0;
-        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: N/A (no polygon overlap)");
-
-        out->qd_centroid_ok = 0; out->qd_area2 = 0;
-        if (use_qd) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: N/A (no polygon overlap)");
-        else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: skipped (QD disabled)");
-
-        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: N/A (no polygon overlap)");
-        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: N/A (no polygon overlap)");
-        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: N/A (no polygon overlap)");
-    } else {
-        /* 5) Centroid via Sutherland–Hodgman (integer) */
-        {
-            long long area2 = 0;
-            long t_sh_start = GetTick();
-            int sh_fallback = 0;
-            int sh_ok = compute_intersection_centroid_ordered_fixed_tryboth(model, f1, f2, &out->sh_cx, &out->sh_cy, &area2, &sh_fallback) && (area2 != 0);
-            long t_sh_end = GetTick();
-            out->sh_centroid_ok = sh_ok ? 1 : 0; out->sh_area2 = area2;
-            if (out->sh_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: %d/%d (area2=%lld) (%ld ticks)", out->sh_cx, out->sh_cy, (long long)area2, t_sh_end - t_sh_start);
-            else {
-                /* If clipping previously bailed out for this pair, report that explicitly */
-                if ((clip_last_bailout_subj == f1 && clip_last_bailout_clip == f2) || (clip_last_bailout_subj == f2 && clip_last_bailout_clip == f1)) {
-                    snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: undetermined (clipping bail-out) (%ld ticks)", t_sh_end - t_sh_start);
-                    /* clear marker after reporting */
-                    clip_last_bailout_subj = -1; clip_last_bailout_clip = -1;
-                } else {
-                    snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: undetermined (%ld ticks)", t_sh_end - t_sh_start);
-                }
-                /* Explicitly clear SH debug polygon to avoid stale visuals elsewhere */
-                debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0;
-                debug_clip_centroid_x = 0; debug_clip_centroid_y = 0;
-            }
-        }
-
-        /* 6) Centroid via QuickDraw region (only if use_qd==1 and region available) */
-        out->qd_centroid_ok = 0;
-        if (use_qd) {
-            long long qd_a2 = 0;
-            long t_qd_start = GetTick();
-            int qd_ok = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &out->qd_cx, &out->qd_cy, &qd_a2);
-            long t_qd_end = GetTick();
-            /* compare: QD result trace removed */
-            out->qd_centroid_ok = qd_ok ? 1 : 0; out->qd_area2 = qd_a2;
-            if (out->qd_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: %d/%d (area2=%lld) (%ld ticks)", out->qd_cx, out->qd_cy, (long long)qd_a2, t_qd_end - t_qd_start);
-            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: undetermined (%ld ticks)", t_qd_end - t_qd_start);
-        } else {
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: skipped (QD disabled)");
-        }
-
-        /* 7) Ray cast at bbox center */
-        if (out->bbox_ok) {
-            int bcx = (out->bbox_ix0 + out->bbox_ix1) / 2; int bcy = (out->bbox_iy0 + out->bbox_iy1) / 2;
-            long t_bbox_rc_start = GetTick();
-            out->bbox_raycast = run_raycast_test(model, f1, f2, bcx, bcy);
-            long t_bbox_rc_end = GetTick();
-            /* compare: bbox_raycast trace removed */
-            if (out->bbox_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d (%ld ticks)", f1, f2, t_bbox_rc_end - t_bbox_rc_start);
-            else if (out->bbox_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d (%ld ticks)", f2, f1, t_bbox_rc_end - t_bbox_rc_start);
-            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: undetermined (%ld ticks)", t_bbox_rc_end - t_bbox_rc_start);
-        } else {
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: skipped (no bbox)");
-        }
-
-        /* 8) Ray cast at SH centroid */
-        if (out->sh_centroid_ok) {
-            long t_shrc_start = GetTick();
-            out->sh_raycast = run_raycast_test(model, f1, f2, out->sh_cx, out->sh_cy);
-            long t_shrc_end = GetTick();
-            /* compare: SH_raycast trace removed */
-            if (out->sh_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d (%ld ticks)", f1, f2, t_shrc_end - t_shrc_start);
-            else if (out->sh_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d (%ld ticks)", f2, f1, t_shrc_end - t_shrc_start);
-            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: undetermined (%ld ticks)", t_shrc_end - t_shrc_start);
-        } else {
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: skipped (no SH centroid)");
-        }
-
-        /* 9) Ray cast at QD centroid */
-        if (use_qd && out->qd_centroid_ok) {
-            long t_qdrc_start = GetTick();
-            out->qd_raycast = run_raycast_test(model, f1, f2, out->qd_cx, out->qd_cy);
-            long t_qdrc_end = GetTick();
-            /* compare: QD_raycast trace removed */
-            if (out->qd_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d (%ld ticks)", f1, f2, t_qdrc_end - t_qdrc_start);
-            else if (out->qd_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d (%ld ticks)", f2, f1, t_qdrc_end - t_qdrc_start);
-            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: undetermined (%ld ticks)", t_qdrc_end - t_qdrc_start);
-        } else {
-            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: skipped (QD unavailable)");
-        }
-    }
-}
-
-/* Interactive inspector: single UI to run the full diagnostic battery on a face pair.
- * - Displays model in wireframe and highlights f1 (green) and f2 (orange) with face numbers.
- * - Runs all tests (uses QuickDraw-only tests while in graphical mode).
- * - Stores textual results in memory and only prints them when user presses SPACE.
- * - Keyboard: ESC=return, Left/Right/Up/Down navigation (custom wrap rules), SPACE=show text.
- */
-segment "inspect_face_pair_ui";
 static void inspect_face_pair_ui(Model3D* model) {
     if (!model) return;
     FaceArrays3D* faces = &model->faces;
@@ -4539,1007 +6188,1009 @@ static void inspect_face_pair_ui(Model3D* model) {
     }
 }
 
-static void reverseFaceVertexOrder(Model3D* model, int face_idx) {
-    if (!model || face_idx < 0) return;
-    FaceArrays3D* faces = &model->faces;
-    if (face_idx >= faces->face_count) return;
-
-    int n = faces->vertex_count[face_idx];
-    if (n < 3) return;
-    int off = faces->vertex_indices_ptr[face_idx];
-    for (int i = 0; i < n / 2; ++i) {
-        int tmp = faces->vertex_indices_buffer[off + i];
-        faces->vertex_indices_buffer[off + i] = faces->vertex_indices_buffer[off + n - 1 - i];
-        faces->vertex_indices_buffer[off + n - 1 - i] = tmp;
-    }
-    
-    // set new plane coefs
-    faces->plane_a[face_idx] = -faces->plane_a[face_idx];
-    faces->plane_b[face_idx] = -faces->plane_b[face_idx];
-    faces->plane_c[face_idx] = -faces->plane_c[face_idx];
-    faces->plane_d[face_idx] = -faces->plane_d[face_idx];
-    
-    // set display_flag accordingly
-    {
-        int behind_camera = (faces->z_min[face_idx] < 0);
-        if (behind_camera) {
-            faces->display_flag[face_idx] = 0;
-        } else if (cull_back_faces && faces->plane_d[face_idx] <= 0) {
-            faces->display_flag[face_idx] = 0;
-        } else {
-            faces->display_flag[face_idx] = 1;
-        }
-    }
-    
-    // XXXX useless since new calculateFaceDepths using all vertices to calculte orientation.
-        // calculateFaceDepths(model, NULL, faces->face_count);
-        // painter_newell_sancha_fast(model, faces->face_count); ==> was useless anyway
-}
-
-segment "code04";
-/* showFace
- * --------
- * Purpose:
- *  - Display a single face in filled mode (green) over the wireframe model.
- * Behavior:
- *  - Prompts user for a face id (0..face_count-1).
- *  - Draws the entire model in wireframe mode.
- *  - Overlays the selected face in filled green (pen 10).
- *  - Navigate: Left/Right arrows = prev/next face ID
- *              Up/Down arrows = next/prev position in sorted list
- *  - ESC to exit
+/* Core diagnostic: performs the ordered suite of tests (text-mode safe unless use_qd=1)
+ * Tests executed in the order requested by the UI design and records textual lines.
  */
-void drawFaceIndex(Model3D* model, int face_id);
-
-// Nécessite un champ supplémentaire dans FaceArrays3D :
-// int saved_vertex_count[MAX_FACES];  // 0 = jamais masquée, sinon = vertex_count d'origine
-
-void hideFace(Model3D* model, int face_idx) {
-    FaceArrays3D* faces = &model->faces;
-    if (faces->vertex_count[face_idx] > 0) {
-        faces->saved_vertex_count[face_idx] = faces->vertex_count[face_idx];
+segment "compare_faces_diagnostic";
+/* Helper: dump diagnostic results into a text file (appends).
+ * The filename uses the convention f<id1>VSf<id2>.txt so each pair gets
+ * its own file.  A header line and all saved result_text entries are
+ * written before closing the file.
+ */
+static void dump_compare_results_to_file(const CompareFacesResult *out, int f1, int f2) {
+    if (!out) return;
+    char fname[64];
+    sprintf(fname, "f%dVSf%d.txt", f1, f2);
+    FILE *f = fopen(fname, "a");
+    if (!f) return;
+    fprintf(f, "=== Face pair: f%d vs f%d ===\n", f1, f2);
+    for (int i = 0; i < out->results_count; ++i) {
+        fprintf(f, "%s\n", out->results_text[i]);
     }
-    faces->display_flag[face_idx] = 0;
-    faces->vertex_count[face_idx] = 0;
+    fprintf(f, "\n");
+    fclose(f);
 }
 
-void restoreFace(Model3D* model, int face_idx) {
-    FaceArrays3D* faces = &model->faces;
-    // double condition : la face doit être ACTUELLEMENT masquée (vertex_count==0)
-    // ET avoir une sauvegarde valide — empêche d'écraser une face jamais masquée
-    // si saved_vertex_count contenait une valeur garbage
-    if (faces->vertex_count[face_idx] == 0 && faces->saved_vertex_count[face_idx] > 0) {
-        faces->vertex_count[face_idx] = faces->saved_vertex_count[face_idx];
-        faces->saved_vertex_count[face_idx] = 0;
-    }
-}
+static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out) {
 
-void restoreAllFaces(Model3D* model) {
+    if (!model || !out) return;
     FaceArrays3D* faces = &model->faces;
-    int i;
-    for (i = 0; i < faces->face_count; ++i) {
-        if (faces->vertex_count[i] == 0 && faces->saved_vertex_count[i] > 0) {
-            faces->vertex_count[i] = faces->saved_vertex_count[i];
-            faces->saved_vertex_count[i] = 0;
-        }
-    }
-}
+    memset(out, 0, sizeof(*out));
 
-void showFace(Model3D* model, ObserverParams* params, const char* filename) {
-    if (!model || !params) return;
-    FaceArrays3D* faces = &model->faces;
-    int face_count = faces->face_count;
-    if (face_count <= 0) { printf("No faces in model\n"); return; }
-
-    // Prompt user for face id
-    printf("Enter face id (0..%d) to display: ", face_count - 1);
-    int sel = -1;
-    if (scanf("%d", &sel) != 1) {
-        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
-        printf("Input cancelled\n");
-        return;
-    }
-    // consume remaining chars on the line
+    /* 1) Z-range test (timed) */
     {
-        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
-    }
-    
-    int target_face = sel;
-    if (target_face < 0 || target_face >= face_count) {
-        printf("Invalid face id\n");
-        return;
-    }
-
-    printf("=> Face %d\n\n", target_face);
-    printf("Use arrow keys to navigate (Left/Right: face ID, Up/Down: sorted list)\n");
-    printf("Press SPACE to show detailed info about the selected face (hide/restore/restoreAll are there).\n");
-    printf("Press N to toggle the face normal display.\n");
-    printf("Use any other key to exit.\n\n");
-
-    printf("Press any key to show model...\n");
-    keypress();
-    
-    // Backup display flags
-    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
-    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
-
-    int old_frame = framePolyOnly;
-    framePolyOnly = 1; // wireframe mode
-    int show_normal = 0; // toggled by N/n
-    
-    // Navigation loop
-    int quit = 0;
-    while (!quit) {
-        startgraph(mode);
-        
-        // Draw entire model in wireframe
-        if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
-
-        // Overlay selected face in filled green (pen 10)
-        // If the face is currently hidden, draw it in gray instead using its
-        // saved vertex count, without permanently restoring it (geometry itself
-        // was never modified by hideFace, only vertex_count was zeroed).
-        if (faces->vertex_count[target_face] > 0) {
-            faces->display_flag[target_face] = 1;
-            drawFace(model, target_face, COL_LIGHT_GREEN, 0);
-        } else if (faces->saved_vertex_count[target_face] > 0) {
-            int saved_vc = faces->saved_vertex_count[target_face];
-            int saved_df = faces->display_flag[target_face];
-
-            faces->vertex_count[target_face] = saved_vc;
-            faces->display_flag[target_face] = 1;
-            drawFace(model, target_face, COL_GREY, 0);
-
-            // revert: keep the face hidden, saved_vertex_count untouched
-            faces->vertex_count[target_face] = 0;
-            faces->display_flag[target_face] = saved_df;
+        long t_z_start = GetTick();
+        if (faces->z_max[f2] <= faces->z_min[f1]) {
+            out->z_verdict = 1; long t_z_end = GetTick();
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d (%ld ticks)", f1, f2, t_z_end - t_z_start);
+        } else if (faces->z_max[f1] <= faces->z_min[f2]) {
+            out->z_verdict = 2; long t_z_end = GetTick();
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: f%d in front of f%d (%ld ticks)", f2, f1, t_z_end - t_z_start);
+        } else {
+            out->z_verdict = 0; long t_z_end = GetTick();
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Z test: Undetermined (%ld ticks)", t_z_end - t_z_start);
         }
+    }
 
-        // --- Draw the face normal (toggle: N/n) ---
-        // Centroid and plane coefficients (A,B,C) are already in observer
-        // space (computed from vtx->xo/yo/zo in calculateFaceDepths), so we
-        // only need the observer->screen projection step from
-        // processModelFast (rotation is already applied), not the full
-        // rotation matrix.
-        if (show_normal) {
-            int offt2 = faces->vertex_indices_ptr[target_face];
-            int vn2 = faces->vertex_count[target_face];
-            // if face is hidden, use saved_vertex_count
-            if ((vn2 == 0) && (faces->saved_vertex_count[target_face] > 0)) {vn2 = faces->saved_vertex_count[target_face]; }
+    /* 2) bbox overlap (timed) */
+    int ix0=0, iy0=0, ix1=0, iy1=0;
+    {
+        long t_bbox_start = GetTick();
+        int bbox_res = compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1);
+        long t_bbox_end = GetTick();
+        if (bbox_res) {
+            out->bbox_ok = 1; out->bbox_ix0 = ix0; out->bbox_iy0 = iy0; out->bbox_ix1 = ix1; out->bbox_iy1 = iy1;
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: yes (rect=%d,%d - %d,%d) (%ld ticks)", ix0, iy0, ix1, iy1, t_bbox_end - t_bbox_start);
+        } else {
+            out->bbox_ok = 0;
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox overlap: no (%ld ticks)", t_bbox_end - t_bbox_start);
+        }
+    }
 
-            // NOTE: fixed - a bare "continue" here would skip endgraph()/getkeypress()
-            // for the rest of this loop iteration (main while(!quit) loop, not a
-            // sub-loop), leaving the graphics context unbalanced and the loop
-            // spinning without ever waiting for a key. Wrap the rest of the
-            // normal-drawing logic in "if (vn2 >= 3)" instead.
-            if (vn2 >= 3) {
-                int k2;
-                Fixed64 sx64 = 0, sy64 = 0, sz64 = 0;
+    /* 3) polygon overlap (only if bbox overlap, timed) */
+    if (out->bbox_ok) {
+        long t_poly_start = GetTick();
+        int p_overlap = projected_polygons_overlap(model, f1, f2);
+        long t_poly_end = GetTick();
+        /* compare: poly_overlap trace removed */
+        if (p_overlap) {
+            out->poly_overlap = 1;
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap: yes");
+        } else {
+            out->poly_overlap = 0;
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons overlap: no");
+        }
+    } else {
+        out->poly_overlap = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Polygons: skipped (bbox non-overlap)");
+    }
 
-                for (k2 = 0; k2 < vn2; ++k2) {
-                    int vid2 = faces->vertex_indices_buffer[offt2 + k2] - 1;
-                    sx64 += (Fixed64)model->vertices.xo[vid2];
-                    sy64 += (Fixed64)model->vertices.yo[vid2];
-                    sz64 += (Fixed64)model->vertices.zo[vid2];
+    /* 4) 3D geometry (painter tests via plane relations, timed) */
+    {
+        long t_geo_start = GetTick();
+        int geo = geo_face_order(model, f1, f2);
+        long t_geo_end = GetTick();
+        /* geo == -1 means f1 is behind f2, so f2 is in front */
+        if (geo == -1) { out->geo_verdict = 2; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d (%ld ticks)", f2, f1, t_geo_end - t_geo_start); }
+        else if (geo == 1) { out->geo_verdict = 1; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: f%d in front of f%d (%ld ticks)", f1, f2, t_geo_end - t_geo_start); }
+        else { out->geo_verdict = 0; snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "3D geometry: Undetermined (%ld ticks)", t_geo_end - t_geo_start); }
+    }
+
+    /* If polygons do not overlap, mark tests 5..9 as non-applicable (N/A) */
+    if (!out->poly_overlap) {
+        out->sh_centroid_ok = 0; out->sh_area2 = 0;
+        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: N/A (no polygon overlap)");
+
+        out->qd_centroid_ok = 0; out->qd_area2 = 0;
+        if (use_qd) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: N/A (no polygon overlap)");
+        else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: skipped (QD disabled)");
+
+        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: N/A (no polygon overlap)");
+        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: N/A (no polygon overlap)");
+        snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: N/A (no polygon overlap)");
+    } else {
+        /* 5) Centroid via Sutherland–Hodgman (integer) */
+        {
+            long long area2 = 0;
+            long t_sh_start = GetTick();
+            int sh_fallback = 0;
+            int sh_ok = compute_intersection_centroid_ordered_fixed_tryboth(model, f1, f2, &out->sh_cx, &out->sh_cy, &area2, &sh_fallback) && (area2 != 0);
+            long t_sh_end = GetTick();
+            out->sh_centroid_ok = sh_ok ? 1 : 0; out->sh_area2 = area2;
+            if (out->sh_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: %d/%d (area2=%lld) (%ld ticks)", out->sh_cx, out->sh_cy, (long long)area2, t_sh_end - t_sh_start);
+            else {
+                /* If clipping previously bailed out for this pair, report that explicitly */
+                if ((clip_last_bailout_subj == f1 && clip_last_bailout_clip == f2) || (clip_last_bailout_subj == f2 && clip_last_bailout_clip == f1)) {
+                    snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: undetermined (clipping bail-out) (%ld ticks)", t_sh_end - t_sh_start);
+                    /* clear marker after reporting */
+                    clip_last_bailout_subj = -1; clip_last_bailout_clip = -1;
+                } else {
+                    snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid SH: undetermined (%ld ticks)", t_sh_end - t_sh_start);
                 }
-
-                float cxo = FIXED_TO_FLOAT((Fixed32)(sx64 / vn2));
-                float cyo = FIXED_TO_FLOAT((Fixed32)(sy64 / vn2));
-                float czo = FIXED_TO_FLOAT((Fixed32)(sz64 / vn2));
-
-                float na = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
-                float nb = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
-                float nc = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
-                float nlen = (float)sqrt((double)(na * na + nb * nb + nc * nc));
-
-                if (nlen > 0.0001f) {
-                    // visual length of the normal arrow, in observer-space units
-                    // -- tune to your model's typical scale
-                    const float NORMAL_VISUAL_LENGTH = 50.0f;
-                    float ex = cxo + (na / nlen) * NORMAL_VISUAL_LENGTH;
-                    float ey = cyo + (nb / nlen) * NORMAL_VISUAL_LENGTH;
-                    float ez = czo + (nc / nlen) * NORMAL_VISUAL_LENGTH;
-
-                    Fixed32 cxo_fx = FLOAT_TO_FIXED(cxo);
-                    Fixed32 cyo_fx = FLOAT_TO_FIXED(cyo);
-                    Fixed32 czo_fx = FLOAT_TO_FIXED(czo);
-                    Fixed32 exo_fx = FLOAT_TO_FIXED(ex);
-                    Fixed32 eyo_fx = FLOAT_TO_FIXED(ey);
-                    Fixed32 ezo_fx = FLOAT_TO_FIXED(ez);
-
-                    int c_x2d = -1, c_y2d = -1, e_x2d = -1, e_y2d = -1;
-
-                    if (czo_fx > 0) {
-                        Fixed32 inv_zo_c = FIXED_DIV_64(s_global_proj_scale_fixed, czo_fx);
-                        c_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(cxo_fx, inv_zo_c), INT_TO_FIXED(CENTRE_X)));
-                        c_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(cyo_fx, inv_zo_c)));
-                    }
-                    if (ezo_fx > 0) {
-                        Fixed32 inv_zo_e = FIXED_DIV_64(s_global_proj_scale_fixed, ezo_fx);
-                        e_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(exo_fx, inv_zo_e), INT_TO_FIXED(CENTRE_X)));
-                        e_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(eyo_fx, inv_zo_e)));
-                    }
-
-                    // Draw face nomal
-                     {
-                        SetSolidPenPat(COL_YELLOW);
-                        // SetSolidPenPat(15); // White
-                        MoveTo(c_x2d + pan_dx, c_y2d + pan_dy);
-                        LineTo(e_x2d + pan_dx, e_y2d + pan_dy);
-                    }
-                }
+                /* Explicitly clear SH debug polygon to avoid stale visuals elsewhere */
+                debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0;
+                debug_clip_centroid_x = 0; debug_clip_centroid_y = 0;
             }
         }
 
-        // Annotate only the selected face ID after the full model is drawn
-        drawFaceIndex(model, target_face);
+        /* 6) Centroid via QuickDraw region (only if use_qd==1 and region available) */
+        out->qd_centroid_ok = 0;
+        if (use_qd) {
+            long long qd_a2 = 0;
+            long t_qd_start = GetTick();
+            int qd_ok = compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &out->qd_cx, &out->qd_cy, &qd_a2);
+            long t_qd_end = GetTick();
+            /* compare: QD result trace removed */
+            out->qd_centroid_ok = qd_ok ? 1 : 0; out->qd_area2 = qd_a2;
+            if (out->qd_centroid_ok) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: %d/%d (area2=%lld) (%ld ticks)", out->qd_cx, out->qd_cy, (long long)qd_a2, t_qd_end - t_qd_start);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: undetermined (%ld ticks)", t_qd_end - t_qd_start);
+        } else {
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid QD: skipped (QD disabled)");
+        }
 
-        // Find position in sorted list for display
-        int pos_in_sorted = -1;
-        for (int i = 0; i < face_count; ++i) {
-            if (faces->sorted_face_indices[i] == target_face) {
-                pos_in_sorted = i;
+        /* 7) Ray cast at bbox center */
+        if (out->bbox_ok) {
+            int bcx = (out->bbox_ix0 + out->bbox_ix1) / 2; int bcy = (out->bbox_iy0 + out->bbox_iy1) / 2;
+            long t_bbox_rc_start = GetTick();
+            out->bbox_raycast = run_raycast_test(model, f1, f2, bcx, bcy);
+            long t_bbox_rc_end = GetTick();
+            /* compare: bbox_raycast trace removed */
+            if (out->bbox_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d (%ld ticks)", f1, f2, t_bbox_rc_end - t_bbox_rc_start);
+            else if (out->bbox_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: f%d in front of f%d (%ld ticks)", f2, f1, t_bbox_rc_end - t_bbox_rc_start);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: undetermined (%ld ticks)", t_bbox_rc_end - t_bbox_rc_start);
+        } else {
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Bbox raycast: skipped (no bbox)");
+        }
+
+        /* 8) Ray cast at SH centroid */
+        if (out->sh_centroid_ok) {
+            long t_shrc_start = GetTick();
+            out->sh_raycast = run_raycast_test(model, f1, f2, out->sh_cx, out->sh_cy);
+            long t_shrc_end = GetTick();
+            /* compare: SH_raycast trace removed */
+            if (out->sh_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d (%ld ticks)", f1, f2, t_shrc_end - t_shrc_start);
+            else if (out->sh_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: f%d in front of f%d (%ld ticks)", f2, f1, t_shrc_end - t_shrc_start);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: undetermined (%ld ticks)", t_shrc_end - t_shrc_start);
+        } else {
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "Centroid raycast: skipped (no SH centroid)");
+        }
+
+        /* 9) Ray cast at QD centroid */
+        if (use_qd && out->qd_centroid_ok) {
+            long t_qdrc_start = GetTick();
+            out->qd_raycast = run_raycast_test(model, f1, f2, out->qd_cx, out->qd_cy);
+            long t_qdrc_end = GetTick();
+            /* compare: QD_raycast trace removed */
+            if (out->qd_raycast == 1) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d (%ld ticks)", f1, f2, t_qdrc_end - t_qdrc_start);
+            else if (out->qd_raycast == 2) snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: f%d in front of f%d (%ld ticks)", f2, f1, t_qdrc_end - t_qdrc_start);
+            else snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: undetermined (%ld ticks)", t_qdrc_end - t_qdrc_start);
+        } else {
+            snprintf(out->results_text[out->results_count++], sizeof(out->results_text[0]), "QD centroid raycast: skipped (QD unavailable)");
+        }
+    }
+}
+
+/* pair_plane_geometric_tests
+ * --------------------------------
+ * Fixed-point debug wrapper for the normal `pair_plane_before()` ordering test.
+ *
+ * Purpose:
+ * - Provide a diagnostic version of the plane-based face ordering test that can
+ *   be used interactively or in quiet/autotest mode.
+ * - Print detailed debug output for plane coefficients, vertex-side comparisons,
+ *   and test pass/fail decisions.
+ * - Help developers understand why two faces are considered ordered or inconclusive.
+ *
+ * Behavior:
+ * - If `pair_plane_before_debug_quiet` is set, this function forwards directly to
+ *   `pair_plane_before()` and suppresses interactive debugging.
+ * - Otherwise it prompts the user for face indices (unless auto-pair values are set),
+ *   then evaluates Tests 4 and 5 with verbose output.
+ * - It uses cached plane coefficients from `calculateFaceDepths()` and converts them
+ *   to doubles only for reporting, while the actual geometric decision logic is still
+ *   conceptually the same as the underlying plane tests.
+ *
+ * Test semantics:
+ * - Test 4: Verify whether all vertices of face2 lie on the same observer-side
+ *   of face1's plane. If so, face2 is in front of face1 and the ordering is confirmed.
+ * - Test 5: Verify whether all vertices of face1 lie on the opposite observer-side
+ *   of face2's plane. If so, face1 is behind face2 and the ordering is confirmed.
+ *
+ * Note:
+ * - This function is primarily a debug aid, not a production ordering routine.
+ * - It prints per-vertex values and pauses via `PKEYP()` so the developer can inspect
+ *   intermediate results.
+ */
+
+/* helper macros for guarded prints */
+#define PDBG(...)  if (!pair_plane_before_debug_quiet) printf(__VA_ARGS__)
+#define PKEYP()    if (!pair_plane_before_debug_quiet) keypress()
+
+/* globals used when autotest calls debug function without interaction */
+static int autopair_f1 = -1;
+static int autopair_f2 = -1;
+
+/* flag used to silence pair_plane_before_debug during autotest */
+static int pair_plane_before_debug_quiet = 0;
+
+/* debug version of pair_plane_before: prompts user, prints diagnostics */
+static int pair_plane_before_debug(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+    /* if autopair values are set, use them quietly */
+    if (autopair_f1 >= 0 && autopair_f2 >= 0) {
+        f1 = autopair_f1;
+        f2 = autopair_f2;
+    }
+    /* if running in silent/autotest mode, just forward to non-debug implementation */
+    if (pair_plane_before_debug_quiet) {
+        return pair_plane_before(model, f1, f2);
+    }
+    else {
+        PDBG("PAIR_DEBUG: enter two face indices f1 f2 (or any numbers): "); fflush(stdout);
+        if (scanf("%d %d", &f1, &f2) != 2) {
+            PDBG("invalid input\n"); PKEYP(); return 0;
+        }
+        int c; while ((c = getchar()) != '\n' && c != EOF) ;
+        PDBG("\n PAIR_DEBUG: comparing %d vs %d\n", f1, f2);
+    }
+
+    // Use cached plane normals and d terms computed in calculateFaceDepths
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    int k;
+    /* convert planes to doubles for debug arithmetic */
+    double a1 = FIXED64_TO_FLOAT(faces->plane_a[f1]);
+    double b1 = FIXED64_TO_FLOAT(faces->plane_b[f1]);
+    double c1 = FIXED64_TO_FLOAT(faces->plane_c[f1]);
+    double d1 = FIXED64_TO_FLOAT(faces->plane_d[f1]);
+    double a2 = FIXED64_TO_FLOAT(faces->plane_a[f2]);
+    double b2 = FIXED64_TO_FLOAT(faces->plane_b[f2]);
+    double c2 = FIXED64_TO_FLOAT(faces->plane_c[f2]);
+    double d2 = FIXED64_TO_FLOAT(faces->plane_d[f2]);
+    double epsilon = 0.01;
+
+    int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
+    int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
+    int side;           // vertex side.
+    int all_same_side; // flag indicating whether all vertices are on the same side
+    int all_opposite_side; // flag indicating whether all vertices are on the opposite side
+    /* values will be computed as doubles below */
+
+    // ********************* TEST 4 *********************
+
+    // Test 4: Is f2 entirely on the same observer-side of f1's plane?
+    // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
+    //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
+    //   same side as the observer (within epsilon), then f2 is conclusively in front
+    //   of f1 (no swap required). If any vertex is on the opposite side, the test fails
+    //   and we continue to stronger tests.
+
+
+    PDBG("\n**** Test 4 : Testing faces %d and %d\n", f1, f2);
+    PDBG("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", a1, b1, c1, d1);
+    obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
+    if (d1 > epsilon) obs_side1 = 1; 
+    else if (d1 < -epsilon) obs_side1 = -1;
+    else goto skipT4_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_same_side = 1;
+
+    printf("FOR loop start\n");
+    printf("obs_side1 = %d\n", obs_side1);
+    printf("test_values for face %d must be of the same sign as obs_side1\n", f2);
+
+    for (k=0; k<n2; k++) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            /* compute using doubles */
+            double vx = FIXED_TO_FLOAT(vtx->xo[v]);
+            double vy = FIXED_TO_FLOAT(vtx->yo[v]);
+            double vz = FIXED_TO_FLOAT(vtx->zo[v]);
+            double acc = a1 * vx + b1 * vy + c1 * vz + d1;
+
+            PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, vx, vy, vz);
+            PDBG("test_value = %f\n", acc);
+
+            if  (acc > epsilon) side = 1;
+            else if (acc < -epsilon) side = -1;
+            else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+            if (obs_side1 != side) { 
+                // if a vertex is on the other side, break the loop
+                // and set the flag to 0 to indicate the test failed (move to next test)
+                all_same_side = 0; 
+                
+                    printf("Test 4 failed for faces %d and %d\n", f1, f2);
+                    keypress(); 
+                break; 
+                }
+    }
+
+        PDBG("FOR loop stop\n");
+
+    // test 4 passed
+    if (all_same_side) { 
+        PDBG("Test 4 passed for Faces %d and %d\n", f1, f2);
+        PKEYP();
+        return 1; // faces are ordered correctly, move to next pair
+    }
+
+    skipT4_debug:
+
+    // ********************* TEST 5 ********************
+    // Test 5: Is f1 entirely on the opposite side of f2's plane relative to the observer?
+    // - This is symmetric to Test 4: if every vertex of f1 is strictly on the opposite
+    //   side of f2's plane from the observer, then f1 is behind f2 and no swap is needed.
+    // - Both Test 4 and Test 5 are relatively cheap and frequently decisive on planar geometry.
+
+
+    PDBG("\n\nTest 5 : Testing faces %d and %d\n", f1, f2);
+    PDBG("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", a2, b2, c2, d2 );
+
+    obs_side2 = 0; // sign of d2: +1, -1 or 0 (inconclusive)
+    if (d2 > epsilon) obs_side2 = 1; 
+    else if (d2 < -epsilon) obs_side2 = -1;
+    else return 0; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    all_opposite_side = 1;
+
+    PDBG("FOR loop start\n");
+    PDBG("obs_side2 = %d\n", obs_side2);
+    PDBG("test_values for face %d must be of the opposite sign as obs_side2\n", f1);
+
+    for (k = 0; k < n1; k++) {
+        int v = faces->vertex_indices_buffer[offset1 + k] - 1;
+        /* compute using doubles */
+        double vx = FIXED_TO_FLOAT(vtx->xo[v]);
+        double vy = FIXED_TO_FLOAT(vtx->yo[v]);
+        double vz = FIXED_TO_FLOAT(vtx->zo[v]);
+        double acc = a2 * vx + b2 * vy + c2 * vz + d2;
+
+        PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n", k, v+1, vx, vy, vz);
+        PDBG("test_value = %f\n", acc);
+
+        if (acc > epsilon) side = 1;
+        else if (acc < -epsilon) side = -1;
+        //else continue; // si le vertex est sur le plan, on l'ignore et on passe au vertex suivant
+        // if (obs_side2 == side) {
+        //     // if a vertex is on the same side, break the loop
+        //     // and set the flag to 0 to indicate the test failed (move to next test)
+        //     all_opposite_side = 0;
+
+        //     printf("Test 5 failed for faces %d and %d\n", f1, f2);
+        //     keypress();
+        //     //break; 
+        //     }
+    }
+    PDBG("FOR loop stop\n");
+
+        // test 5 passed
+        if (all_opposite_side) { // faces are ordered correctly, move to next pair
+            PDBG("Test 5 passed for Faces %d and %d\n", f1, f2);
+            PKEYP();
+            return 1;
+        }
+}
+
+static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int test1state = 0, test2state = 0, test3state = 0, test4state = 0; /* 0=inconclusive, 1=passed, -1=failed */
+    int c;
+
+    if (f1 == -1 && f2 == -1) {
+        printf("PAIR_DEBUG: enter face index f1: "); fflush(stdout);
+        if (scanf("%d", &f1) != 1) {
+            printf("invalid input\n"); keypress(); return 0;
+        }
+        while ((c = getchar()) != '\n' && c != EOF) ;
+
+        printf("PAIR_DEBUG: enter face index f2: "); fflush(stdout);
+        if (scanf("%d", &f2) != 1) {
+            printf("invalid input\n"); keypress(); return 0;
+        }
+        while ((c = getchar()) != '\n' && c != EOF) ;
+    }
+    printf("\n=== Geometric test (using plane equations) comparing %d vs %d ===\n", f1, f2);
+
+    // Use cached plane normals and d terms computed in calculateFaceDepths
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    int offset1 = faces->vertex_indices_ptr[f1];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    int k;
+    Fixed64 a1 = faces->plane_a[f1];
+    Fixed64 b1 = faces->plane_b[f1];
+    Fixed64 c1 = faces->plane_c[f1];
+    Fixed64 d1 = faces->plane_d[f1];
+    Fixed64 a2 = faces->plane_a[f2];
+    Fixed64 b2 = faces->plane_b[f2];
+    Fixed64 c2 = faces->plane_c[f2];
+    Fixed64 d2 = faces->plane_d[f2];
+
+    /* compute epsilon based on magnitude of the two plane normals
+       instead of scanning every vertex; this keeps value bounded even when
+       observer-space coordinates are large.
+       
+       Formula:
+       - norm1 = length(normal1)
+       - norm2 = length(normal2)
+       - epsf = max(norm1, norm2) * 0.001   (0.1% of the larger normal)
+       - epsf = max(epsf, 0.01)              (minimum tolerance)
+       - epsilon = convert epsf to Fixed32 scale
+    */
+    Fixed32 epsilon;
+    {
+        long t0 = GetTick();
+        double fa1 = FIXED64_TO_FLOAT(a1);
+        double fb1 = FIXED64_TO_FLOAT(b1);
+        double fc1 = FIXED64_TO_FLOAT(c1);
+        double fa2 = FIXED64_TO_FLOAT(a2);
+        double fb2 = FIXED64_TO_FLOAT(b2);
+        double fc2 = FIXED64_TO_FLOAT(c2);
+        double norm1 = sqrt(fa1*fa1 + fb1*fb1 + fc1*fc1);
+        double norm2 = sqrt(fa2*fa2 + fb2*fb2 + fc2*fc2);
+        double base = (norm1 > norm2) ? norm1 : norm2;
+        double epsf = base * 0.001;  /* 0.1% of larger normal length */
+        if (epsf < 0.01) epsf = 0.01;
+        epsilon = FLOAT_TO_FIXED((float)epsf);
+        long t1 = GetTick();
+        PDBG("Epsilon (calculated from plane normals) = %f n1=%f n2=%f ticks=%ld\n",
+               epsf, norm1, norm2, t1 - t0);
+    }
+
+    int obs_side1 = 0; // observer side relative to plane of f1: +1, -1, or 0 (inconclusive)
+    int obs_side2 = 0; // observer side relative to plane of f2: +1, -1, or 0 (inconclusive)
+    int side;           // vertex side.
+    int all_same_side; // flag indicating whether all vertices are on the same side of the observer
+    int all_opposite_side; // flag indicating whether all vertices are on the opposite side of the observer
+    /* test_value replaced by Fixed64 accumulators inside loops to avoid Fixed32 overflow */
+
+    // ********************* TEST 1 *********************
+
+    // Test 1: Is f2 entirely on the same observer-side of f1's plane?
+    // - Evaluate face-plane sign for the observer (d1) and then test every vertex of f2
+    //   against f1's plane (A1*x + B1*y + C1*z + D1). If all vertices are on the
+    //   same side as the observer (within epsilon), then f2 is conclusively in front
+    //   of f1 (no swap required). If any vertex is on the opposite side, the test fails
+    //   and we continue to stronger tests.
+
+
+    PDBG("\n******** Test #1 : Testing if faces %d is in front of %d ********\n", f2, f1);
+    // PDBG("Face coefs: a1=%f, b1=%f, c1=%f, d1=%f\n", FIXED64_TO_FLOAT(a1), FIXED64_TO_FLOAT(b1), FIXED64_TO_FLOAT(c1), FIXED64_TO_FLOAT(d1));
+    obs_side1 = 0; // sign of d1: +1, -1 or 0 (inconclusive)
+    if (d1 > (Fixed64)epsilon) obs_side1 = 1; 
+    else if (d1 < -(Fixed64)epsilon) obs_side1 = -1;
+    else {
+        test1state = 0;
+        goto skipT1_debug; // si l'observateur est sur le plan, on ne peut rien conclure, il faut faire d'autres tests
+    }
+    all_same_side = 1;
+    int test1_effective_count = 0;
+
+    printf("Observer side (obs_side1) = %d\n", obs_side1);
+    printf("If face %d entirely on the same observer-side of %d's plane, then\n", f2, f1);
+    printf("test_values for all vertices of face %d have the same sign as obs.side.\n", f2);
+
+    for (k=0; k<n2; k++) {
+            int v = faces->vertex_indices_buffer[offset2+k]-1;
+            /* Accumulate in 64-bit to avoid overflow (each product is >> FIXED_SHIFT to keep Fixed32 scale) */
+            Fixed64 acc = 0;
+            acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+            acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+            acc += (Fixed64)d1; // d1 already Fixed32 scale
+
+            // PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
+            //        k, v+1,
+            //        FIXED_TO_FLOAT(vtx->xo[v]),
+            //        FIXED_TO_FLOAT(vtx->yo[v]),
+            //        FIXED_TO_FLOAT(vtx->zo[v]));
+
+            /* show raw fixed value, integer part (shifted) and float equivalent */
+            // PDBG("test_value (fixed64 raw) = %lld\n", (long long)acc);
+            // PDBG("test_value (fixed64 >>%d) = %lld\n", FIXED_SHIFT, (long long)(acc >> FIXED_SHIFT));
+
+            PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
+
+            if (acc > (Fixed64)epsilon) side = 1;
+            else if (acc < -(Fixed64)epsilon) side = -1;
+            else 
+            {
+                printf("==> ignored\n");   
+                continue; // ignore vertices that are effectively on the plane
+            }
+
+            test1_effective_count++;
+            if (obs_side1 == side) {
+                printf("==> OK\n");
+            }            
+
+            if (obs_side1 != side) {
+                /* if a vertex of f2 is on the opposite side of f1's plane than the observer,
+                 * Test #1 cannot conclude the ordering; continue to later tests. */
+                all_same_side = 0;
+                test1state = -1;
+                printf("==> KO\n");
+                PDBG("Test #1 failed for faces %d and %d\n", f1, f2);
+                PKEYP();
                 break;
             }
-        }
-
-        MoveTo(2, 188);
-        // Orientation: front vs back (observer-space d > 0 => front)
-        if (pos_in_sorted >= 0) {
-            printf("Face %d (sorted pos %d) [%s]", target_face, pos_in_sorted, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+    }
+    // PDBG("FOR loop stop\n");
+    if (test1state != -1) {
+        if (test1_effective_count == 0) {
+            test1state = 0;
+        } else if (all_same_side) {
+            test1state = 1;
         } else {
-            printf("Face %d [%s]", target_face, (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK");
+            test1state = -1;
         }
-        if (faces->vertex_count[target_face] == 0) {
-            printf(" [HIDDEN]");
+    }
+    if (test1state == 1) {
+        PDBG("Test #1 passed for Faces %d and %d\n", f1, f2);
+        PKEYP();
+    } else if (test1state == 0) {
+        PDBG("Test #1 inconclusive (all vertices ignored or observer on plane)\n");
+        PKEYP();
+    }
+
+    skipT1_debug:
+
+    // ********************* TEST #2 ********************
+    // Test #2: Is f1 entirely on the opposite side of f2's plane relative to the observer?
+    // - This is symmetric to Test #1: if every vertex of f1 is strictly on the opposite
+    //   side of f2's plane from the observer, then f1 is behind f2 and the ordering is confirmed.
+    // - This test is performed only if the observer is clearly on one side of f2's plane.
+
+    PDBG("\n******** Test #2 : Testing if faces %d is behind %d ********\n", f1, f2);
+    //PDBG("Face coefs: a2=%f, b2=%f, c2=%f, d2=%f\n", FIXED64_TO_FLOAT(a2), FIXED64_TO_FLOAT(b2), FIXED64_TO_FLOAT(c2), FIXED64_TO_FLOAT(d2));
+
+    obs_side2 = 0;
+    if (d2 > (Fixed64)epsilon) obs_side2 = 1;
+    else if (d2 < -(Fixed64)epsilon) obs_side2 = -1;
+    if (obs_side2 == 0) {
+        test2state = 0;
+        goto skipT2_debug;
+    }
+    all_opposite_side = 1;
+    int test2_effective_count = 0;
+
+    printf("Observer side = %d\n", obs_side2);
+    PDBG("If face %d is entirely on the opposite side of %d's plane, then\n", f1, f2);
+    PDBG("test_values for all vertices of face %d have opposite sign to obs. side.\n", f1);
+
+    for (k = 0; k < n1; k++) {
+        int v = faces->vertex_indices_buffer[offset1+k] - 1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d2;
+
+        // PDBG("k = %d, vertex index = %d, vtx = (%f, %f, %f)\n",
+        //      k, v+1,
+        //      FIXED_TO_FLOAT(vtx->xo[v]),
+        //      FIXED_TO_FLOAT(vtx->yo[v]),
+        //      FIXED_TO_FLOAT(vtx->zo[v]));
+
+        PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
+        // PDBG("test_value (float equiv)        = %f\n", FIXED64_TO_FLOAT(acc));
+
+        if (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else 
+        {
+            printf("==> ignored\n");   
+            continue; // ignore vertices that are effectively on the plane
         }
-        printf("\nArrows: navigate,  N: normal, SPACE: options");
-        
-        // Wait for key
-        int key = getkeypress ();
-        
-        endgraph();
-        
-        // Process key - only arrow keys continue, any other key exits
-        if (key == 8) { // Left arrow - previous face ID
-            target_face--;
-            if (target_face < 0) target_face = face_count - 1;
-        } else if (key == 21) { // Right arrow - next face ID
-            target_face++;
-            if (target_face >= face_count) target_face = 0;
-        } else if (key == 11) { // Up arrow - next position in sorted list
-            if (pos_in_sorted >= 0 && pos_in_sorted < face_count - 1) {
-                target_face = faces->sorted_face_indices[pos_in_sorted + 1];
-            }
-        } else if (key == 10) { // Down arrow - previous position in sorted list
-            if (pos_in_sorted > 0) {
-                target_face = faces->sorted_face_indices[pos_in_sorted - 1];
-            }
-        } else if (key == 'N' || key == 'n') {
-            show_normal = !show_normal;
-            continue;
-        } else if (key == 32) { // Space - show textual details about the face
-            // Switch to text mode and print detailed info, then return to graphics on keypress
-            DoText();
-            int vn = faces->vertex_count[target_face];
-            int effective_vn = (vn == 0 && faces->saved_vertex_count[target_face] > 0)
-                    ? faces->saved_vertex_count[target_face] : vn;
-            printf("\n=== Face detail (ID=%d) ===\n\n", target_face);
-            // printf("Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",
-            // Plane equation (float)
-            {
-                float a = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
-                float b = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
-                float c = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
-                float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
-                printf("Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
-            }
-            printf("Z min: %.6f   ;   ", FIXED_TO_FLOAT(faces->z_min[target_face]));
-            printf("Z mean: %.6f   ;   ", FIXED_TO_FLOAT(faces->z_mean[target_face]));
-            printf("Z max: %.6f\n\n", FIXED_TO_FLOAT(faces->z_max[target_face]));
-            if (pos_in_sorted >= 0) printf("Position in sorted list: %d\n", pos_in_sorted);
 
-            if (vn == 0) {
-                printf("Vertex count: %d (hidden - showing %d saved vertices)\n\n", vn, effective_vn);
-            } else {
-                printf("Vertex count: %d\n\n", vn);
-            }
-            int offt = faces->vertex_indices_ptr[target_face];
+        test2_effective_count++;
+        if (obs_side2 != side) {
+            printf("==> OK\n");
+        }
+         else {
+            printf("==> KO\n");
+            all_opposite_side = 0;
+            test2state = -1;
+            PDBG("Test #2 failed for faces %d and %d\n", f1, f2);
+            PKEYP();
+            break;
+        }
+    }
+    // PDBG("FOR loop stop\n");
 
-            for (int k = 0; k < effective_vn; ++k) {
-                int vid = faces->vertex_indices_buffer[offt + k] - 1;
-                printf("vertex[%d] idx=%d model=(%f,%f,%f) obs=(%f,%f,%f) x2d=%d y2d=%d\n",
-                       k, vid,
-                       FIXED_TO_FLOAT(model->vertices.x[vid]), FIXED_TO_FLOAT(model->vertices.y[vid]), FIXED_TO_FLOAT(model->vertices.z[vid]),
-                       FIXED_TO_FLOAT(model->vertices.xo[vid]), FIXED_TO_FLOAT(model->vertices.yo[vid]), FIXED_TO_FLOAT(model->vertices.zo[vid]),
-                       model->vertices.x2d[vid], model->vertices.y2d[vid]);
-            }
-
-            printf("\nPress 'F' to save to file Face%d.txt, 'V' to reverse vertex order,\n", target_face);
-            printf("'H' to hide, 'R' to restore, 'A' to restore all, any other key to return to graphics...\n");
-            fflush(stdout);
-            int tkey = getkeypress ();
-
-            if (tkey == 'F' || tkey == 'f') {
-                char fname[64]; sprintf(fname, "Face%d.txt", target_face);
-                FILE *out = fopen(fname, "w");
-                if (out) {
-                    fprintf(out, "Face %d\n", target_face);
-                    if (pos_in_sorted >= 0) fprintf(out, "Position in sorted list: %d\n", pos_in_sorted);
-                    if (vn == 0) {
-                        fprintf(out, "Vertex count: %d (hidden - showing %d saved vertices)\n", vn, effective_vn);
-                    } else {
-                        fprintf(out, "Vertex count: %d\n", vn);
-                    }
-                    for (int k = 0; k < effective_vn; ++k) {
-                        int vid = faces->vertex_indices_buffer[offt + k] - 1;
-                        fprintf(out, "v[%d] idx=%d model=(%f,%f,%f) obs=(%f,%f,%f) x2d=%d y2d=%d\n",
-                                k, vid,
-                                FIXED_TO_FLOAT(model->vertices.x[vid]), FIXED_TO_FLOAT(model->vertices.y[vid]), FIXED_TO_FLOAT(model->vertices.z[vid]),
-                                FIXED_TO_FLOAT(model->vertices.xo[vid]), FIXED_TO_FLOAT(model->vertices.yo[vid]), FIXED_TO_FLOAT(model->vertices.zo[vid]),
-                                model->vertices.x2d[vid], model->vertices.y2d[vid]);
-                    }
-                    float a = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
-                    float b = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
-                    float c = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
-                    float d = (float)FIXED64_TO_FLOAT(faces->plane_d[target_face]);
-                    fprintf(out, "Plane equation: a=%f b=%f c=%f d=%f\n", a, b, c, d);
-                    fprintf(out, "Orientation: %s [%s]\n", (faces->plane_d[target_face] > 0) ? "FRONT" : "BACK",
-                            (vn == 0) ? "HIDDEN" : "NOT HIDDEN");
-                    if (vn == 0) {
-                        fprintf(out, "Saved vertex count (before hide): %d\n", faces->saved_vertex_count[target_face]);
-                    }
-                    fprintf(out, "Z min: %.6f\n", FIXED_TO_FLOAT(faces->z_min[target_face]));
-                    fprintf(out, "Z mean: %.6f\n", FIXED_TO_FLOAT(faces->z_mean[target_face]));
-                    fprintf(out, "Z max: %.6f\n", FIXED_TO_FLOAT(faces->z_max[target_face]));
-                    fclose(out);
-                    printf("Saved to %s\n", fname); fflush(stdout);
-                } else {
-                    printf("Error: unable to open %s for writing\n", fname); fflush(stdout);
-                }
-                printf("Press any key to return to graphics...\n"); fflush(stdout);
-                int tmpk = getkeypress ();
-
-                // Return to graphics (loop will redraw)
-                continue;
-            }  
-            else if (tkey == 'V' || tkey == 'v') {
-                // printf("Reversing vertex order...\n"); // useless since now face order reversing is instantaneous.
-                reverseFaceVertexOrder(model, target_face);
-                backup_flags[target_face] = faces->display_flag[target_face];
-                printf("Face %d vertex order reversed.\n\n", target_face);
-                printf("Press any key to return to graphics...\n"); fflush(stdout);
-                int tmpk = getkeypress ();
-                // Return to graphics (loop will redraw)
-                continue;
-            } else if (tkey == 'H' || tkey == 'h') {
-                // Hide the currently selected face (vertex_count saved for later restore)
-                hideFace(model, target_face);
-                backup_flags[target_face] = faces->display_flag[target_face];
-                printf("Face %d hidden.\n\n", target_face);
-                printf("Press any key to return to graphics...\n"); fflush(stdout);
-                int tmpk = getkeypress ();
-                continue;
-            } else if (tkey == 'R' || tkey == 'r') {
-                // Restore the currently selected face and recompute its plane/display_flag
-                // (the model may have rotated since it was hidden)
-                restoreFace(model, target_face);
-                calculateFaceDepths(model, NULL, faces->face_count);
-                backup_flags[target_face] = faces->display_flag[target_face];
-                printf("Face %d restored.\n\n", target_face);
-                printf("Press any key to return to graphics...\n"); fflush(stdout);
-                int tmpk = getkeypress ();
-                continue;
-            } else if (tkey == 'A' || tkey == 'a') {
-                // Restore every hidden face, then a single global recompute
-                restoreAllFaces(model);
-                calculateFaceDepths(model, NULL, faces->face_count);
-                for (int k2 = 0; k2 < faces->face_count; ++k2) backup_flags[k2] = faces->display_flag[k2];
-                printf("All faces restored.\n\n");
-                printf("Press any key to return to graphics...\n"); fflush(stdout);
-                int tmpk = getkeypress ();
-                continue;
-            } else {
-                // Any other key returns to graphics
-                continue;
-            }
+    if (test2state != -1) {
+        if (test2_effective_count == 0) {
+            test2state = 0;
+        } else if (all_opposite_side) {
+            test2state = 1;
         } else {
-            // Any other key exits
-            quit = 1;
+            test2state = -1;
         }
     }
-    
-    DoText();
-
-    // Restore state
-    framePolyOnly = old_frame;
-    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
-    free(backup_flags);
-}
-
-/* inspect_faces_before
- * --------------------
- * Purpose:
- *  - Interactively inspect faces that are placed BEFORE a selected face in the
- *    painter's ordered list but that the pairwise tests conclude should be AFTER.
- * Behavior:
- *  - Prompts the user for a face id, locates it in `sorted_face_indices` and checks
- *    faces earlier in the ordered list using `pair_order_relation` and `evaluate_pair_tests`.
- *  - Prints a compact per-face diagnostic and offers a wireframe preview with the
- *    selected face highlighted (green) and misplaced faces highlighted (orange).
- */
-void inspect_faces_before(Model3D* model, ObserverParams* params, const char* filename) {
-    if (!model || !params) return;
-    FaceArrays3D* faces = &model->faces;
-    int face_count = faces->face_count;
-    if (face_count <= 0) { printf("No faces in model\n"); return; }
-
-    /* Title / welcome (text-mode) */
-    printf("Inspector: inspect faces placed BEFORE a selected face (diagnostics)\n\n");
-
-    // Ensure back-face culling on and recompute depths & ordering
-    // helper: enable culling and run painter sort; returns previous culling state
-    int old_cull = cull_back_faces;
-    cull_back_faces = 1;
-
-    // Prompt user for face id
-    printf("Enter face id (0..%d) to inspect: ", face_count - 1);
-    int sel = -1;
-    if (scanf("%d", &sel) != 1) {
-        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
-        printf("Input cancelled\n");
-        cull_back_faces = old_cull; return;
+    if (test2state == 1) {
+        PDBG("Test #2 passed for Faces %d and %d\n", f1, f2);
+        PKEYP();
+    } else if (test2state == 0) {
+        PDBG("Test #2 inconclusive (all vertices ignored or observer on plane)\n");
+        PKEYP();
     }
-    // consume remaining chars on the line (newline) to avoid disturbing later fgets()
-    {
-        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
+    skipT2_debug:
+
+    // ********************* TEST #3 ********************
+    // Test #3: Copy of Test #1 with faces swapped (check if f1 is in front of f2).
+    PDBG("\n******** Test #3 : Testing if faces %d is in front of %d ********\n", f1, f2);
+    obs_side1 = 0;
+    if (d2 > (Fixed64)epsilon) obs_side1 = 1;
+    else if (d2 < -(Fixed64)epsilon) obs_side1 = -1;
+    else {
+        test3state = 0;
+        goto skipT3_debug;
     }
-    // Use the exact number provided by the user (do not convert 1-based to 0-based)
-    int target_face = sel;
-    if (target_face < 0 || target_face >= face_count) { printf("Invalid face id\n"); cull_back_faces = old_cull; return; }
+    all_same_side = 1;
+    int test3_effective_count = 0;
 
-    // Find position of target_face in the sorted array
-    int pos = -1;
-    for (int i = 0; i < face_count; ++i) {
-        if (faces->sorted_face_indices[i] == target_face) { pos = i; break; }
-    }
-    if (pos < 0) { printf("Selected face is not in sorted list\n"); cull_back_faces = old_cull; return; }
+    printf("Observer side (obs_side1) = %d\n", obs_side1);
+    printf("If face %d entirely on the same observer-side of %d's plane, then\n", f1, f2);
+    printf("test_values for all vertices of face %d have the same sign as obs.side.\n", f1);
 
-    // Inform user about target position
-    printf("Selected face %d is at position %d in the ordered list (total faces = %d)\n", target_face, pos, face_count);
+    for (k = 0; k < n1; k++) {
+        int v = faces->vertex_indices_buffer[offset1+k] - 1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a2 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d2;
 
-    // Ensure variables are visible throughout the function (used later for preview)
-    int* misplaced = NULL;
-    int misplaced_count = 0;
-
-    // Check faces placed before the selected face (only consider visible faces)
-    misplaced = (int*)malloc(face_count * sizeof(int));
-    misplaced_count = 0;
-    int checked = 0, rel_neg = 0, rel_pos = 0, rel_zero = 0, bbox_skipped = 0;
-    for (int i = 0; i < pos; ++i) {
-        int f = faces->sorted_face_indices[i];
-        // Bounding-box quick rejection: if separated on X or Y, skip - no overlap
-        if (faces->maxx[f] <= faces->minx[target_face] || faces->maxx[target_face] <= faces->minx[f]
-            || faces->maxy[f] <= faces->miny[target_face] || faces->maxy[target_face] <= faces->miny[f]) {
-            bbox_skipped++; continue;
-        }
-        checked++;
-        int rel = pair_order_relation(model, f, target_face);
-        if (rel == -1) rel_neg++; else if (rel == 1) rel_pos++; else rel_zero++;
-        if (rel == 1) { // this face should be after target -> misplaced
-            misplaced[misplaced_count++] = f;
-        }
-    }
-
-    printf("%d \"before\" faces (total): checked=%d ; bbox_skipped=%d ; should_be_before(-1): %d ;  should_be_after(+1): %d (misplaced: %d) ; inconclusive: %d\n",
-           pos, checked, bbox_skipped, rel_neg, rel_pos, misplaced_count, rel_zero);
-
-    printf("%d misplaced faces relative to face %d : ", misplaced_count, target_face);
-    for (int i = 0; i < misplaced_count; ++i) {
-        int f = misplaced[i];
-        // Find position of the misplaced face in the sorted list (1-based for readability)
-        int pos_in_sorted = -1;
-        for (int si = 0; si < faces->face_count; ++si) {
-            if (faces->sorted_face_indices[si] == f) { pos_in_sorted = si; break; }
-        }
-        if (pos_in_sorted >= 0) printf("%d (pos=%d)", f, pos_in_sorted + 1);
-        else printf("%d (pos=?)", f);
-        if (i < misplaced_count - 1) printf(",");
-    }
-    /* Report overlapping subset among misplaced faces (global summary) */
-    int overlap_count = 0;
-    int *overlaps = NULL;
-    if (misplaced_count > 0) {
-        overlaps = (int*)malloc(sizeof(int) * misplaced_count);
-        for (int i = 0; i < misplaced_count; ++i) {
-            int f = misplaced[i];
-            if (projected_polygons_overlap(model, f, target_face)) overlaps[overlap_count++] = f;
-        }
-    }
-    printf("\n");
-    if (overlap_count > 0) {
-        printf("Overlap with target: %d face(s):", overlap_count);
-        for (int i = 0; i < overlap_count; ++i) printf(" %d", overlaps[i]);
-        printf("\n");
-    } else {
-        printf("Overlap with target: none\n");
-    }
-    // Note: overlaps will be freed at the end of the function
-
-    printf("\n");
-    keypress();
-
-    // For each misplaced face, evaluate tests 1..7 and display which succeeded/failed/inconclusive
-    for (int mi = 0; mi < misplaced_count; ++mi) {
-        int f = misplaced[mi];
-        int tests[7];
-        evaluate_pair_tests(model, f, target_face, tests);
-
-        // Build readable lists
-        char passed[128]; passed[0] = '\0';
-        char failed[128]; failed[0] = '\0';
-        char incon[128]; incon[0] = '\0';
-        int pcount = 0, fcount = 0, icount = 0;
-        for (int t = 0; t < 7; ++t) {
-            if (tests[t] == 1) {
-                if (pcount) strncat(passed, ",", sizeof(passed)-strlen(passed)-1);
-                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(passed, tmp, sizeof(passed)-strlen(passed)-1); pcount++;
-            } else if (tests[t] == -1) {
-                if (fcount) strncat(failed, ",", sizeof(failed)-strlen(failed)-1);
-                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(failed, tmp, sizeof(failed)-strlen(failed)-1); fcount++;
-            } else {
-                if (icount) strncat(incon, ",", sizeof(incon)-strlen(incon)-1);
-                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(incon, tmp, sizeof(incon)-strlen(incon)-1); icount++;
-            }
-        }
-        if (pcount == 0) strncpy(passed, "(none)", sizeof(passed));
-        if (fcount == 0) strncpy(failed, "(none)", sizeof(failed));
-        if (icount == 0) strncpy(incon, "(none)", sizeof(incon));
-
-        char after_list[64]; after_list[0] = '\0';
-        char before_list[64]; before_list[0] = '\0';
-        char incon_list[64]; incon_list[0] = '\0';
-        int after_count = 0, before_count = 0, incon_count = 0;
-        for (int t = 0; t < 7; ++t) {
-            if (tests[t] == 1) {
-                if (after_count) strncat(after_list, ",", sizeof(after_list)-strlen(after_list)-1);
-                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(after_list, tmp, sizeof(after_list)-strlen(after_list)-1);
-                after_count++; 
-            } else if (tests[t] == -1) {
-                if (before_count) strncat(before_list, ",", sizeof(before_list)-strlen(before_list)-1);
-                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(before_list, tmp, sizeof(before_list)-strlen(before_list)-1);
-                before_count++;
-            } else {
-                if (incon_count) strncat(incon_list, ",", sizeof(incon_list)-strlen(incon_list)-1);
-                char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(incon_list, tmp, sizeof(incon_list)-strlen(incon_list)-1);
-                incon_count++;
-            }
-        }
-
-        // Compact grouped output (single-line)
-        if (before_count == 0) strncpy(before_list, "(none)", sizeof(before_list));
-        if (after_count == 0) strncpy(after_list, "(none)", sizeof(after_list));
-        if (incon_count == 0) strncpy(incon_list, "(none)", sizeof(incon_list));
-
-        printf("Face %d: BEFORE tests: %s; AFTER tests: %s; inconclusive: %s\n", f, before_list, after_list, incon_list);
-        
-        // Conclusion lines (keep existing style)
-        if (after_count == 0 && before_count == 0) {
-            printf("  Overall: inconclusive (no decisive tests)\n");
-        } else {
-            if (after_count) printf("Concluded: Face %d (selected) should be AFTER face %d (tests: %s)\n\n", target_face, f, after_list);
-            if (before_count) printf("Concluded: Face %d (selected) should be BEFORE face %d (tests: %s)\n\n", target_face, f, before_list);
-        }
-    }
-
-    printf("\nPress a key to preview model with highlight selected and misplaced faces (if any).\n");
-    keypress();
-    startgraph(mode);
-
-    // Backup display flags
-    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
-    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
-
-    // 1) Show entire model in wireframe
-    int old_frame = framePolyOnly;
-    framePolyOnly = 1; // wireframe
-    // Wireframe preview: handled via the `framePolyOnly` flag and `drawPolygons()` (no separate `processModelWireframe()` function)
-    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
-
-
-    // 2) Overlay misplaced faces in orange (pen 6)
-    for (int i = 0; i < misplaced_count; ++i) {
-        int f = misplaced[i];
-        faces->display_flag[f] = 1;
-        drawFace(model, f, COL_ORANGE, 0);
-    }
-
-    // 3) Overlay: selected face in green (pen 10)
-    // Ensure target face is visible for drawFace
-    faces->display_flag[target_face] = 1;
-    drawFace(model, target_face, COL_LIGHT_GREEN, 1);
-
-    MoveTo(2, 195);
-    printf("%d face(s) should be after face %d, %d overlap%s\n", misplaced_count, target_face, overlap_count, overlap_count > 1 ? "s" : "");
-    keypress();
-    endgraph();
-    DoText();
-
-    // Restore state
-    framePolyOnly = old_frame;
-    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
-    free(backup_flags);
-
-    // If there are misplaced faces, offer to fix by moving target before the smallest index
-    if (misplaced_count > 0) {
-        printf("\nPress 'A' to move face %d considering ALL misplaced faces, 'O' for overlaps only, or any other key to skip: ", target_face);
-        int key = getkeypress ();
-        
-        if (key == 'A' || key == 'a' || key == 'O' || key == 'o') {
-            int min_pos = face_count; // start with max possible
-            int target_to_move_before = -1;
-            int use_overlaps = (key == 'O' || key == 'o');
-            
-            // Determine which list to use and check if available
-            if (use_overlaps && overlap_count == 0) {
-                printf("\nNo overlaps to process.\n");
-            } else {
-                // Find the smallest position among selected faces
-                int count_to_check = use_overlaps ? overlap_count : misplaced_count;
-                int *faces_to_check = use_overlaps ? overlaps : misplaced;
-                
-                for (int i = 0; i < count_to_check; ++i) {
-                    int f = faces_to_check[i];
-                    // Find position in sorted list
-                    for (int si = 0; si < face_count; ++si) {
-                        if (faces->sorted_face_indices[si] == f) {
-                            if (si < min_pos) {
-                                min_pos = si;
-                                target_to_move_before = f;
-                            }
-                            break;
-                        }
-                    }
-                }
-                
-                if (target_to_move_before >= 0 && min_pos < face_count) {
-                    printf("\nMoving face %d (currently at pos %d) to position %d (before face %d) - mode: %s...\n", 
-                           target_face, pos, min_pos, target_to_move_before, use_overlaps ? "overlaps" : "all");
-                    
-                    // Move target_face to min_pos (before the misplaced face with smallest index)
-                    move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, min_pos);
-                    
-                    printf("Done! Face %d has been moved.\n", target_face);
-                    printf("Press any key to continue...\n");
-                    keypress();
-                } else {
-                    printf("\nError: could not determine target position.\n");
-                }
-            }
-        } else {
-            printf("\nSkipped.\n");
-        }
-    }
-
-    if (overlaps) free(overlaps);
-    free(misplaced);
-    cull_back_faces = old_cull;
-}
-
-segment "code05";
-/* inspect_faces_after
- * -------------------
- * Purpose:
- *  - Interactively inspect faces that are placed AFTER a selected face in the
- *    painter's ordered list but that the pairwise tests conclude should be BEFORE.
- * Behavior:
- *  - Prompts the user for a face id, locates it in `sorted_face_indices` and checks
- *    visible faces later in the ordered list using `pair_order_relation` and `evaluate_pair_tests`.
- *  - Prints a compact per-face diagnostic and offers a wireframe preview with the
- *    selected face highlighted (green) and misplaced faces highlighted (pink).
- */
-void inspect_faces_after(Model3D* model, ObserverParams* params, const char* filename) {
-    if (!model || !params) return;
-    FaceArrays3D* faces = &model->faces;
-    int face_count = faces->face_count;
-    if (face_count <= 0) { printf("No faces in model\n"); return; }
-
-    int old_cull = cull_back_faces;
-    cull_back_faces = 1;
-
-    /* Title / welcome (text-mode) */
-    printf("Inspector: inspect faces placed AFTER a selected face (diagnostics)\n\n");
-
-    printf("Enter face id (0..%d) to inspect AFTER-list: ", face_count - 1);
-    int sel = -1;
-
-    if (scanf("%d", &sel) != 1) {
-        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
-        printf("Input cancelled\n");
-        cull_back_faces = old_cull; return;
-    }
-    // consume remaining chars on the line (newline) to avoid disturbing later fgets()
-    {
-        int ch; while ((ch = getchar()) != '\n' && ch != EOF) ;
-    }
-    int target_face = sel;
-    if (target_face < 0 || target_face >= face_count) { printf("Invalid face id\n"); cull_back_faces = old_cull; return; }
-
-    int pos = -1;
-    for (int i = 0; i < face_count; ++i) if (faces->sorted_face_indices[i] == target_face) { pos = i; break; }
-    if (pos < 0) { printf("Selected face is not in sorted list\n"); cull_back_faces = old_cull; return; }
-
-    int* misplaced = (int*)malloc(face_count * sizeof(int)); int misplaced_count = 0;
-    int checked = 0, rel_neg = 0, rel_pos = 0, rel_zero = 0, bbox_skipped = 0;
-    for (int i = pos + 1; i < face_count; ++i) {
-        int f = faces->sorted_face_indices[i];
-        // Bounding-box quick rejection: if separated on X or Y, skip - no overlap
-        if (faces->maxx[f] <= faces->minx[target_face] || faces->maxx[target_face] <= faces->minx[f]
-            || faces->maxy[f] <= faces->miny[target_face] || faces->maxy[target_face] <= faces->miny[f]) {
-            bbox_skipped++; continue;
-        }
-        int rel = pair_order_relation(model, f, target_face); // correct parameter order
-        checked++;
-        if (rel == -1) rel_neg++; else if (rel == 1) rel_pos++; else rel_zero++;
-        if (rel == -1) { // f should be before target -> misplaced
-            misplaced[misplaced_count++] = f;
-        }
-    }
-
-    printf("%d \"before\" faces (total): checked=%d ; bbox_skipped=%d ; should_be_before(-1): %d ;  should_be_after(+1): %d (misplaced: %d) ; inconclusive: %d\n",
-           pos, checked, bbox_skipped, rel_neg, rel_pos, misplaced_count, rel_zero);
-
-    printf("%d misplaced faces relative to face %d : ", misplaced_count, target_face);
-    for (int i = 0; i < misplaced_count; ++i) {
-        int f = misplaced[i];
-        int pos_in_sorted = -1;
-        for (int si = 0; si < faces->face_count; ++si) {
-            if (faces->sorted_face_indices[si] == f) { pos_in_sorted = si; break; }
-        }
-        if (pos_in_sorted >= 0) printf("%d (pos=%d)", f, pos_in_sorted + 1);
-        else printf("%d (pos=?)", f);
-        if (i < misplaced_count - 1) printf(",");
-    }
-    printf("\n");
-
-    /* Report overlapping subset among the misplaced list (global summary) */
-    int overlap_count = 0;
-    int *overlaps = NULL;
-    if (misplaced_count > 0) {
-        overlaps = (int*)malloc(sizeof(int) * misplaced_count);
-        for (int i = 0; i < misplaced_count; ++i) {
-            int f = misplaced[i];
-            if (projected_polygons_overlap(model, f, target_face)) overlaps[overlap_count++] = f;
-        }
-    }
-    if (overlap_count > 0) {
-        printf("Overlap with target: %d face(s):", overlap_count);
-        for (int i = 0; i < overlap_count; ++i) printf(" %d", overlaps[i]);
-        printf("\n");
-    } else {
-        printf("Overlap with target: none\n");
-    }
-    // Note: overlaps will be freed at the end of the function
-    printf("\n");
-    keypress();
-
-    for (int ai = 0; ai < misplaced_count; ++ai) {
-        int f = misplaced[ai];
-        // Quick bbox rejection: if separated on X or Y, skip detailed tests
-        if (faces->maxx[f] <= faces->minx[target_face] || faces->maxx[target_face] <= faces->minx[f]
-            || faces->maxy[f] <= faces->miny[target_face] || faces->maxy[target_face] <= faces->miny[f]) {
-            printf("Face %d: skipped (axis-aligned bbox separation)\n", f);
+        PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
+        if (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else {
+            printf("==> ignored\n");
             continue;
         }
 
-        int tests[7]; evaluate_pair_tests(model, f, target_face, tests);
-
-        char passed_t[128]; passed_t[0] = '\0';
-        char failed_t[128]; failed_t[0] = '\0';
-        char incon_t[128]; incon_t[0] = '\0';
-        int pcount_t = 0, fcount_t = 0, icount_t = 0;
-        for (int t = 0; t < 7; ++t) {
-            if (tests[t] == 1) { if (pcount_t) strncat(passed_t, ",", sizeof(passed_t)-strlen(passed_t)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(passed_t, tmp, sizeof(passed_t)-strlen(passed_t)-1); pcount_t++; }
-            else if (tests[t] == -1) { if (fcount_t) strncat(failed_t, ",", sizeof(failed_t)-strlen(failed_t)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(failed_t, tmp, sizeof(failed_t)-strlen(failed_t)-1); fcount_t++; }
-            else { if (icount_t) strncat(incon_t, ",", sizeof(incon_t)-strlen(incon_t)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(incon_t, tmp, sizeof(incon_t)-strlen(incon_t)-1); icount_t++; }
+        test3_effective_count++;
+        if (obs_side1 == side) {
+            printf("==> OK\n");
         }
-        if (pcount_t == 0) strncpy(passed_t, "(none)", sizeof(passed_t));
-        if (fcount_t == 0) strncpy(failed_t, "(none)", sizeof(failed_t));
-        if (icount_t == 0) strncpy(incon_t, "(none)", sizeof(incon_t));
 
-        char after_list_str[64]; after_list_str[0] = '\0';
-        char before_list_str[64]; before_list_str[0] = '\0';
-        char incon_list_str[64]; incon_list_str[0] = '\0';
-        int after_count_t = 0, before_count_t = 0, incon_count_t = 0;
-        for (int t = 0; t < 7; ++t) {
-            if (tests[t] == 1) { if (after_count_t) strncat(after_list_str, ",", sizeof(after_list_str)-strlen(after_list_str)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(after_list_str, tmp, sizeof(after_list_str)-strlen(after_list_str)-1); after_count_t++; }
-            else if (tests[t] == -1) { if (before_count_t) strncat(before_list_str, ",", sizeof(before_list_str)-strlen(before_list_str)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(before_list_str, tmp, sizeof(before_list_str)-strlen(before_list_str)-1); before_count_t++; }
-            else { if (incon_count_t) strncat(incon_list_str, ",", sizeof(incon_list_str)-strlen(incon_list_str)-1); char tmp[8]; snprintf(tmp, sizeof(tmp), "%d", t+1); strncat(incon_list_str, tmp, sizeof(incon_list_str)-strlen(incon_list_str)-1); incon_count_t++; }
+        if (obs_side1 != side) {
+            printf("==> KO\n");
+            all_same_side = 0;
+            test3state = -1;
+            PDBG("Test #3 failed for faces %d and %d\n", f1, f2);
+            PKEYP();
+            break;
         }
-        if (before_count_t == 0) strncpy(before_list_str, "(none)", sizeof(before_list_str));
-        if (after_count_t == 0) strncpy(after_list_str, "(none)", sizeof(after_list_str));
-        if (incon_count_t == 0) strncpy(incon_list_str, "(none)", sizeof(incon_list_str));
+    }
 
-        printf("Face %d: BEFORE tests: %s; AFTER tests: %s; inconclusive: %s\n", f, before_list_str, after_list_str, incon_list_str);
-        if (after_count_t == 0 && before_count_t == 0) {
-            printf("  Overall: inconclusive (no decisive tests)\n");
+    if (test3state != -1) {
+        if (test3_effective_count == 0) {
+            test3state = 0;
+        } else if (all_same_side) {
+            test3state = 1;
         } else {
-            if (before_count_t) printf("Concluded: Face %d should be BEFORE face %d (tests: %s)\n\n", f, target_face, before_list_str);
-            if (after_count_t) printf("Concluded: Face %d should be AFTER face %d (tests: %s)\n\n", f, target_face, after_list_str);
+            test3state = -1;
         }
     }
-
-    // Offer a preview (always, as in inspect_faces_before)
-    printf("\nPress a key to preview model with highlight selected and misplaced faces (if any).\n");
-    keypress();
-    startgraph(mode);
-
-    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
-    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
-
-    int old_frame = framePolyOnly;
-    framePolyOnly = 1; // wireframe
-    // Wireframe preview: handled via the `framePolyOnly` flag and `drawPolygons()` (no separate `processModelWireframe()` function)
-    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
-
-    for (int i = 0; i < misplaced_count; ++i) {
-        int f = misplaced[i];
-        faces->display_flag[f] = 1;
-        drawFace(model, f, COL_PALE_PURPLE, 0);
+    if (test3state == 1) {
+        PDBG("Test #3 passed for Faces %d and %d\n", f1, f2);
+        PKEYP();
+    } else if (test3state == 0) {
+        PDBG("Test #3 inconclusive (all vertices ignored or observer on plane)\n");
+        PKEYP();
     }
-    faces->display_flag[target_face] = 1;
-    drawFace(model, target_face, COL_LIGHT_GREEN, 1);
 
+    skipT3_debug:
 
-    MoveTo(2, 195);
-    printf("%d face(s) should be before face %d, %d overlap%s\n", misplaced_count, target_face, overlap_count, overlap_count > 1 ? "s" : "");
-    keypress();
-    endgraph();
-    DoText();
+    // ********************* TEST #4 ********************
+    // Test #4: Copy of Test #2 with faces swapped (check if f2 is behind f1).
+    PDBG("\n******** Test #4 : Testing if faces %d is behind %d ********\n", f2, f1);
+    obs_side2 = 0;
+    if (d1 > (Fixed64)epsilon) obs_side2 = 1;
+    else if (d1 < -(Fixed64)epsilon) obs_side2 = -1;
+    if (obs_side2 == 0) {
+        test4state = 0;
+        goto skipT4_debug;
+    }
+    all_opposite_side = 1;
+    int test4_effective_count = 0;
 
-    framePolyOnly = old_frame;
-    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
-    free(backup_flags);
+    printf("Observer side = %d\n", obs_side2);
+    PDBG("If face %d is entirely on the opposite side of %d's plane,\n", f2, f1);
+    PDBG("==> test_values for all vertices of face %d have opposite sign to obs. side.\n", f2);
 
-    // If there are misplaced faces, offer to fix by moving target after the largest index
-    if (misplaced_count > 0) {
-        printf("\nPress 'A' to move face %d considering ALL misplaced faces, 'O' for overlaps only, or any other key to skip: ", target_face);
-        int key = getkeypress ();
-        
-        if (key == 'A' || key == 'a' || key == 'O' || key == 'o') {
-            int max_pos = -1;
-            int target_to_move_after = -1;
-            int use_overlaps = (key == 'O' || key == 'o');
-            
-            // Determine which list to use and check if available
-            if (use_overlaps && overlap_count == 0) {
-                printf("\nNo overlaps to process.\n");
-            } else {
-                // Find the largest position among selected faces
-                int count_to_check = use_overlaps ? overlap_count : misplaced_count;
-                int *faces_to_check = use_overlaps ? overlaps : misplaced;
-                
-                for (int i = 0; i < count_to_check; ++i) {
-                    int f = faces_to_check[i];
-                    // Find position in sorted list
-                    for (int si = 0; si < face_count; ++si) {
-                        if (faces->sorted_face_indices[si] == f) {
-                            if (si > max_pos) {
-                                max_pos = si;
-                                target_to_move_after = f;
-                            }
-                            break;
-                        }
-                    }
-                }
-                
-                if (target_to_move_after >= 0 && max_pos >= 0) {
-                    printf("\nMoving face %d (currently at pos %d) to position %d (after face %d) - mode: %s...\n", 
-                           target_face, pos, max_pos, target_to_move_after, use_overlaps ? "overlaps" : "all");
-                    
-                    // Move target_face to max_pos (after the misplaced face with largest index)
-                    move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, max_pos);
-                    
-                    printf("Done! Face %d has been moved.\n", target_face);
-                    printf("Press any key to continue...\n");
-                    keypress();
-                } else {
-                    printf("\nError: could not determine target position.\n");
-                }
-            }
+    for (k = 0; k < n2; k++) {
+        int v = faces->vertex_indices_buffer[offset2+k] - 1;
+        Fixed64 acc = 0;
+        acc  = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
+        acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
+        acc += (Fixed64)d1;
+
+        PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
+        if (acc > (Fixed64)epsilon) side = 1;
+        else if (acc < -(Fixed64)epsilon) side = -1;
+        else {
+            printf("==> ignored\n");
+            continue;
+        }
+
+        test4_effective_count++;
+        if (obs_side2 != side) {
+            printf("==> OK\n");
         } else {
-            printf("\nSkipped.\n");
+            printf("==> KO\n");
+            all_opposite_side = 0;
+            test4state = -1;
+            PDBG("Test #4 failed for faces %d and %d\n", f2, f1);
+            PKEYP();
+            break;
         }
     }
 
-    if (overlaps) free(overlaps);
-    free(misplaced);
-    cull_back_faces = old_cull;
+    if (test4state != -1) {
+        if (test4_effective_count == 0) {
+            test4state = 0;
+        } else if (all_opposite_side) {
+            test4state = 1;
+        } else {
+            test4state = -1;
+        }
+    }
+    if (test4state == 1) {
+        PDBG("Test #4 passed for Faces %d and %d\n", f2, f1);
+        PKEYP();
+    } else if (test4state == 0) {
+        PDBG("Test #4 inconclusive (all vertices ignored or observer on plane)\n");
+        PKEYP();
+    }
+
+    skipT4_debug:
+
+    printf("\n**** SUMMARY for faces %d and %d: ****\n", f1, f2);
+    if (test1state == 1) printf("Test #1: face %d in front of %d => OK\n", f2, f1);
+    else if (test1state == -1) printf("Test #1: failed\n");
+    else printf("Test #1: inconclusive\n");
+    if (test2state == 1) printf("Test #2: face %d behind %d => OK\n", f1, f2);
+    else if (test2state == -1) printf("Test #2: failed\n");
+    else printf("Test #2: inconclusive\n");
+    if (test3state == 1) printf("Test #3: face %d in front of %d => OK\n", f1, f2);
+    else if (test3state == -1) printf("Test #3: failed\n");
+    else printf("Test #3: inconclusive\n");
+    if (test4state == 1) printf("Test #4: face %d behind %d => OK\n", f2, f1);
+    else if (test4state == -1) printf("Test #4: failed\n");
+    else printf("Test #4: inconclusive\n");
+    keypress();
+    if (test1state == 1 || test2state == 1) return 1; else return 0;
 }
 
-
-segment "code24";
-/* display_model_face_ids
- * ----------------------
- * Draw the model in wireframe and overlay each face id centered on its polygon.
- * Implementation details:
- *  - Sets `framePolyOnly = 1` to render the wireframe for clarity,
- *  - Ensures all faces are visible, draws polygon frames, then calls `drawFace`
- *    with `show_index == 1` for each face to render the numeric ID in the center.
+/* Helper: show model wireframe, highlight two faces and display a message (MoveTo + printf).
+ * - Renders the model in wireframe, highlights `f1`/`f2`, performs MoveTo(3,198) then prints `msg`,
+ *   waits for a key, and restores rendering state. Kept minimal and non-invasive.
  */
-void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename) {
-    if (!model || !params) return;
+static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const char* msg, int screenx, int screeny) {
+    if (!model) return;
     FaceArrays3D* faces = &model->faces;
-    if (faces->face_count <= 0) { printf("No faces in model\n"); return; }
+    VertexArrays3D* vtx = &model->vertices;
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    if (backup_flags == NULL) { printf("Memory allocation failed\n"); return; }
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+    int old_frame = framePolyOnly;
 
     startgraph(mode);
+    framePolyOnly = 1; /* wireframe */
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+    else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
 
-    // Backup display flags
-    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
-    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+    unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
+    faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
+    drawFace(model, f1, COL_LIGHT_GREEN, 1);
+    drawFace(model, f2, COL_ORANGE, 1);
+    faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
 
-    int old_frame = framePolyOnly;
-    framePolyOnly = 1; // wireframe for clear labels
+    MoveTo(screenx, screeny);
+    printf("%s", msg);
+    // Wait for key
+    int key = getkeypress ();
 
-    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
-
-    int screenScale = mode / 320;
-    // Draw each face in the current sorted order (use existing faces->sorted_face_indices)
-    for (int si = 0; si < faces->face_count; ++si) {
-        int f = faces->sorted_face_indices[si];
-        if (!faces->display_flag[f]) continue;
-        // Draw face filled with green (fillPenPat = 10)
-        drawFace(model, f, COL_LIGHT_GREEN, 0);
-
-        // Compute integer bounding box center (use same logic as drawFace)
-        int offset = faces->vertex_indices_ptr[f];
-        int n = faces->vertex_count[f];
-        int min_x = 999999, max_x = -999999, min_y = 999999, max_y = -999999;
-        for (int k = 0; k < n; ++k) {
-            int vi = faces->vertex_indices_buffer[offset + k] - 1;
-            if (vi < 0 || vi >= model->vertices.vertex_count) continue;
-            int x = model->vertices.x2d[vi];
-            int y = model->vertices.y2d[vi];
-            if (x < min_x) min_x = x; if (x > max_x) max_x = x; if (y < min_y) min_y = y; if (y > max_y) max_y = y;
-        }
-        if (min_x <= max_x && min_y <= max_y) {
-            int center_x = (min_x + max_x) / 2;
-            int center_y = (min_y + max_y) / 2;
-            int screenCx = screenScale * (center_x + pan_dx);
-            int screenCy = center_y + pan_dy;
-
-            char tmp[32];
-            int len = snprintf(tmp, sizeof(tmp), "%d", f);
-            if (len > 15) len = 15;
-            unsigned char pstr[16];
-            pstr[0] = (unsigned char)len;
-            memcpy(&pstr[1], tmp, len);
-
-            // Draw index in green
-            SetSolidPenPat(COL_LIGHT_GREEN);
-            MoveTo(screenCx, screenCy);
-            DrawString(pstr);
-            SetSolidPenPat(COL_FILL_DEFAULT);
-        }
-    }
-
-    MoveTo(5, 195);
-    printf("Press any key to return\n");
-    keypress();
-    endgraph();
-    DoText();
-
-    // Restore
     framePolyOnly = old_frame;
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
+    endgraph(); DoText();
+    return key;
 }
 
-    // UTILITY FUNCTIONS...
 // ============================================================================
-//                    3D MODEL MANAGEMENT FUNCTIONS
+//  7. 3D MODEL MANAGEMENT, UTILITIES & SYSTEM HELPERS
 // ============================================================================
-/**
+
+/* show_help_pager
+ * ----------------
+ * Display the interactive help menu in pages limited to 20 lines each.
+ * The header is repeated at the top of every page. The user can press
+ * SPACE to continue to the next page or 'Q'/'q' to quit the help early.
+ */
+static void show_help_pager(void) {
+    const char* header[] = {
+        "===================================",
+        "    HELP - Keyboard Controller",
+        "===================================",
+        "" /* blank line */
+    };
+    const int header_count = sizeof(header)/sizeof(header[0]);
+
+    const char* lines[] = {
+        "Space: Display model info",
+        "A/Z: Decrease/Increase distance",
+        "+/-: Adjust projection scale (+/-10%)",
+        "K: Edit angles/distance (ENTER may auto-fit)",
+        "Arrow Left/Right: Change horizontal angle",
+        "Arrow Up/Down: Change vertical angle",
+        "W/X: Change screen rotation angle",
+        "C: Toggle color palette display",
+        "G: Cycle palettes",
+        "!: Toggle orientation shading",
+        "J: Toggle jittered rendering",
+        ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
+        ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
+        "1: Painter = FAST (simple sort only)",
+        "2: Painter = NORMAL (Fixed32/64)",
+        "3: Painter = GEO (geometry-only). Can be slow for large models",
+        "4: Painter = CORRECT (painter_correct)",
+        "5: Painter = CORRECTV2",
+        "O: Render scanline Z-Buffer (alternative to painter algorithm)",
+        "6: Both colors RANDOM mode",
+        "7: Choose fill color",
+        "8: Choose frame color",
+        "9: Reset colors, palette 0, and shading OFF",
+        "P: Toggle frame-only polygons",
+        "B: Toggle back-face culling",
+        "I: Toggle display of inconclusive pairs",
+        "E/e: Pan left", 
+        "R/r: Pan right",
+        "T/t: Pan up",
+        "Y/y: Pan down",
+        "0: Reset pan",
+        "D: Inspect faces BEFORE target",
+        "S: Inspect faces AFTER target",
+        "V: Show single face (navigate with arrows, show normals, space for details and other actions including hide/restore a face or all faces)",
+        "Q: Interactive face-pair inspector (space for details, then R/E/G for more actions)",
+        "M: Debug pair_plane_before",
+        "L: Label faces with IDs",
+        "F: Dump face data (3D, 2D, sort order) to file",
+        "N: Load new model",
+        "*: save SHGR screen as a PIC ($C1) not compressed file",
+        "H: Display this help message",
+        "ESC: Quit program"
+    };
+    int n = sizeof(lines)/sizeof(lines[0]);
+
+    const int max_lines = 20; // page height limit
+    int content_per_page = max_lines - header_count;
+    if (content_per_page <= 0) content_per_page = 1;
+
+    int pos = 0;
+    while (pos < n) {
+        // Print header
+        for (int h = 0; h < header_count; ++h) printf("%s\n", header[h]);
+        // Print a page of content
+        int end = pos + content_per_page;
+        for (int i = pos; i < end && i < n; ++i) printf("%s\n", lines[i]);
+
+        // Prompt for next action on every page.
+        printf("\nPress ESC to quit, any other key to continue...\n");
+        char key = getkeypress(); 
+
+        if (key == 27) return; // ESC quits
+
+        // Any other key advances page. If on final page, wrap to first page.
+        if (end >= n) {
+            pos = 0;
+        } else {
+            pos = end;
+        }
+
+        // clear a separating line between pages
+        DoText();
+        printf("\n");
+    }
+}
+
+segment "code21";
+void DoText() {
+        shroff();
+        putchar((char) 12); // Clear screen    
+}
+void setProDOSFileType(const char* filename, int fileType, long auxType) {
+    FileInfoRecGS pb;
+    GSString255 gsName;
+
+    gsName.length = strlen(filename);
+    strncpy((char*)gsName.text, filename, gsName.length);
+
+    pb.pCount = 5;              // verify against your GSOS.h - number of params for this call
+    pb.pathname = &gsName;
+    pb.access = 0xC3;           // standard full-access default, unchanged
+    pb.fileType = fileType;     // e.g. 0xC1
+    pb.auxType = auxType;       // e.g. 0x0000
+    pb.storageType = 0;         // 0 = leave unchanged (per GS/OS SetFileInfo semantics)
+    pb.optionList = 0;
+
+    SetFileInfoGS(&pb);
+}
+
+#define SHR_BASE        0xE12000UL
+#define SHR_SIZE        32768UL
+void saveSHRAsRawPic(const char *filename)
+{
+    FILE *out;
+    unsigned char *shr;
+    unsigned long i;
+
+    /*
+     * Adresse réelle de la mémoire SHR :
+     *
+     * $E1:2000 = $E12000
+     *
+     * Le cast en pointeur 32 bits permet à ORCA/C
+     * d'utiliser l'adressage long.
+     */
+    shr = (volatile unsigned char *)SHR_BASE;
+
+    out = fopen(filename, "wb");
+
+    if (out == NULL) {
+        printf("Error: unable to open %s for writing\n", filename);
+        return;
+    }
+
+    /*
+     * Copie brute des 32 Ko SHR.
+     *
+     * $E12000 -> $E19FFF
+     */
+    for (i = 0; i < SHR_SIZE; i++) {
+        fputc(shr[i], out);
+    }
+
+    fclose(out);
+
+    /*
+     * PIC, non compressé.
+     */
+    setProDOSFileType(filename, 0xC1, 0x0000);
+
+    printf("Saved %s\n", filename);
+}
+
+// --- Generic screenshot entry point, callable after ANY renderer ---
+void saveNextScreenshot(void) {
+    char fname[16];
+    int idx;
+    FILE* test;
+
+    for (idx = 0; idx < 1000; idx++) {
+        sprintf(fname, "screen%03d.PIC", idx);
+        test = fopen(fname, "rb");
+        if (test == NULL) {
+            break; // this index is free
+        }
+        fclose(test);
+    }
+
+    if (idx >= 1000) {
+        printf("Error: no available screen index (000-999 all used)\n");
+        return;
+    }
+
+    saveSHRAsRawPic(fname);
+}
+
+
+/*
  * CREATING A NEW 3D MODEL
  * ========================
  * 
@@ -5897,7 +7548,6 @@ Model3D* createModel3D(void) {
 
 /**
  * MEMORY CLEANUP - DESTROY MODEL 3D
- * ==================================
  * 
  * This function frees all memory allocated by createModel3D().
  * Must be called when the model is no longer needed to prevent memory leaks.
@@ -5957,6 +7607,7 @@ void destroyModel3D(Model3D* model) {
 }
 
 segment "code08";
+
 /**
  * COMPLETE 3D MODEL LOADING
  * ==========================
@@ -5975,6 +7626,36 @@ segment "code08";
  * - Face reading failure: warning but continue
  *   (vertices-only model remains usable)
  */
+int loadModel3D(Model3D* model, const char* filename) {
+    // Input parameter validation
+    if (model == NULL || filename == NULL) {
+        return -1;  // Invalid parameters
+    }
+    
+    // Step 1: Read vertices from OBJ file
+    // --- Update global counter for face index verification ---
+    readVertices_last_count = model->vertices.vertex_count;
+    
+    int vcount = readVertices(filename, &model->vertices, MAX_VERTICES, model);
+    if (vcount < 0) {
+        return -1;  // Critical failure: unable to read vertices
+    }
+    model->vertices.vertex_count = vcount;
+    
+    // Step 2: Read faces from OBJ file (using chunked allocation)
+    // This function handles reading faces into 2 chunks transparently
+    int fcount = readFaces_model(filename, model);
+    if (fcount < 0) {
+        // Critical failure: unable to read faces
+        printf("\nWarning: Unable to read faces\n");
+        model->faces.face_count = 0;  // No faces available
+    } else {
+        model->faces.face_count = fcount;
+        /* compute 3D bounding boxes for all faces */
+        /* overlap scan is controlled by caller */
+    }
+    return 0;  // Success: model loaded (with or without faces)
+}
 
 /* Compute object-space axis-aligned bounding box for every face.  Allocates
  * arrays inside faces->minx3 etc.  Must be called after vertices and faces are
@@ -6029,37 +7710,6 @@ static void compute_face_bboxes3D(Model3D* model) {
         faces->minz3[fi] = mnz;
         faces->maxz3[fi] = mxz;
     }
-}
-
-int loadModel3D(Model3D* model, const char* filename) {
-    // Input parameter validation
-    if (model == NULL || filename == NULL) {
-        return -1;  // Invalid parameters
-    }
-    
-    // Step 1: Read vertices from OBJ file
-    // --- Update global counter for face index verification ---
-    readVertices_last_count = model->vertices.vertex_count;
-    
-    int vcount = readVertices(filename, &model->vertices, MAX_VERTICES, model);
-    if (vcount < 0) {
-        return -1;  // Critical failure: unable to read vertices
-    }
-    model->vertices.vertex_count = vcount;
-    
-    // Step 2: Read faces from OBJ file (using chunked allocation)
-    // This function handles reading faces into 2 chunks transparently
-    int fcount = readFaces_model(filename, model);
-    if (fcount < 0) {
-        // Critical failure: unable to read faces
-        printf("\nWarning: Unable to read faces\n");
-        model->faces.face_count = 0;  // No faces available
-    } else {
-        model->faces.face_count = fcount;
-        /* compute 3D bounding boxes for all faces */
-        /* overlap scan is controlled by caller */
-    }
-    return 0;  // Success: model loaded (with or without faces)
 }
 
 /*
@@ -6143,6 +7793,42 @@ static void compute_face_plane(Model3D* model, int fidx,
     *d = -(*a * x0 + *b * y0 + *c * z0);
 }
 
+
+/**
+ * PAINTER'S ALGORITHM - NEWELL / SANCHA (detailed)
+ * =================================================
+ * Overview:
+ *  - The painter builds an ordering of faces for correct filled-polygon rendering without
+ *    performing geometric splits. The algorithm follows the Newell/Sancha approach:
+ *      1) Compute per-face depth metrics (z_min/z_max/z_mean) and planar coefficients.
+ *      2) Initially sort faces by z_mean (descending) to obtain a broadly correct depth order.
+ *      3) Use axis-aligned bounding-box overlap tests (X and Y) to detect candidate overlapping faces.
+ *      4) For overlapping pairs, apply robust pairwise ordering tests using plane/triangle votes and
+ *         local sampling; if the order is ambiguous, record the pair in the `inconclusive_pairs`
+ *         buffer for diagnostic framing and later inspection (no automatic splitting).
+ *
+ * Visibility & culling:
+ *  - When `cull_back_faces` is enabled, the painter operates primarily on the subset of faces
+ *    with `display_flag == 1` (visible). Culled faces are appended afterwards to preserve
+ *    stable indices and deterministic behavior of `sorted_face_indices`.
+ *
+ * Modes:
+ *  - FAST: performs only low-cost tests (depth + bbox) and skips plane calculations for speed.
+ *  - FIXED: Full fixed-point Newell/Sancha implementation with all pairwise tests and corrections.
+
+ * Notes:
+ *  - The algorithm is intentionally conservative: inconclusive pairs are stored rather than
+ *    forcing a risky swap that may introduce visual artifacts.
+ *  - Use `frameInconclusivePairs()` in diagnostics to highlight such pairs in the rendered view.
+ *
+ * Usage:
+ *  - Call `painter_newell_sancha(model, face_count)` (or a mode-specific variant) after
+ *    `calculateFaceDepths()` / `processModelFast()` has computed observer-space coordinates.
+ */
+
+ // >>>>>>
+
+
 /*
  * Return non-zero if any edge of face `fi` crosses the infinite plane of
  * face `fj`.  Crossing is detected when the signed distance of an edge's
@@ -6176,7 +7862,6 @@ static int faces_share_vertex_or_edge(FaceArrays3D* faces, int i, int j) {
  * face `fj`.  This refines the previous plane-crossing test by computing the
  * intersection point and verifying it lies within the polygon of `fj`.
  */
-
 
 /* Helper: return !0 if an edge of face `ei` crosses the interior of
  * face `fj` **strictly** (intersection point lies in the polygon interior,
@@ -7214,148 +8899,6 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
  *  - OPTIMISATION : pre calculate matrix coefficients and use direct table access 
  *   for trig functions to avoid function call overhead. 100% Fixed32 loop with no conversions for maximum speed.
  */
-segment "code10";
-void processModelFast(Model3D* model, ObserverParams* params, const char* filename) {
-    int i;
-
-    Fixed32 cos_h, sin_h, cos_v, sin_v, cos_w, sin_w;
-    Fixed32 x, y, z, zo, xo, yo;
-    Fixed32 inv_zo, x2d_temp, y2d_temp;
-    
-    // Direct table access - ultra-fast! (no function calls)
-    cos_h = cos_deg_int(params->angle_h);
-    sin_h = sin_deg_int(params->angle_h);
-    cos_v = cos_deg_int(params->angle_v);
-    sin_v = sin_deg_int(params->angle_v);
-    cos_w = cos_deg_int(params->angle_w);
-    sin_w = sin_deg_int(params->angle_w);
-
-    // Pre-calculate all trigonometric products in Fixed32 - using 64-bit multiply
-    const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
-    const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
-    const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
-    const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
-
-    /* Precomputed rotation matrix - 9 coefficients */
-    Fixed32 M00, M01, M02;
-    Fixed32 M10, M11, M12;
-    Fixed32 M20, M21, M22;
-
-    // Use global projection scale, which is synced with auto-fit when applied
-    Fixed32 scale = s_global_proj_scale_fixed;
-    const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
-    const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
-    Fixed32 distance = params->distance;
-    // Apply auto-scale if any
-    //distance = FIXED_MUL_64(distance, INT_TO_FIXED(4));
-    
-    // 100% Fixed32 loop - ZERO conversions, maximum speed!
-    VertexArrays3D* vtx = &model->vertices;
-    Fixed32 *x_arr = vtx->x, *y_arr = vtx->y, *z_arr = vtx->z;
-    Fixed32 *xo_arr = vtx->xo, *yo_arr = vtx->yo, *zo_arr = vtx->zo;
-    int *x2d_arr = vtx->x2d, *y2d_arr = vtx->y2d;
-    int vcount = vtx->vertex_count;
-
-    long t_loop_start = GetTick();
-    
-    M20 = FIXED_NEG(cos_h_cos_v);
-    M21 = FIXED_NEG(sin_h_cos_v);
-    M22 = FIXED_NEG(sin_v);
-
-    if (params->angle_w == 0) {
-        M00 = FIXED_NEG(sin_h);
-        M01 = cos_h;
-        M02 = 0;
-        M10 = FIXED_NEG(cos_h_sin_v);
-        M11 = FIXED_NEG(sin_h_sin_v);
-        M12 = cos_v;
-    } else {
-        M00 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(cos_w), sin_h),
-                        FIXED_MUL_64(sin_w, cos_h_sin_v));
-        M01 = FIXED_SUB(FIXED_MUL_64(cos_w, cos_h),
-                        FIXED_MUL_64(sin_w, FIXED_NEG(sin_h_sin_v)));
-        M02 = FIXED_MUL_64(FIXED_NEG(sin_w), cos_v);
-        M10 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(sin_w), sin_h),
-                        FIXED_MUL_64(FIXED_NEG(cos_w), cos_h_sin_v));
-        M11 = FIXED_ADD(FIXED_MUL_64(sin_w, cos_h),
-                        FIXED_MUL_64(FIXED_NEG(cos_w), sin_h_sin_v));
-        M12 = FIXED_MUL_64(cos_w, cos_v);
-    }
-
-
-    for (i = 0; i < vcount; i++) {
-        x = x_arr[i];
-        y = y_arr[i];
-        z = z_arr[i];
-
-        zo = FIXED_ADD(
-                FIXED_ADD(
-                    FIXED_ADD(FIXED_MUL_64(M20, x),
-                            FIXED_MUL_64(M21, y)),
-                    FIXED_MUL_64(M22, z)),
-                distance);
-
-        if (zo > 0) {
-            xo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M00, x),
-                                    FIXED_MUL_64(M01, y)),
-                        FIXED_MUL_64(M02, z));
-            yo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M10, x),
-                                    FIXED_MUL_64(M11, y)),
-                        FIXED_MUL_64(M12, z));
-            zo_arr[i] = zo;
-            xo_arr[i] = xo;
-            yo_arr[i] = yo;
-            inv_zo = FIXED_DIV_64(scale, zo);
-            x2d_arr[i] = FIXED_ROUND_TO_INT(
-                            FIXED_ADD(FIXED_MUL_64(xo, inv_zo), centre_x_f));
-            y2d_arr[i] = FIXED_ROUND_TO_INT(
-                            FIXED_SUB(centre_y_f, FIXED_MUL_64(yo, inv_zo)));
-        } else {
-            zo_arr[i] = zo;
-            xo_arr[i] = 0;
-            yo_arr[i] = 0;
-            x2d_arr[i] = -1;
-            y2d_arr[i] = -1;
-        }
-    }
-
-    long t_loop_end = GetTick();
-
-    // Face sorting after transformation
-    long t_start, t_end;
-    t_start = GetTick();
-    calculateFaceDepths(model, NULL, model->faces.face_count);
-    if (shaded_by_orientation) {
-        computeOrientationShading(model);
-    }
-    t_end = GetTick();
-
-
-    if (framePolyOnly) goto skip_calc; // Skip face calculations for framed polygons only display
-
-    // CRITICAL: Reset sorted_face_indices before each sort to prevent corruption
-    // for (i = 0; i < model->faces.face_count; i++) {
-    //     model->faces.sorted_face_indices[i] = i;
-    // }
-    // painter_newell_sancha 
-    t_start = GetTick();
-    if (painter_mode == PAINTER_MODE_FAST) {
-        painter_newell_sancha_fast(model, model->faces.face_count);
-    } else if (painter_mode == PAINTER_MODE_FIXED) {
-        painter_newell_sancha(model, model->faces.face_count);
-    } else if (painter_mode == PAINTER_MODE_CORRECT) {
-        /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
-        painter_correct(model, model->faces.face_count, 0);
-    } else if (painter_mode == PAINTER_MODE_GEO) {
-        painter_geoV2(model, model->faces.face_count);
-    } else if (painter_mode == PAINTER_MODE_CORRECTV2) {
-        /* painter_correctV2: experimental face splitting version */
-        painter_correctV2(model, model->faces.face_count, 0);
-    } 
-    t_end = GetTick();
-
-    skip_calc:;
-}
 
 // ============================================================================
 //                    BASIC FUNCTION IMPLEMENTATIONS
@@ -7511,56 +9054,6 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
     return vertex_count;  // Return the number of vertices read
 }
 
-// Normalize auto-fit parameters so that observer distance becomes 150
-// by scaling model vertices and projection scale accordingly.
-//
-// For a model where auto-fit produced:
-//   D = auto_suggested_distance
-//   P = auto_suggested_proj_scale
-// the normalization applies:
-//   factor = D / 150
-//   new D = D * factor
-//   new P = P * factor
-//   vertices *= factor
-//
-// This keeps the apparent size on-screen constant while forcing the
-// observer distance to be 150.
-void normalizeAutoFitDistanceTo150(Model3D* model) {
-    if (model == NULL) return;
-    Fixed32 D = model->auto_suggested_distance;
-    Fixed32 P = model->auto_suggested_proj_scale;
-    if (D <= 0 || P <= 0) return;
-
-    const Fixed32 targetD = INT_TO_FIXED(150);
-    // Apply the pure “distance forced to 150 with unchanged on-screen size” formula:
-    //   factor = sqrt(150 / D)
-    // Here sqrt is required because screen projection is proportional to (P * M) / D,
-    // so scaling both M and P by k changes screen size by k^2.
-    float factor_f = sqrtf(FIXED_TO_FLOAT(targetD) / FIXED_TO_FLOAT(D));
-    if (factor_f <= 0.0f) return;
-    Fixed32 factor = FLOAT_TO_FIXED(factor_f);
-
-    // Scale model vertices
-    VertexArrays3D* vtx = &model->vertices;
-    for (int i = 0; i < vtx->vertex_count; ++i) {
-        vtx->x[i] = FIXED_MUL_64(vtx->x[i], factor);
-        vtx->y[i] = FIXED_MUL_64(vtx->y[i], factor);
-        vtx->z[i] = FIXED_MUL_64(vtx->z[i], factor);
-    }
-
-    // Update metadata to match the applied scaling
-    model->auto_suggested_distance = targetD;
-    model->auto_suggested_proj_scale = FIXED_MUL_64(P, factor);
-    model->auto_proj_scale = model->auto_suggested_proj_scale;
-    s_global_proj_scale_fixed = model->auto_proj_scale;
-    // Keep epsilon scaling (used in geometry tests) consistent with the forced distance.
-    current_observer_distance = targetD;
-
-    printf("Auto-fit normalized: D=%.4f P=%.2f factor=%.4f\n",
-        FIXED_TO_FLOAT(model->auto_suggested_distance),
-        FIXED_TO_FLOAT(model->auto_suggested_proj_scale),
-        FIXED_TO_FLOAT(factor));
-}
 
 segment "code13";
 // Function to read faces into parallel arrays in FaceArrays3D structure
@@ -7679,199 +9172,6 @@ int readFaces_model(const char* filename, Model3D* model) {
     return face_count;
 }
 
-/**
- * CALCULATING MINIMUM FACE DEPTHS AND VISIBILITY FLAGS
- * =====================================================
- * 
- * This function calculates for each face:
- * 1. The minimum depth (z_min) of all its vertices in the observer coordinate system
- * 2. The display visibility flag based on vertex positions relative to camera
- * 
- * The z_min value is used for face sorting during rendering (painter's algorithm).
-
- * We use minimum (closest point) for correct occlusion in the painter's algorithm.
- * The display_flag is used to cull faces that have vertices behind the camera.
- * 
- * PARAMETERS:
- *   vertices   : Array of vertices with coordinates in observer system
- *   faces      : Array of faces to process  
- *   face_count : Number of faces
- * 
- * PER-FACE DEPTH, BBOX, & PLANE COMPUTATION (calculateFaceDepths)
- * ================================================================
- * Purpose:
- *   Compute per-face metrics required by the painters and diagnostics:
- *     - z_min, z_max and z_mean (observer-space depths) used for coarse sorting
- *     - screen-space axis-aligned bounding box (min/max X/Y) used for cheap overlap tests
- *     - planar coefficients (Newell method) A/B/C/D for robust face-plane tests
- *     - `display_flag` indicating basic visibility (behind-camera or culled by plane test)
- *
- * Algorithm summary (per face):
- *   1) Iterate vertices in observer-space (xo/yo/zo). If any vertex has zo <= 0, mark
- *      `display_flag = 0` (non-displayable) to avoid projection artefacts.
- *   2) Accumulate z_min/z_max and compute z_mean (used by initial z-sorting in the painter).
- *   3) Compute the face's axis-aligned bbox from integer screen coords (x2d/y2d) for quick
- *      overlap tests (used by Newell/Sancha tests 2 and 3).
- *   4) Compute planar coefficients (A,B,C,D) using Newell's method; these are used to
- *      perform finer pairwise tests and the optional **observer-space back-face culling**
- *      if `cull_back_faces` is enabled (test D <= 0 indicates a back-face relative to observer).
- *
- * Implementation notes:
- *   - Plane coefficients are kept both in Fixed32 (for fixed-mode painter) and cached/converted
- *     to float buffers for the FLOAT painter mode. Conversion flags track whether a float copy
- *     is available to avoid repeated conversions.
- *   - `display_flag == 1` means the face is eligible for drawing; `0` indicates it is either
- *     behind the camera or culled by the observer-space back-face test when enabled.
- *   - This function must be called AFTER vertex transforms into observer-space (e.g. by
- *     `processModelFast()` or `transformToObserver()`), because it reads xo/yo/zo/x2d/y2d arrays.
- *
- * Performance & debug:
- *   - The function optionally logs culling counts when not in PERFORMANCE_MODE.
- *   - The function is intentionally designed to be O(n) over faces and linear in face vertex counts.
- */
-segment "code14";
-void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
-    int i, j;
-    int culled_count = 0; // diagnostic: number of faces culled by back-face test (observer-space)
-    VertexArrays3D* vtx = &model->vertices;
-    FaceArrays3D* face_arrays = &model->faces;
-
-    for (i = 0; i < face_count; i++) {
-        Fixed32 z_min = FLOAT_TO_FIXED(9999.0);  // Initialize to very large value (closest)
-        Fixed32 z_max = FLOAT_TO_FIXED(-9999.0); // Initialize to very small value (farthest)
-        int display_flag = 1;
-        Fixed32 sum = 0;
-        int n = face_arrays->vertex_count[i];
-        int minx = 9999, maxx = -9999, miny = 9999, maxy = -9999;
-
-        // Access indices from the packed buffer using the offset
-        int offset = face_arrays->vertex_indices_ptr[i];
-
-        // --- Newell accumulators (plane normal via ALL vertices, robust to concave faces) ---
-        Fixed64 a64 = 0, b64 = 0, c64 = 0, d64 = 0;
-        Fixed64 sumx64 = 0, sumy64 = 0, sumz64 = 0;
-        Fixed32 x_prev = 0, y_prev = 0, z_prev = 0;
-        Fixed32 x_first = 0, y_first = 0, z_first = 0;
-        Fixed32 xc = 0, yc = 0, zc = 0;
-        int valid_n = 0;
-        int have_prev = 0;
-
-        for (j = 0; j < n; j++) {
-            int vertex_idx = face_arrays->vertex_indices_buffer[offset + j] - 1;
-            if (vertex_idx >= 0) {
-                Fixed32 zo = vtx->zo[vertex_idx];
-                Fixed32 xo = vtx->xo[vertex_idx];
-                Fixed32 yo = vtx->yo[vertex_idx];
-
-                if (zo < 0) display_flag = 0;
-                if (zo < z_min) z_min = zo;
-                if (zo > z_max) z_max = zo;
-                sum += zo;
-
-                int x2d = vtx->x2d[vertex_idx];
-                int y2d = vtx->y2d[vertex_idx];
-                if (x2d < minx) minx = x2d;
-                if (x2d > maxx) maxx = x2d;
-                if (y2d < miny) miny = y2d;
-                if (y2d > maxy) maxy = y2d;
-
-                // centroid accumulation (Fixed64 to avoid overflow with many vertices)
-                sumx64 += (Fixed64)xo;
-                sumy64 += (Fixed64)yo;
-                sumz64 += (Fixed64)zo;
-
-                if (!have_prev) {
-                    x_first = xo; y_first = yo; z_first = zo;
-                    x_prev  = xo; y_prev  = yo; z_prev  = zo;
-                    have_prev = 1;
-                } else {
-                    Fixed32 dy = FIXED_SUB(y_prev, yo);
-                    Fixed32 dz = FIXED_SUB(z_prev, zo);
-                    Fixed32 dx = FIXED_SUB(x_prev, xo);
-                    Fixed32 sy = y_prev + yo;
-                    Fixed32 sz = z_prev + zo;
-                    Fixed32 sx = x_prev + xo;
-
-                    a64 += (Fixed64)dy * sz;
-                    b64 += (Fixed64)dz * sx;
-                    c64 += (Fixed64)dx * sy;
-
-                    x_prev = xo; y_prev = yo; z_prev = zo;
-                }
-                valid_n++;
-            }
-        }
-
-        if (!display_flag || n < 3 || valid_n < 3) {
-            // face is behind camera or degenerate: zero coefficients
-            face_arrays->plane_a[i] = 0;
-            face_arrays->plane_b[i] = 0;
-            face_arrays->plane_c[i] = 0;
-            face_arrays->plane_d[i] = 0;
-            if (shaded_by_orientation) {
-                face_shade_color[i] = COL_FILL_DEFAULT;
-            }
-        } else {
-            // close the Newell cycle: last valid vertex -> first valid vertex
-            Fixed32 dy = FIXED_SUB(y_prev, y_first);
-            Fixed32 dz = FIXED_SUB(z_prev, z_first);
-            Fixed32 dx = FIXED_SUB(x_prev, x_first);
-            Fixed32 sy = y_prev + y_first;
-            Fixed32 sz = z_prev + z_first;
-            Fixed32 sx = x_prev + x_first;
-
-            a64 += (Fixed64)dy * sz;
-            b64 += (Fixed64)dz * sx;
-            c64 += (Fixed64)dx * sy;
-
-            a64 >>= FIXED_SHIFT;
-            b64 >>= FIXED_SHIFT;
-            c64 >>= FIXED_SHIFT;
-
-            xc = (Fixed32)(sumx64 / valid_n);
-            yc = (Fixed32)(sumy64 / valid_n);
-            zc = (Fixed32)(sumz64 / valid_n);
-
-            d64 = -(((Fixed64)a64 * xc) + ((Fixed64)b64 * yc) + ((Fixed64)c64 * zc));
-            d64 >>= FIXED_SHIFT;
-
-            face_arrays->plane_a[i] = a64;
-            face_arrays->plane_b[i] = b64;
-            face_arrays->plane_c[i] = c64;
-            face_arrays->plane_d[i] = d64;
-
-            // Optional back-face culling in observer-space: if the plane D term is <= 0,
-            // the plane faces away from the observer (origin), so cull the face when enabled.
-            if (cull_back_faces && display_flag) {
-                if (d64 <= 0) {
-                    display_flag = 0;
-                    ++culled_count;
-                }
-            }
-        }
-
-        face_arrays->z_min[i] = z_min;  // Store minimum depth for this face (closest)
-        face_arrays->z_max[i] = z_max;  // Store maximum depth for this face (farthest)
-        face_arrays->display_flag[i] = display_flag;
-        if (n > 0) {
-            if (n == 4)      face_arrays->z_mean[i] = sum >> 2;
-            else if (n == 3) face_arrays->z_mean[i] = sum / 3;
-            else             face_arrays->z_mean[i] = sum / n;
-            face_arrays->minx[i] = minx;
-            face_arrays->maxx[i] = maxx;
-            face_arrays->miny[i] = miny;
-            face_arrays->maxy[i] = maxy;
-        } else {
-            face_arrays->z_mean[i] = 0;
-            face_arrays->z_min[i] = 0;
-            face_arrays->z_max[i] = 0;
-            face_arrays->minx[i] = 0;
-            face_arrays->maxx[i] = 0;
-            face_arrays->miny[i] = 0;
-            face_arrays->maxy[i] = 0;
-        }
-    }
-}
 
 static void computeOrientationShading(Model3D* model) {
     if (!model) return;
@@ -8076,1133 +9376,11 @@ static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename) {
     } while (0)
 
 
-// Draw a single face (by face index) using the same QuickDraw path as drawPolygons
-// - respects face validity and display_flag
-// - uses globalPolyHandle and poly_handle_locked like drawPolygons
-segment "code16";
-// - honors framePolyOnly for frame-only rendering
-void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
-    if (!model) return;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    if (face_id < 0 || face_id >= faces->face_count) return;
-    if (faces->display_flag[face_id] == 0) return;
-    int vcount_face = faces->vertex_count[face_id];
-    if (vcount_face < 3) return;
 
-    int offset = faces->vertex_indices_ptr[face_id];
-    int *indices_base = &faces->vertex_indices_buffer[offset];
 
-    // Quick validity pass
-    for (int j = 0; j < vcount_face; ++j) {
-        int vi = indices_base[j] - 1;
-        if (vi < 0 || vi >= vtx->vertex_count) return; // invalid face -> nothing to draw
-    }
 
-    // Ensure global handle exists
-    if (globalPolyHandle == NULL) {
-        int max_polySize = 2 + 8 + (4 * 4);  // Max for quad (4 vertices)
-        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
-        if (globalPolyHandle == NULL) {
-            printf("Error: Unable to allocate global polygon handle\n");
-            return;
-        }
-    }
 
-    Handle polyHandle = globalPolyHandle;
-    if (poly_handle_locked) { HUnlock(polyHandle); poly_handle_locked = 0; }
-    HLock(polyHandle); poly_handle_locked = 1;
 
-    DynamicPolygon *poly = (DynamicPolygon *)*polyHandle;
-    int polySize = 2 + 8 + (vcount_face * 4);
-    poly->polySize = polySize;
 
-    int *x2d = vtx->x2d;
-    int *y2d = vtx->y2d;
 
-    // Initialize first point
-    int first_vi = indices_base[0] - 1;
-    int px = x2d[first_vi];
-    int py = y2d[first_vi];
-    poly->polyPoints[0].h = mode / 320 * (px + pan_dx);
-    poly->polyPoints[0].v = py + pan_dy;
-    int min_x = px, max_x = px, min_y = py, max_y = py;
 
-    for (int j = 1; j < vcount_face; ++j) {
-        int vi = indices_base[j] - 1;
-        px = x2d[vi];
-        py = y2d[vi];
-        poly->polyPoints[j].h = mode / 320 * (px + pan_dx);
-        poly->polyPoints[j].v = py + pan_dy;
-        if (px < min_x) min_x = px;
-        if (px > max_x) max_x = px;
-        if (py < min_y) min_y = py;
-        if (py > max_y) max_y = py;
-    }
-
-    poly->polyBBox.h1 = min_x + pan_dx;
-    poly->polyBBox.v1 = min_y + pan_dy;
-    poly->polyBBox.h2 = max_x + pan_dx;
-    poly->polyBBox.v2 = max_y + pan_dy;
-
-    int screenScale = mode / 320;
-    int screenW = screenScale * (CENTRE_X * 2);
-    int screenH = screenScale * (CENTRE_Y * 2);
-
-    int sc_min_x = screenScale * (min_x + pan_dx);
-    int sc_max_x = screenScale * (max_x + pan_dx);
-    int sc_min_y = (min_y + pan_dy);
-    int sc_max_y = (max_y + pan_dy);
-    if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) {
-        // Off-screen; nothing to draw
-    } else {
-        if (fillPenPat >= 0) {
-            SetSolidPenPat(fillPenPat);
-            Pattern pat;
-            GetPenPat(pat);
-            FillPoly(polyHandle, pat);
-            SetSolidPenPat(COL_FRAME);
-            FramePoly(polyHandle);
-            SetSolidPenPat(COL_FILL_DEFAULT);
-        } else if (framePolyOnly) {
-            /* Draw explicit solid wireframe using MoveTo/LineTo to avoid dotted
-             * outlines produced by FramePoly in certain pen/pattern states. */
-            SetPenMode(0); // PenMode = Copy ==> avoid dotted lines
-            SetSolidPenPat(COL_FRAME);
-            FramePoly(polyHandle);
-            // int first_h = poly->polyPoints[0].h;
-            // int first_v = poly->polyPoints[0].v;
-            // MoveTo(first_h, first_v);
-            // for (int kk = 1; kk < vcount_face; ++kk) {
-            //     LineTo(poly->polyPoints[kk].h, poly->polyPoints[kk].v);
-            // }
-            // LineTo(first_h, first_v);
-            SetSolidPenPat(COL_FILL_DEFAULT);
-        } else {
-            Pattern pat;
-            GetPenPat(pat);
-            FillPoly(polyHandle, pat);
-            SetSolidPenPat(COL_FRAME);
-            FramePoly(polyHandle);
-            SetSolidPenPat(COL_FILL_DEFAULT);
-        }
-
-        // Draw face index centered in the polygon using QuickDraw MoveTo + DrawString
-        if (show_index) {
-            int center_x = (min_x + max_x) / 2;
-            int center_y = (min_y + max_y) / 2;
-            // Use same transformation as polygon points: horizontal scaled, vertical and pan applied
-            int screenCx = screenScale * (center_x + pan_dx);
-            int screenCy = center_y + pan_dy;
-
-            char tmp[32];
-            int len = snprintf(tmp, sizeof(tmp), "%d", face_id);
-            if (len > 15) len = 15; // fit into Pascal string buffer
-            unsigned char pstr[16];
-            pstr[0] = (unsigned char)len;
-            memcpy(&pstr[1], tmp, len);
-
-            MoveTo(screenCx, screenCy);
-            DrawString(pstr);
-        }
-    }
-}
-
-// Draw only the face index label for a given face without rendering the polygon geometry.
-// This is used by the face inspector to overlay face numbers once all faces are visible.
-void drawFaceIndex(Model3D* model, int face_id) {
-    if (!model) return;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    if (face_id < 0 || face_id >= faces->face_count) return;
-    if (faces->display_flag[face_id] == 0) return;
-    int vcount_face = faces->vertex_count[face_id];
-    if (vcount_face < 3) return;
-
-    int offset = faces->vertex_indices_ptr[face_id];
-    int *indices_base = &faces->vertex_indices_buffer[offset];
-    int min_x = 999999, max_x = -999999, min_y = 999999, max_y = -999999;
-    for (int j = 0; j < vcount_face; ++j) {
-        int vi = indices_base[j] - 1;
-        if (vi < 0 || vi >= vtx->vertex_count) return;
-        int x = vtx->x2d[vi];
-        int y = vtx->y2d[vi];
-        if (x < min_x) min_x = x;
-        if (x > max_x) max_x = x;
-        if (y < min_y) min_y = y;
-        if (y > max_y) max_y = y;
-    }
-
-    int screenScale = mode / 320;
-    int center_x = (min_x + max_x) / 2;
-    int center_y = (min_y + max_y) / 2;
-    int screenCx = screenScale * (center_x + pan_dx);
-    int screenCy = center_y + pan_dy;
-
-    char tmp[32];
-    int len = snprintf(tmp, sizeof(tmp), "%d", face_id);
-    if (len > 15) len = 15;
-    unsigned char pstr[16];
-    pstr[0] = (unsigned char)len;
-    memcpy(&pstr[1], tmp, len);
-
-    Pattern savedPat;
-    GetPenPat(savedPat);
-    SetSolidPenPat(COL_FRAME);
-    MoveTo(screenCx, screenCy);
-    DrawString(pstr);
-    SetPenPat(savedPat);
-}
-
-segment "code17";
-// Function to draw polygons with QuickDraw
-void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_count_total) {
-    int i, j;
-    VertexArrays3D* vtx = &model->vertices;
-    FaceArrays3D* faces = &model->faces;
-    Handle polyHandle;
-    DynamicPolygon *poly;
-    int min_x, max_x, min_y, max_y;
-    int valid_faces_drawn = 0;
-    int invalid_faces_skipped = 0;
-    int triangle_count = 0;
-    int quad_count = 0;
-    Pattern pat;
-    
-    // Precompute screen scale and screen bounds for culling
-    int screenScale = mode / 320;
-    int screenW = screenScale * (CENTRE_X * 2);
-    int screenH = screenScale * (CENTRE_Y * 2);
-
-    // Use global persistent handle to avoid repeated NewHandle/DisposeHandle
-    // Each call allocates fresh if needed, but reuses same handle block
-    if (globalPolyHandle == NULL) {
-        int max_polySize = 2 + 8 + (MAX_FACE_VERTICES * 4);  // Max for MAX_FACE_VERTICES vertices
-        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
-        if (globalPolyHandle == NULL) {
-            printf("Error: Unable to allocate global polygon handle\n");
-            return;
-        }
-    }
-    
-    polyHandle = globalPolyHandle;
-    
-    // Make sure handle is unlocked before locking
-    if (poly_handle_locked) { 
-        HUnlock(polyHandle); 
-        poly_handle_locked = 0; 
-    }
-    HLock(polyHandle); 
-    poly_handle_locked = 1;
-
-    SetPenMode(0);
-    // printf("\nDrawing polygons on screen:\n");
-    // printf("\nDrawing polygons on screen:\n");
-
-    // Set fill pen once per frame (reduces state changes)
-    SetSolidPenPat(COL_FILL_DEFAULT);
-
-    // Use sorted_face_indices to draw in correct depth order
-    // Draw ALL faces - painter's algorithm handles occlusion
-    int start_face = 0;
-    int max_faces_to_draw = face_count;
-    for (i = start_face; i < start_face + max_faces_to_draw; i++) {
-        int face_id = faces->sorted_face_indices[i];
-        if (faces->display_flag[face_id] == 0) continue;
-        if (faces->vertex_count[face_id] >= 3) {
-            int offset = faces->vertex_indices_ptr[face_id];
-            int vcount_face = faces->vertex_count[face_id];
-            int *indices_base = &faces->vertex_indices_buffer[offset];
-
-            // Quick validity pass: ensure all indices are valid to avoid undefined points
-            int all_valid = 1;
-            for (j = 0; j < vcount_face; ++j) {
-                int vi = indices_base[j] - 1;
-                if (vi < 0 || vi >= vtx->vertex_count) { all_valid = 0; break; }
-            }
-            if (!all_valid) { invalid_faces_skipped++; continue; }
-
-            // Calculate polySize for this specific face
-            int polySize = 2 + 8 + (vcount_face * 4);
-            poly = (DynamicPolygon *)*polyHandle;
-            poly->polySize = polySize;
-
-            // Cache arrays
-            int *x2d = vtx->x2d;
-            int *y2d = vtx->y2d;
-
-            // Initialize min/max with the first vertex to avoid sentinel checks
-            int first_vi = indices_base[0] - 1;
-            int x = x2d[first_vi];
-            int y = y2d[first_vi];
-            poly->polyPoints[0].h = screenScale * (x + pan_dx);
-            poly->polyPoints[0].v = y + pan_dy;
-            min_x = max_x = x;
-            min_y = max_y = y;
-
-            // Fill remaining points using cached data
-            for (j = 1; j < vcount_face; ++j) {
-                int vi = indices_base[j] - 1;
-                x = x2d[vi];
-                y = y2d[vi];
-                poly->polyPoints[j].h = screenScale * (x + pan_dx);
-                poly->polyPoints[j].v = y + pan_dy;
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
-            }
-
-            poly->polyBBox.h1 = min_x + pan_dx;
-            poly->polyBBox.v1 = min_y + pan_dy;
-            poly->polyBBox.h2 = max_x + pan_dx;
-            poly->polyBBox.v2 = max_y + pan_dy;
-
-            // Bounding-box culling (convert to screen pixels, apply pan)
-            int sc_min_x = screenScale * (min_x + pan_dx);
-            int sc_max_x = screenScale * (max_x + pan_dx);
-            int sc_min_y = (min_y + pan_dy);
-            int sc_max_y = (max_y + pan_dy);
-            if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) {
-                // Off-screen; skip drawing
-            } else {
-                if (framePolyOnly) {
-                    // Frame-only rendering (no fill)
-                    int frame_color;
-                    if (user_frame_color == 17) {
-                        // Same as fill color
-                        if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
-                            frame_color = random_fill_colors[face_id];
-                        } else if (user_fill_color >= 0) {
-                            frame_color = user_fill_color;
-                        } else {
-                            frame_color = COL_FILL_DEFAULT; // default fill color
-                        }
-                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
-                        frame_color = random_frame_colors[face_id];
-                    } else if (user_frame_color >= 0) {
-                        frame_color = user_frame_color;
-                    } else {
-                        frame_color = 7;
-                    }
-                    SetSolidPenPat(frame_color);
-                    FramePoly(polyHandle);
-                    SetSolidPenPat(COL_FILL_DEFAULT); // keep fill pen as default for next faces
-                } else {
-                    // Fill color
-                    int fill_color;
-                    if (shaded_by_orientation) {
-                        fill_color = face_shade_color[face_id];
-                    } else if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
-                        fill_color = random_fill_colors[face_id];
-                    } else if (user_fill_color >= 0) {
-                        fill_color = user_fill_color;
-                    } else {
-                        fill_color = COL_FILL_DEFAULT;
-                    }
-                    SetSolidPenPat(fill_color);
-                    GetPenPat(pat);
-                    FillPoly(polyHandle, pat);
-                    
-                    // Frame color
-                    int frame_color;
-                    if (user_frame_color == 17) {
-                        // Same as fill color
-                        frame_color = fill_color;
-                    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
-                        frame_color = random_frame_colors[face_id];
-                    } else if (user_frame_color >= 0) {
-                        frame_color = user_frame_color;
-                    } else {
-                        frame_color = COL_FRAME;
-                    }
-                    SetSolidPenPat(frame_color);
-                    FramePoly(polyHandle);
-                    SetSolidPenPat(COL_FILL_DEFAULT); // restore fill pen
-                }
-                valid_faces_drawn++;
-                if (vcount_face == 3) triangle_count++;
-                else if (vcount_face == 4) quad_count++;
-            }
-        } else {
-            invalid_faces_skipped++;
-        }
-    }
-}
-
-// Generate random colors for all faces
-void generate_random_colors(int face_count) {
-    if (face_count <= 0) return;
-    
-    // Ensure capacity
-    if (random_colors_capacity < face_count) {
-        random_fill_colors = (unsigned char*)realloc(random_fill_colors, face_count);
-        random_frame_colors = (unsigned char*)realloc(random_frame_colors, face_count);
-        random_colors_capacity = face_count;
-    }
-    
-    // Generate random colors (1-15, skip 0 which is black background)
-    for (int i = 0; i < face_count; i++) {
-        random_fill_colors[i] = (rand() % 15) + 1;
-        random_frame_colors[i] = (rand() % 15) + 1;
-    }
-}
-
-// drawPolygons_jitter: same behavior as drawPolygons but applies a small random
-// pixel offset (0..jitter_max) to each vertex 2D coordinate prior to drawing.
-// This function mirrors `drawPolygons()` but applies per-vertex jitter at render time.
-void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total) {
-    if (!model) return;
-    VertexArrays3D* vtx = &model->vertices;
-
-    int vcount = vertex_count_total;
-    if (vcount <= 0) { drawPolygons(model, vertex_count, face_count, vertex_count_total); return; }
-
-    // Backup original coordinates
-    int *saved_x = (int*)malloc(vcount * sizeof(int));
-    int *saved_y = (int*)malloc(vcount * sizeof(int));
-    if (!saved_x || !saved_y) {
-        if (saved_x) free(saved_x);
-        if (saved_y) free(saved_y);
-        // Fallback to normal draw
-        drawPolygons(model, vertex_count, face_count, vertex_count_total);
-        return;
-    }
-
-    for (int i = 0; i < vcount; ++i) {
-        saved_x[i] = vtx->x2d[i];
-        saved_y[i] = vtx->y2d[i];
-        int dx = rand() % (jitter_max + 1); // 0..jitter_max
-        int dy = rand() % (jitter_max + 1);
-        vtx->x2d[i] = saved_x[i] + dx;
-        vtx->y2d[i] = saved_y[i] + dy;
-    }
-
-    // Draw using modified coordinates
-    drawPolygons(model, vertex_count, face_count, vertex_count_total);
-
-    // Restore original coordinates
-    for (int i = 0; i < vcount; ++i) {
-        vtx->x2d[i] = saved_x[i];
-        vtx->y2d[i] = saved_y[i];
-    }
-
-    free(saved_x);
-    free(saved_y);
-}// Diagnostic: Frame in white all polygons listed in `inconclusive_pairs`.
-//
-// This helper iterates the recorded ambiguous pairs and draws a white outline around both
-// polygons in each pair so developers can visually inspect cases where the painter could
-// not conclusively determine a stable order. It is a pure rendering aid (no state changes
-// beyond drawing) and is invoked only in diagnostic/debug modes or on explicit user request.
-void frameInconclusivePairs(Model3D* model) {
-    if (!model) return;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    if (inconclusive_pairs == NULL || inconclusive_pairs_count == 0) return;
-
-    // Ensure global handle exists (allocate based on maximum supported vertices)
-    if (globalPolyHandle == NULL) {
-        int max_polySize = 2 + 8 + (MAX_FACE_VERTICES * 4);
-        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
-        if (globalPolyHandle == NULL) {
-            printf("Error: Unable to allocate global polygon handle\n");
-            return;
-        }
-    }
-
-    Handle polyHandle = globalPolyHandle;
-    if (poly_handle_locked) { HUnlock(polyHandle); poly_handle_locked = 0; }
-    HLock(polyHandle); poly_handle_locked = 1;
-
-    DynamicPolygon *poly = (DynamicPolygon *)*polyHandle;
-
-    // Iterate the inconclusive pairs and frame both faces (face1 and face2)
-    for (int p = 0; p < inconclusive_pairs_count; ++p) {
-        int pair_faces[2] = { inconclusive_pairs[p].face1, inconclusive_pairs[p].face2 };
-        for (int pf = 0; pf < 2; ++pf) {
-            int face_id = pair_faces[pf];
-            if (face_id < 0 || face_id >= faces->face_count) continue;
-            if (faces->display_flag[face_id] == 0) continue;
-            int vcount_face = faces->vertex_count[face_id];
-            if (vcount_face < 3 || vcount_face > MAX_FACE_VERTICES) continue;
-
-            int offset = faces->vertex_indices_ptr[face_id];
-            int *indices_base = &faces->vertex_indices_buffer[offset];
-
-            // Quick validity pass
-            int all_valid = 1;
-            for (int j = 0; j < vcount_face; ++j) {
-                int vi = indices_base[j] - 1;
-                if (vi < 0 || vi >= vtx->vertex_count) { all_valid = 0; break; }
-            }
-            if (!all_valid) continue;
-
-            // Build polygon using the same conventions as drawPolygons (screenScale applied to X)
-            int screenScale = mode / 320;
-            int polySize = 2 + 8 + (vcount_face * 4);
-            poly->polySize = polySize;
-
-            int first_vi = indices_base[0] - 1;
-            int px = vtx->x2d[first_vi];
-            int py = vtx->y2d[first_vi];
-            poly->polyPoints[0].h = screenScale * (px + pan_dx);
-            poly->polyPoints[0].v = py + pan_dy;
-            int min_x = px, max_x = px, min_y = py, max_y = py;
-
-            for (int j = 1; j < vcount_face; ++j) {
-                int vi = indices_base[j] - 1;
-                px = vtx->x2d[vi];
-                py = vtx->y2d[vi];
-                poly->polyPoints[j].h = screenScale * (px + pan_dx);
-                poly->polyPoints[j].v = py + pan_dy;
-                if (px < min_x) min_x = px;
-                if (px > max_x) max_x = px;
-                if (py < min_y) min_y = py;
-                if (py > max_y) max_y = py;
-            }
-
-            poly->polyBBox.h1 = min_x;
-            poly->polyBBox.v1 = min_y;
-            poly->polyBBox.h2 = max_x;
-            poly->polyBBox.v2 = max_y;
-
-            // Bounding-box culling (convert to screen pixels)
-            int screenW = screenScale * (CENTRE_X * 2);
-            int screenH = screenScale * (CENTRE_Y * 2);
-            int sc_min_x = screenScale * min_x;
-            int sc_max_x = screenScale * max_x;
-            int sc_min_y = screenScale * min_y;
-            int sc_max_y = screenScale * max_y;
-            if (sc_max_x < 0 || sc_min_x >= screenW || sc_max_y < 0 || sc_min_y >= screenH) continue;
-
-            // Frame polygon in white (use same pen as drawPolygons framing)
-            SetSolidPenPat(COL_LIGHT_GREEN);
-            Pattern pat;
-            GetPenPat(pat);
-            FillPoly(polyHandle, pat);
-            SetSolidPenPat(COL_YELLOW);
-            FramePoly(polyHandle);
-        }
-    }
-
-    // Keep handle locked (consistent with drawing code)
-}
-
-// Helper: recompute per-face 2D bounding boxes from the current `x2d/y2d` arrays
-// This is much cheaper than `calculateFaceDepths()` and is sufficient when only
-// the screen projection (scale/rotation/pan) changes.
-static void updateFace2DBounds(Model3D* model) {
-    if (!model) return;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int face_count = faces->face_count;
-
-    for (int fi = 0; fi < face_count; ++fi) {
-        int n = faces->vertex_count[fi];
-        if (n <= 0) {
-            faces->minx[fi] = faces->miny[fi] = 0;
-            faces->maxx[fi] = faces->maxy[fi] = 0;
-            continue;
-        }
-        int off = faces->vertex_indices_ptr[fi];
-        int minx = 9999, maxx = -9999, miny = 9999, maxy = -9999;
-        for (int k = 0; k < n; ++k) {
-            int vid = faces->vertex_indices_buffer[off + k] - 1;
-            if (vid < 0 || vid >= vtx->vertex_count) continue;
-            int x = vtx->x2d[vid];
-            int y = vtx->y2d[vid];
-            if (x < minx) minx = x;
-            if (x > maxx) maxx = x;
-            if (y < miny) miny = y;
-            if (y > maxy) maxy = y;
-        }
-        if (maxx == -9999) { minx = maxx = miny = maxy = 0; }
-        faces->minx[fi] = minx;
-        faces->maxx[fi] = maxx;
-        faces->miny[fi] = miny;
-        faces->maxy[fi] = maxy;
-    }
-}
-
-// Simple helper: compute 2D projected coordinates from observer-space coords and a projection scale
-segment "code19";
-// Minimal version taking only Model3D* and angle_w (unused here)
-// - model: model containing vertices and x2d/y2d output arrays
-// - angle_w: ignored because observer-space rotation is already applied in processModelFast()
-// This function projects xo/yo/zo to screen coordinates and keeps face bboxes in sync.
-void compute2DFromObserver(Model3D* model, int angle_w) {
-    (void)angle_w; // angle_w is ignored here; projection uses already-rotated observer coords
-    VertexArrays3D* vtx = &model->vertices;
-    int vcount = vtx->vertex_count;
-    Fixed32* xo = vtx->xo; Fixed32* yo = vtx->yo; Fixed32* zo = vtx->zo;
-    int* x2d_out = vtx->x2d; int* y2d_out = vtx->y2d;
-    Fixed32 scale = s_global_proj_scale_fixed;
-    // Update model's stored projection scale to reflect the scale used
-    model->auto_proj_scale = scale;
-
-    const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
-    const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
-    for (int i = 0; i < vcount; ++i) {
-        Fixed32 xo_i = xo[i];
-        Fixed32 yo_i = yo[i];
-        Fixed32 zo_i = zo[i];
-        Fixed32 inv_zo = FIXED_DIV_64(scale, zo_i);
-        Fixed32 x2d_temp = FIXED_ADD(FIXED_MUL_64(xo_i, inv_zo), centre_x_f);
-        Fixed32 y2d_temp = FIXED_SUB(centre_y_f, FIXED_MUL_64(yo_i, inv_zo));
-        x2d_out[i] = FIXED_ROUND_TO_INT(x2d_temp);
-        y2d_out[i] = FIXED_ROUND_TO_INT(y2d_temp);
-    }
-
-    /* Keep per-face 2D bounding boxes in sync with the newly computed x2d/y2d.
-     * This avoids stale bbox-based quick-rejects after interactive zoom/pan. */
-    updateFace2DBounds(model);
-}
-
-segment "code20";
-void DoColor() {
-        Rect r;
-        unsigned char pstr[4];  // Pascal string: [length][characters...]]
-
-        SetRect (&r, 0, 1, mode / 320 *10, 11);
-        for (int i = 0; i < 16; i++) {
-            SetSolidPenPat(i);
-            PaintRect(&r);
-
-            if (i == 0) {
-                SetSolidPenPat(COL_WHITE); // White frame for black background
-                FrameRect(&r);
-            }
-
-            MoveTo(r.h1, r.v2+10);
-            // Create a Pascal string to display the number
-            if (i < 10) {
-                pstr[0] = 1;           // Length: 1 character
-                pstr[1] = '0' + i;     // Digit 0-9
-            } else {
-                pstr[0] = 2;           // Length: 2 characters
-                pstr[1] = '0' + (i / 10);      // Tens (1 for 10-15)
-                pstr[2] = '0' + (i % 10);      // Units (0-5 for 10-15)
-            }
-            DrawString(pstr);
-            OffsetRect(&r, 20, 0);
-        }
-}
-
-segment "code21";
-void DoText() {
-        shroff();
-        putchar((char) 12); // Clear screen    
-}
-
-/* show_help_pager
- * ----------------
- * Display the interactive help menu in pages limited to 20 lines each.
- * The header is repeated at the top of every page. The user can press
- * SPACE to continue to the next page or 'Q'/'q' to quit the help early.
- */
-static void show_help_pager(void) {
-    const char* header[] = {
-        "===================================",
-        "    HELP - Keyboard Controller",
-        "===================================",
-        "" /* blank line */
-    };
-    const int header_count = sizeof(header)/sizeof(header[0]);
-
-    const char* lines[] = {
-        "Space: Display model info",
-        "A/Z: Decrease/Increase distance",
-        "+/-: Adjust projection scale (+/-10%)",
-        "K: Edit angles/distance (ENTER may auto-fit)",
-        "Arrow Left/Right: Change horizontal angle",
-        "Arrow Up/Down: Change vertical angle",
-        "W/X: Change screen rotation angle",
-        "C: Toggle color palette display",
-        "G: Cycle palettes",
-        "!: Toggle orientation shading",
-        "J: Toggle jittered rendering",
-        ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
-        ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
-        "1: Painter = FAST (simple sort only)",
-        "2: Painter = NORMAL (Fixed32/64)",
-        "3: Painter = GEO (geometry-only). Can be slow for large models",
-        "4: Painter = CORRECT (painter_correct)",
-        "5: Painter = CORRECTV2",
-        "O: Render scanline Z-Buffer (alternative to painter algorithm)",
-        "6: Both colors RANDOM mode",
-        "7: Choose fill color",
-        "8: Choose frame color",
-        "9: Reset colors, palette 0, and shading OFF",
-        "P: Toggle frame-only polygons",
-        "B: Toggle back-face culling",
-        "I: Toggle display of inconclusive pairs",
-        "E/e: Pan left", 
-        "R/r: Pan right",
-        "T/t: Pan up",
-        "Y/y: Pan down",
-        "0: Reset pan",
-        "D: Inspect faces BEFORE target",
-        "S: Inspect faces AFTER target",
-        "V: Show single face (navigate with arrows, show normals, space for details and other actions including hide/restore a face or all faces)",
-        "Q: Interactive face-pair inspector (space for details, then R/E/G for more actions)",
-        "M: Debug pair_plane_before",
-        "L: Label faces with IDs",
-        "F: Dump face data (3D, 2D, sort order) to file",
-        "N: Load new model",
-        "*: save SHGR screen as a PIC ($C1) not compressed file",
-        "H: Display this help message",
-        "ESC: Quit program"
-    };
-    int n = sizeof(lines)/sizeof(lines[0]);
-
-    const int max_lines = 20; // page height limit
-    int content_per_page = max_lines - header_count;
-    if (content_per_page <= 0) content_per_page = 1;
-
-    int pos = 0;
-    while (pos < n) {
-        // Print header
-        for (int h = 0; h < header_count; ++h) printf("%s\n", header[h]);
-        // Print a page of content
-        int end = pos + content_per_page;
-        for (int i = pos; i < end && i < n; ++i) printf("%s\n", lines[i]);
-
-        // Prompt for next action on every page.
-        printf("\nPress ESC to quit, any other key to continue...\n");
-        char key = getkeypress(); 
-
-        if (key == 27) return; // ESC quits
-
-        // Any other key advances page. If on final page, wrap to first page.
-        if (end >= n) {
-            pos = 0;
-        } else {
-            pos = end;
-        }
-
-        // clear a separating line between pages
-        DoText();
-        printf("\n");
-    }
-}
-
-
-void SetColor(int palette_num, int color_index, 
-              int r, int g, int b)
-{
-    unsigned long offset;
-    unsigned int  color_word;
-    
-    /* Chaque palette = 16 couleurs × 2 octets = 32 octets */
-    offset = (long)palette_num * 32L + (long)color_index * 2L;
-    
-    /* Encode R, G, B into nibbles (0-15 each) */
-    color_word = ((unsigned int)r << 8) | 
-                 ((unsigned int)g << 4) | 
-                 (unsigned int)b;
-    
-    /* Write into video RAM (bank $E1) */
-    *((unsigned int *)(0xE19E00L + offset)) = color_word;
-}
-
-GS_Palette ReadPalette(int palette_num)
-{
-    GS_Palette  pal;
-    int         i;
-    unsigned int *src;
-
-    /* Chaque palette fait 16 × 2 octets = 32 octets */
-    src = (unsigned int *)(PALETTE_BASE + (long)palette_num * 32L);
-
-    for (i = 0; i < 16; i++)
-        pal.color[i] = src[i];
-
-    return pal;
-}
-
-void applyPalette(int palette_num)
-{
-    if (palette_num < 0 || palette_num >= 16) palette_num = 0;
-
-    Word color_table[16];
-    for (int color_index = 0; color_index < 16; ++color_index) {
-        color_table[color_index] = (Word)palettes[palette_num].color[color_index];
-    }
-
-    SetColorTable(0, color_table);
-}
-
-void initPalettes(void)
-{
-    palette0_loaded = 0;
-
-    for (int p = 1; p < 16; ++p) {
-        for (int i = 0; i < 16; ++i) {
-            palettes[p].color[i] = paletteGradientColor(p, i);
-        }
-    }
-}
-
-// Alternative renderer, triggered by a dedicated key (e.g. Z/z) in the main
-// viewer loop. Entirely additive: does not touch processModelFast,
-// calculateFaceDepths, or the existing painter's-algorithm pipeline. Consumes
-// the same already-computed vtx->x2d/y2d/zo and faces->vertex_indices_buffer.
-//
-// PIXEL PLOT: for now, MoveTo(x,y)+LineTo(x,y) (QuickDraw II, same point =
-// single pixel). This is the #1 candidate to replace with inline 65816
-// assembly later (direct SHR nibble read-modify-write), once this scanline
-// logic is validated. Marked below with "PLOT PIXEL HERE".
-//
-// DEPTH PRECISION: this Z-buffer is kept entirely in native float (NOT
-// Fixed32) on purpose. Diagnosed with a real case (two perpendicular faces
-// of the model, ids 13 and 18, whose observer-space depths interleave within
-// less than 1% of each other in their screen overlap region) - a Fixed32
-// round-trip for inv_z was not resolving such close depth conflicts
-// correctly, causing consistently wrong occlusion between those faces
-// regardless of rotation. Float32 has far more usable relative precision at
-// this magnitude, so all inv_z math below stays in float from vertex
-// computation through to the buffer comparison itself.
-//
-// Adapt SCREEN_WIDTH/SCREEN_HEIGHT and MAX_SPAN_INTERSECTIONS to your
-// actual constants/limits.
-
-
-
-typedef struct {
-    int x;        // screen-space x of the intersection
-    float inv_z;  // interpolated 1/z at that intersection (native float)
-} ScanIntersection;
-
-
-// Extracted verbatim from drawPolygons's fill/frame color logic, so the
-// scanline Z-buffer renderer reproduces the exact same user choices
-// (default colors, user overrides, orientation shading, palette cycling).
-
-int getFaceFillColor(int face_id) {
-    int fill_color;
-    if (shaded_by_orientation) {
-        fill_color = face_shade_color[face_id];
-    } else if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
-        fill_color = random_fill_colors[face_id];
-    } else if (user_fill_color >= 0) {
-        fill_color = user_fill_color;
-    } else {
-        fill_color = COL_FILL_DEFAULT;
-    }
-    return fill_color;
-}
-
-int getFaceFrameColor(int face_id, int fill_color) {
-    int frame_color;
-    if (user_frame_color == 17) {
-        frame_color = fill_color;
-    } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
-        frame_color = random_frame_colors[face_id];
-    } else if (user_frame_color >= 0) {
-        frame_color = user_frame_color;
-    } else {
-        frame_color = COL_FRAME;
-    }
-    return frame_color;
-}
-
-void drawPixel(int x, int y, int color)
-{
-    int offset;
-    unsigned char value;
-
-    color &= 0x0F;
-
-    /* Offset (0..31999) into SHR bank $E1 memory - computed in C,
-       passed to assembly via the X register (16-bit, plenty of range) */
-    offset = y * 160 + (x >> 1);
-
-    asm {
-        sep     #0x20        ; 8-bit accumulator
-
-        ldx     offset       ; X = byte offset (index register stays 16-bit)
-        lda     0xE12000,x    ; read the byte containing both pixels
-                             ; (absolute LONG indexed addressing - bank $E1
-                             ; is baked into the instruction itself, no
-                             ; pointer variable involved at all)
-
-        pha                  ; save original byte
-
-        lda     x
-        and     #0x01
-        bne     pixel_odd
-
-        /* x EVEN: pixel = high nibble */
-        pla
-        and     #0x0F
-        sta     value
-
-        lda     color
-        asl     a
-        asl     a
-        asl     a
-        asl     a
-        and     #0xF0
-        ora     value
-        sta     0xE12000,x
-        bra     done
-
-pixel_odd:
-        /* x ODD: pixel = low nibble */
-        pla
-        and     #0xF0
-        sta     value
-
-        lda     color
-        and     #0x0F
-        ora     value
-        sta     0xE12000,x
-
-done:
-        rep     #0x20
-    }
-}
-
-void renderModelScanlineZBuffer(Model3D* model) {
-    VertexArrays3D* vtx = &model->vertices;
-    FaceArrays3D* faces = &model->faces;
-    int vcount = vtx->vertex_count;
-    int fcount = faces->face_count;
-    int y, f, i;
-
-    // --- 1/z per vertex, recomputed locally once per call (not stored
-    // elsewhere; existing pipeline untouched). Perspective-correct depth
-    // interpolation needs 1/z, which is linear in screen space - z itself
-    // is not. Kept in float (see header comment on precision). ---
-    static float* inv_z = NULL;
-    static int inv_z_capacity = 0;
-    if (inv_z_capacity < vcount) {
-        if (inv_z) free(inv_z);
-        inv_z = (float*)malloc(vcount * sizeof(float));
-        inv_z_capacity = vcount;
-    }
-    for (i = 0; i < vcount; i++) {
-        float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
-        inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
-    }
-
-    // --- One-scanline Z-buffer, reused every line (320 floats only,
-    // not a full-screen buffer) ---
-    static float zbuffer_line[SCREEN_WIDTH];
-
-    ScanIntersection hits[MAX_SPAN_INTERSECTIONS];
-
-    SetPenMode(0);
-    applyPalette(palette);
-
-    for (y = 0; y < SCREEN_HEIGHT; y++) {
-        int screenY = y + pan_dy;
-        if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
-
-        for (i = 0; i < SCREEN_WIDTH; i++) zbuffer_line[i] = -1.0f; // nothing drawn yet
-
-        for (f = 0; f < fcount; f++) {
-            int n, offt, k, hit_count;
-
-            if (!faces->display_flag[f]) continue;
-            n = faces->vertex_count[f];
-            if (n < 3) continue;
-            if (y < faces->miny[f] || y > faces->maxy[f]) continue;
-
-            offt = faces->vertex_indices_ptr[f];
-            hit_count = 0;
-
-            // --- Gather all edge/scanline intersections for this face ---
-            // Standard scan-conversion rule (y1 <= y < y2, taking edge
-            // direction into account) avoids double-counting a vertex that
-            // sits exactly on the scanline - this also makes concave faces
-            // (e.g. the star) work correctly via pair-wise (even-odd) fill,
-            // same principle as the Newell/shoelace robustness discussed
-            // earlier for orientation.
-            for (k = 0; k < n; k++) {
-                int k2 = (k + 1 < n) ? (k + 1) : 0; // avoid modulo (no native op on 65816)
-                int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
-                int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
-
-                int y1 = vtx->y2d[vid1];
-                int y2 = vtx->y2d[vid2];
-                int x1 = vtx->x2d[vid1];
-                int x2 = vtx->x2d[vid2];
-
-                int ylo = (y1 < y2) ? y1 : y2;
-                int yhi = (y1 < y2) ? y2 : y1;
-                if (y < ylo || y >= yhi) continue; // half-open range, skips horizontal edges too
-
-                // linear interpolation fraction along the edge in screen space
-                float t = (float)(y - y1) / (float)(y2 - y1);
-                int xi = x1 + (int)((x2 - x1) * t + 0.5f);
-
-                // 1/z is linear in screen space along this edge (perspective-
-                // correct interpolation) - plain float lerp, no Fixed32
-                // round-trip (see header comment).
-                float izf = inv_z[vid1] + (inv_z[vid2] - inv_z[vid1]) * t;
-
-                if (hit_count < MAX_SPAN_INTERSECTIONS) {
-                    hits[hit_count].x = xi;
-                    hits[hit_count].inv_z = izf;
-                    hit_count++;
-                }
-            }
-
-            if (hit_count < 2) continue;
-
-            // --- Sort intersections by x (simple insertion sort - hit_count
-            // is small, typically <= number of face vertices) ---
-            {
-                int a, b;
-                for (a = 1; a < hit_count; a++) {
-                    ScanIntersection key = hits[a];
-                    b = a - 1;
-                    while (b >= 0 && hits[b].x > key.x) {
-                        hits[b + 1] = hits[b];
-                        b--;
-                    }
-                    hits[b + 1] = key;
-                }
-            }
-
-            // --- Pair up consecutive intersections (even-odd rule) and
-            // fill each span with a Z-test per pixel ---
-            {
-                int p;
-                for (p = 0; p + 1 < hit_count; p += 2) {
-                    int xa = hits[p].x;
-                    int xb = hits[p + 1].x;
-                    float iza = hits[p].inv_z;
-                    float izb = hits[p + 1].inv_z;
-                    int x;
-
-                    if (xa == xb) continue; // degenerate span
-
-                    // Color depends only on the face (f), never on x/y -
-                    // compute once per span instead of once per pixel.
-                    {
-                        int fillColor = getFaceFillColor(f);
-                        int frameColor = getFaceFrameColor(f, fillColor);
-
-                        // iz_here varies linearly across the span - compute
-                        // the per-pixel step ONCE (one division), then just
-                        // add it each pixel instead of recomputing a full
-                        // division + multiplication every pixel. This is
-                        // the hottest loop in the function (executed once
-                        // per pixel drawn, vs once per span/edge for the
-                        // other optimizations), so this is where the real
-                        // cost was.
-                        float dIz = (izb - iza) / (float)(xb - xa);
-                        float iz_here = iza;
-
-                        for (x = xa; x <= xb; x++) {
-                            int screenX = x + pan_dx;
-                            if (screenX >= 0 && screenX < SCREEN_WIDTH) {
-                                if (iz_here > zbuffer_line[x]) {
-                                    zbuffer_line[x] = iz_here;
-
-                                    // --- PLOT PIXEL HERE ---
-                                    if (x == xa || x == xb) {
-                                        drawPixel(screenX, screenY, frameColor);
-                                    } else {
-                                        drawPixel(screenX, screenY, fillColor);
-                                    }
-                                }
-                            }
-                            iz_here += dIz;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-
-void setProDOSFileType(const char* filename, int fileType, long auxType) {
-    FileInfoRecGS pb;
-    GSString255 gsName;
-
-    gsName.length = strlen(filename);
-    strncpy((char*)gsName.text, filename, gsName.length);
-
-    pb.pCount = 5;              // verify against your GSOS.h - number of params for this call
-    pb.pathname = &gsName;
-    pb.access = 0xC3;           // standard full-access default, unchanged
-    pb.fileType = fileType;     // e.g. 0xC1
-    pb.auxType = auxType;       // e.g. 0x0000
-    pb.storageType = 0;         // 0 = leave unchanged (per GS/OS SetFileInfo semantics)
-    pb.optionList = 0;
-
-    SetFileInfoGS(&pb);
-}
-
-#define SHR_BASE        0xE12000UL
-#define SHR_SIZE        32768UL
-void saveSHRAsRawPic(const char *filename)
-{
-    FILE *out;
-    unsigned char *shr;
-    unsigned long i;
-
-    /*
-     * Adresse réelle de la mémoire SHR :
-     *
-     * $E1:2000 = $E12000
-     *
-     * Le cast en pointeur 32 bits permet à ORCA/C
-     * d'utiliser l'adressage long.
-     */
-    shr = (volatile unsigned char *)SHR_BASE;
-
-    out = fopen(filename, "wb");
-
-    if (out == NULL) {
-        printf("Error: unable to open %s for writing\n", filename);
-        return;
-    }
-
-    /*
-     * Copie brute des 32 Ko SHR.
-     *
-     * $E12000 -> $E19FFF
-     */
-    for (i = 0; i < SHR_SIZE; i++) {
-        fputc(shr[i], out);
-    }
-
-    fclose(out);
-
-    /*
-     * PIC, non compressé.
-     */
-    setProDOSFileType(filename, 0xC1, 0x0000);
-
-    printf("Saved %s\n", filename);
-}
-
-
-// --- Generic screenshot entry point, callable after ANY renderer ---
-void saveNextScreenshot(void) {
-    char fname[16];
-    int idx;
-    FILE* test;
-
-    for (idx = 0; idx < 1000; idx++) {
-        sprintf(fname, "screen%03d.PIC", idx);
-        test = fopen(fname, "rb");
-        if (test == NULL) {
-            break; // this index is free
-        }
-        fclose(test);
-    }
-
-    if (idx >= 1000) {
-        printf("Error: no available screen index (000-999 all used)\n");
-        return;
-    }
-
-    saveSHRAsRawPic(fname);
-}
