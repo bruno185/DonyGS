@@ -1,9 +1,1981 @@
 #include "declare.c"
 
+segment "model_loading";
+// ================================================================================
+// 0. MODEL LOADING
+// ================================================================================
+
+/*
+ * CREATING A NEW 3D MODEL
+ * ========================
+ * 
+ * This function dynamically allocates all structures necessary
+ * for a 3D model. Dynamic allocation is crucial on Apple IIGS
+ * because the stack is limited and cannot contain large arrays.
+ * 
+ * ALLOCATION STRATEGY:
+ * 1. Main Model3D structure allocation
+ * 2. Vertex array allocation (MAX_VERTICES elements)
+ * 3. Face array allocation (MAX_FACES elements)
+ * 4. On failure: cleanup of previous allocations
+ * 
+ * ERROR HANDLING:
+ * - Check each allocation
+ * - Automatic cascade cleanup on partial failure
+ * - Return NULL if unable to allocate
+ */
+Model3D* createModel3D(void) {
+    // Step 1: Main structure allocation
+    Model3D* model = (Model3D*)malloc(sizeof(Model3D));
+    if (model == NULL) {
+        return NULL;
+    }
+    int n = MAX_VERTICES;
+    model->vertices.vertex_count = n;
+
+    // Initialize auto-scale metadata
+    model->auto_scale = FIXED_ONE;
+    model->auto_center_x = 0;
+    model->auto_center_y = 0;
+    model->auto_center_z = 0;
+    model->auto_scaled = 0;
+    model->auto_centered = 0;
+    model->orig_x = NULL;
+    model->orig_y = NULL;
+    model->orig_z = NULL;
+    /* initialize new 3D bbox pointers */
+    model->faces.minx3 = NULL;
+    model->faces.maxx3 = NULL;
+    model->faces.miny3 = NULL;
+    model->faces.maxy3 = NULL;
+    model->faces.minz3 = NULL;
+    model->faces.maxz3 = NULL;
+
+    /* Auto-fit suggestion defaults */
+    model->auto_suggested_distance = 0;
+    model->auto_suggested_proj_scale = 0;
+    model->auto_proj_scale = 0;
+    model->auto_fit_ready = 0;
+    model->auto_fit_applied = 0;
+
+    model->coord_buf = NULL;
+    model->coord_buf_capacity = 0;
+    
+    // Step 2: Allocate vertex arrays using malloc (handles bank crossing better)
+    // Note: malloc() should handle bank boundaries better than NewHandle()
+    model->vertices.x = (Fixed32*)malloc(n * sizeof(Fixed32));
+    model->vertices.y = (Fixed32*)malloc(n * sizeof(Fixed32));
+    model->vertices.z = (Fixed32*)malloc(n * sizeof(Fixed32));
+    model->vertices.xo = (Fixed32*)malloc(n * sizeof(Fixed32));
+    model->vertices.yo = (Fixed32*)malloc(n * sizeof(Fixed32));
+    model->vertices.zo = (Fixed32*)malloc(n * sizeof(Fixed32));
+    model->vertices.x2d = (int*)malloc(n * sizeof(int));
+    model->vertices.y2d = (int*)malloc(n * sizeof(int));
+    
+    if (!model->vertices.x || !model->vertices.y || !model->vertices.z ||
+        !model->vertices.xo || !model->vertices.yo || !model->vertices.zo ||
+        !model->vertices.x2d || !model->vertices.y2d) {
+        printf("Error: Unable to allocate memory for vertex arrays\n");
+        keypress();
+        // Allocation failed, cleanup
+        if (model->vertices.x) free(model->vertices.x);
+        if (model->vertices.y) free(model->vertices.y);
+        if (model->vertices.z) free(model->vertices.z);
+        if (model->vertices.xo) free(model->vertices.xo);
+        if (model->vertices.yo) free(model->vertices.yo);
+        if (model->vertices.zo) free(model->vertices.zo);
+        if (model->vertices.x2d) free(model->vertices.x2d);
+        if (model->vertices.y2d) free(model->vertices.y2d);
+        free(model);
+        return NULL;
+    }
+    
+    // Set dummy handles to NULL (not used with malloc)
+    model->vertices.xHandle = NULL;
+    model->vertices.yHandle = NULL;
+    model->vertices.zHandle = NULL;
+    model->vertices.xoHandle = NULL;
+    model->vertices.yoHandle = NULL;
+    model->vertices.zoHandle = NULL;
+    model->vertices.x2dHandle = NULL;
+    model->vertices.y2dHandle = NULL;
+    
+    // Step 3: Face array allocation using parallel arrays (like vertices)
+    // Each element stored separately to fit 32KB limit per allocation
+    int nf = MAX_FACES;
+    
+    // Allocate vertex count array: nf * 4 bytes = 24KB
+    model->faces.vertex_count = (int*)malloc(nf * sizeof(int));
+    if (!model->faces.vertex_count) {
+        printf("Error: Unable to allocate memory for face vertex_count array\n");
+        keypress();
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model);
+        return NULL;
+    }
+
+    // Allocate saved_vertex_count array (hide/restore backup), zero-initialized:
+    // 0 means "not currently hidden / no backup" for every face by default.
+    model->faces.saved_vertex_count = (int*)calloc(nf, sizeof(int));
+    if (!model->faces.saved_vertex_count) {
+        printf("Error: Unable to allocate memory for face saved_vertex_count array\n");
+        keypress();
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model);
+        return NULL;
+    }
+    
+    // Allocate SINGLE packed buffer for all vertex indices
+    // Estimate: average 3.5 indices per face (mix of triangles and quads)
+    // For 6000 faces: ~21KB. We allocate conservatively at 5 per face = 120KB max
+    int estimated_total_indices = nf * 5;
+    model->faces.vertex_indices_buffer = (int*)malloc(estimated_total_indices * sizeof(int));
+    if (!model->faces.vertex_indices_buffer) {
+        printf("Error: Unable to allocate memory for vertex_indices_buffer\n");
+        keypress();
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
+        free(model);
+        return NULL;
+    }
+    
+    // Allocate offset array: one offset per face into the packed buffer
+    model->faces.vertex_indices_ptr = (int*)malloc(nf * sizeof(int));
+    if (!model->faces.vertex_indices_ptr) {
+        printf("Error: Unable to allocate memory for vertex_indices_ptr array\n");
+        keypress();
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
+        free(model->faces.vertex_indices_buffer);
+        free(model);
+        return NULL;
+    }
+    
+    // Allocate z_min and z_max arrays (min and max depth per face)
+    model->faces.z_min = (Fixed32*)malloc(nf * sizeof(Fixed32));
+    model->faces.z_max = (Fixed32*)malloc(nf * sizeof(Fixed32));
+    if (!model->faces.z_min || !model->faces.z_max) {
+        printf("Error: Unable to allocate memory for face depth arrays\n");
+        keypress();
+        if (model->faces.z_min) free(model->faces.z_min);
+        if (model->faces.z_max) free(model->faces.z_max);
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
+        free(model->faces.vertex_indices_buffer);
+        free(model->faces.vertex_indices_ptr);
+        free(model);
+        return NULL;
+    }
+    // Allocate z_mean array (mean depth per face) - used by painter_newell_sancha
+    model->faces.z_mean = (Fixed32*)malloc(nf * sizeof(Fixed32));
+    if (!model->faces.z_mean) {
+        printf("Error: Unable to allocate memory for face z_mean array\n");
+        keypress();
+        if (model->faces.z_mean) free(model->faces.z_mean);
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
+        free(model->faces.vertex_indices_buffer);
+        free(model->faces.vertex_indices_ptr);
+        if (model->faces.z_min) free(model->faces.z_min);
+        if (model->faces.z_max) free(model->faces.z_max);
+        free(model);
+        return NULL;
+    }
+
+    // Allocate plane coefficient arrays (normalized normals + d term)
+    model->faces.plane_a = (Fixed64*)malloc(nf * sizeof(Fixed64));
+    model->faces.plane_b = (Fixed64*)malloc(nf * sizeof(Fixed64));
+    model->faces.plane_c = (Fixed64*)malloc(nf * sizeof(Fixed64));
+    model->faces.plane_d = (Fixed64*)malloc(nf * sizeof(Fixed64));
+    if (!model->faces.plane_a || !model->faces.plane_b || !model->faces.plane_c || !model->faces.plane_d) {
+        printf("Error: Unable to allocate memory for face plane arrays\n");
+        keypress();
+        if (model->faces.plane_a) free(model->faces.plane_a);
+        if (model->faces.plane_b) free(model->faces.plane_b);
+        if (model->faces.plane_c) free(model->faces.plane_c);
+        if (model->faces.plane_d) free(model->faces.plane_d);
+        if (model->faces.z_mean) free(model->faces.z_mean);
+        if (model->faces.z_min) free(model->faces.z_min);
+        if (model->faces.z_max) free(model->faces.z_max);
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
+        free(model->faces.vertex_indices_buffer);
+        free(model->faces.vertex_indices_ptr);
+        free(model->faces.z_max);
+        free(model);
+        return NULL;
+    }
+
+    // Allocate cached 2D bounding boxes arrays
+    model->faces.minx = (int*)malloc(nf * sizeof(int));
+    model->faces.maxx = (int*)malloc(nf * sizeof(int));
+    model->faces.miny = (int*)malloc(nf * sizeof(int));
+    model->faces.maxy = (int*)malloc(nf * sizeof(int));
+    if (!model->faces.minx || !model->faces.maxx || !model->faces.miny || !model->faces.maxy) {
+        printf("Error: Unable to allocate memory for face bounding box arrays\n");
+        keypress();
+        if (model->faces.minx) free(model->faces.minx);
+        if (model->faces.maxx) free(model->faces.maxx);
+        if (model->faces.miny) free(model->faces.miny);
+        if (model->faces.maxy) free(model->faces.maxy);
+        if (model->faces.plane_a) free(model->faces.plane_a);
+        if (model->faces.plane_b) free(model->faces.plane_b);
+        if (model->faces.plane_c) free(model->faces.plane_c);
+        if (model->faces.plane_d) free(model->faces.plane_d);
+        if (model->faces.z_mean) free(model->faces.z_mean);
+        if (model->faces.z_min) free(model->faces.z_min);
+        if (model->faces.z_max) free(model->faces.z_max);
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
+        free(model->faces.vertex_indices_buffer);
+        free(model->faces.vertex_indices_ptr);
+        free(model->faces.z_max);
+        free(model);
+        return NULL;
+    }
+    
+    // Allocate display_flag array: nf * 4 bytes = 24KB
+    model->faces.display_flag = (int*)malloc(nf * sizeof(int));
+    if (!model->faces.display_flag) {
+        printf("Error: Unable to allocate memory for face display_flag array\n");
+        keypress();
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
+        free(model->faces.vertex_indices_buffer);
+        free(model->faces.vertex_indices_ptr);
+        if (model->faces.z_min) free(model->faces.z_min);
+        if (model->faces.z_max) free(model->faces.z_max);
+        if (model->faces.z_mean) free(model->faces.z_mean);
+        free(model);
+        return NULL;
+    }
+    
+
+    
+    // Allocate sorted_face_indices array: nf * 4 bytes = 24KB max
+    model->faces.sorted_face_indices = (int*)malloc(nf * sizeof(int));
+    if (!model->faces.sorted_face_indices) {
+        printf("Error: Unable to allocate memory for sorted_face_indices array\n");
+        keypress();
+        free(model->vertices.x);
+        free(model->vertices.y);
+        free(model->vertices.z);
+        free(model->vertices.xo);
+        free(model->vertices.yo);
+        free(model->vertices.zo);
+        free(model->vertices.x2d);
+        free(model->vertices.y2d);
+        free(model->faces.vertex_count);
+        free(model->faces.saved_vertex_count);
+        free(model->faces.vertex_indices_buffer);
+        free(model->faces.vertex_indices_ptr);
+        if (model->faces.z_min) free(model->faces.z_min);
+        if (model->faces.z_max) free(model->faces.z_max);
+        if (model->faces.z_mean) free(model->faces.z_mean);
+        free(model->faces.display_flag);
+        free(model);
+        return NULL;
+    }
+    
+    // Initialize structure
+    model->faces.vertex_countHandle = NULL;
+    model->faces.vertex_indicesBufferHandle = NULL;
+    model->faces.vertex_indicesPtrHandle = NULL;
+    model->faces.z_maxHandle = NULL;
+    model->faces.display_flagHandle = NULL;
+    model->faces.sorted_face_indicesHandle = NULL;
+    model->faces.total_indices = 0;
+    
+
+    return model;
+}
+
+/**
+ * MEMORY CLEANUP - DESTROY MODEL 3D
+ * 
+ * This function frees all memory allocated by createModel3D().
+ * Must be called when the model is no longer needed to prevent memory leaks.
+ * 
+ * CLEANUP SEQUENCE:
+ * 1. Free all vertex arrays (x, y, z, xo, yo, zo, x2d, y2d)
+ * 2. Free all face arrays (vertex_count, vertex_indices_buffer, vertex_indices_ptr, z_max, display_flag, sorted_face_indices)
+ * 3. Free main Model3D structure
+ */
+
+void destroyModel3D(Model3D* model) {
+    if (model != NULL) {
+        // Free all vertex arrays
+        if (model->vertices.x) free(model->vertices.x);
+        if (model->vertices.y) free(model->vertices.y);
+        if (model->vertices.z) free(model->vertices.z);
+        if (model->vertices.xo) free(model->vertices.xo);
+        if (model->vertices.yo) free(model->vertices.yo);
+        if (model->vertices.zo) free(model->vertices.zo);
+        if (model->vertices.x2d) free(model->vertices.x2d);
+        if (model->vertices.y2d) free(model->vertices.y2d);
+        
+        // Free all face arrays (now simplified with packed buffer)
+        if (model->faces.vertex_count) free(model->faces.vertex_count);
+        if (model->faces.vertex_indices_buffer) free(model->faces.vertex_indices_buffer);
+        if (model->faces.vertex_indices_ptr) free(model->faces.vertex_indices_ptr);
+        if (model->faces.z_max) free(model->faces.z_max);
+        if (model->faces.z_mean) free(model->faces.z_mean);
+        if (model->faces.z_min) free(model->faces.z_min);
+        if (model->faces.plane_a) free(model->faces.plane_a);
+        if (model->faces.plane_b) free(model->faces.plane_b);
+        if (model->faces.plane_c) free(model->faces.plane_c);
+        if (model->faces.plane_d) free(model->faces.plane_d);
+        if (model->faces.minx) free(model->faces.minx);
+        if (model->faces.maxx) free(model->faces.maxx);
+        if (model->faces.miny) free(model->faces.miny);
+        if (model->faces.maxy) free(model->faces.maxy);
+        if (model->faces.minx3) free(model->faces.minx3);
+        if (model->faces.maxx3) free(model->faces.maxx3);
+        if (model->faces.miny3) free(model->faces.miny3);
+        if (model->faces.maxy3) free(model->faces.maxy3);
+        if (model->faces.minz3) free(model->faces.minz3);
+        if (model->faces.maxz3) free(model->faces.maxz3);
+        if (model->faces.display_flag) free(model->faces.display_flag);
+        if (model->faces.sorted_face_indices) free(model->faces.sorted_face_indices);
+        if (model->faces.saved_vertex_count) free(model->faces.saved_vertex_count);
+
+        // Free optional buffers and backups
+        if (model->orig_x) free(model->orig_x);
+        if (model->orig_y) free(model->orig_y);
+        if (model->orig_z) free(model->orig_z);
+        if (model->coord_buf) free(model->coord_buf);
+        
+        // Free main structure
+        free(model);
+    }
+}
+
+/**
+ * COMPLETE 3D MODEL LOADING
+ * ==========================
+ * 
+ * This function coordinates the complete loading of an OBJ file
+ * by successively calling the vertex and face reading functions.
+ * 
+ * LOADING PIPELINE:
+ * 1. Input parameter validation
+ * 2. Read vertices from file
+ * 3. Read faces from file  
+ * 4. Update counters in structure
+ * 
+ * ERROR HANDLING:
+ * - Vertex reading failure: immediate stop
+ * - Face reading failure: warning but continue
+ *   (vertices-only model remains usable)
+ */
+int loadModel3D(Model3D* model, const char* filename) {
+    // Input parameter validation
+    if (model == NULL || filename == NULL) {
+        return -1;  // Invalid parameters
+    }
+    
+    // Step 1: Read vertices from OBJ file
+    // --- Update global counter for face index verification ---
+    readVertices_last_count = model->vertices.vertex_count;
+    
+    int vcount = readVertices(filename, &model->vertices, MAX_VERTICES, model);
+    if (vcount < 0) {
+        return -1;  // Critical failure: unable to read vertices
+    }
+    model->vertices.vertex_count = vcount;
+    
+    // Step 2: Read faces from OBJ file (using chunked allocation)
+    // This function handles reading faces into 2 chunks transparently
+    int fcount = readFaces_model(filename, model);
+    if (fcount < 0) {
+        // Critical failure: unable to read faces
+        printf("\nWarning: Unable to read faces\n");
+        model->faces.face_count = 0;  // No faces available
+    } else {
+        model->faces.face_count = fcount;
+        /* compute 3D bounding boxes for all faces */
+        /* overlap scan is controlled by caller */
+    }
+    return 0;  // Success: model loaded (with or without faces)
+}
+
+/**
+ * VERTEX READING FROM OBJ FILE
+ * ============================
+ * 
+ * This function parses an OBJ format file to extract
+ * vertices (3D points). It searches for lines starting with "v "
+ * and extracts X, Y, Z coordinates.
+ * 
+ * OBJ FORMAT FOR VERTICES:
+ *   v 1.234 5.678 9.012
+ *   v -2.5 0.0 3.14159
+ * 
+ * ALGORITHM:
+ * 1. Open file in read mode
+ * 2. Read line by line with fgets()
+ * 3. Detect "v " lines with character verification
+ * 4. Extract coordinates with sscanf()
+ * 5. Store in array with bounds checking
+ * 6. Progressive display for user feedback
+ * 
+ * ERROR HANDLING:
+ * - File opening verification
+ * - Array overflow protection
+ * - Coordinate format validation
+ */
+int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Model3D* owner) {
+    FILE *file;
+    char line[MAX_LINE_LENGTH];
+    int line_number = 1;
+    int vertex_count = 0;
+    
+    // Open file in read mode
+    file = fopen(filename, "r");
+    if (file == NULL) {
+        return -1;  // Return -1 on error
+    }
+    
+    printf("\nReading vertices from file '%s' ", filename);
+    
+    // Read file line by line
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (line[0] == 'v' && line[1] == ' ') {
+            if (vertex_count < max_vertices) {
+                float x, y, z;  // Temporary reading in float
+                if (sscanf(line + 2, "%f %f %f", &x, &y, &z) == 3) {
+                    vtx->x[vertex_count] = FLOAT_TO_FIXED(x);
+                    // OBJ files often use Z as up; convert to viewer convention by swapping axes
+                    vtx->y[vertex_count] = FLOAT_TO_FIXED(z);   // treat OBJ Z as up
+                    vtx->z[vertex_count] = FLOAT_TO_FIXED(y);  // rotate -90° around X, corrected orientation
+                    vertex_count++;
+                    if (vertex_count % 10 == 0) printf("..");
+
+                } else {
+                    printf("[\nDEBUG] readVertices: sscanf failed at line %d: %s\n", line_number, line);
+                    keypress();
+                }
+            } else {
+                printf("\n[DEBUG] readVertices: vertex limit reached (%d)\n", max_vertices);
+                keypress();
+            }
+        }
+        line_number++;
+    }
+    printf("\n");
+    printf("Reading vertices finished : %d vertices read.\n", vertex_count);
+
+    // Close file
+    fclose(file);
+
+    // Compute bbox center and save into owner (do not modify vertex coords)
+    if (vertex_count > 0 && owner) {
+        Fixed32 xmin = vtx->x[0], xmax = vtx->x[0];
+        Fixed32 ymin = vtx->y[0], ymax = vtx->y[0];
+        Fixed32 zmin = vtx->z[0], zmax = vtx->z[0];
+        for (int i = 1; i < vertex_count; ++i) {
+            if (vtx->x[i] < xmin) xmin = vtx->x[i];
+            if (vtx->x[i] > xmax) xmax = vtx->x[i];
+            if (vtx->y[i] < ymin) ymin = vtx->y[i];
+            if (vtx->y[i] > ymax) ymax = vtx->y[i];
+            if (vtx->z[i] < zmin) zmin = vtx->z[i];
+            if (vtx->z[i] > zmax) zmax = vtx->z[i];
+        }
+        owner->auto_center_x = (Fixed32)((xmin + xmax) / 2);
+        owner->auto_center_y = (Fixed32)((ymin + ymax) / 2);
+        owner->auto_center_z = (Fixed32)((zmin + zmax) / 2);
+        // Apply centering to vertex coordinates (default behavior requested)
+        for (int i = 0; i < vertex_count; ++i) {
+            vtx->x[i] = FIXED_SUB(vtx->x[i], owner->auto_center_x);
+            vtx->y[i] = FIXED_SUB(vtx->y[i], owner->auto_center_y);
+            vtx->z[i] = FIXED_SUB(vtx->z[i], owner->auto_center_z);
+        }
+        owner->auto_centered = 1; // indicate coords were centered
+
+        // --- Brute auto-fit suggestion (Fixed32) ---
+        // Compute model-space max dimension (bbox metric) and suggest a distance = k * max_dim
+        Fixed32 dx = FIXED_SUB(xmax, xmin);
+        Fixed32 dy = FIXED_SUB(ymax, ymin);
+        Fixed32 dz = FIXED_SUB(zmax, zmin);
+        Fixed32 max_dim = dx;
+        if (dy > max_dim) max_dim = dy;
+        if (dz > max_dim) max_dim = dz;
+        // k = 3 (user-specified)
+        owner->auto_suggested_distance = FIXED_MUL_64(max_dim, INT_TO_FIXED(3));
+
+        // Compute projected bounds using default observer angles (30,20,0) to suggest projection scale
+        int ah = 30, av = 20, aw = 0;
+        Fixed32 cos_h = cos_deg_int(ah), sin_h = sin_deg_int(ah);
+        Fixed32 cos_v = cos_deg_int(av), sin_v = sin_deg_int(av);
+        const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
+        const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
+        const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
+        const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
+
+        float pxmin = 1e30f, pxmax = -1e30f, pymin = 1e30f, pymax = -1e30f;
+        for (int i = 0; i < vertex_count; ++i) {
+            Fixed32 x = vtx->x[i]; Fixed32 y = vtx->y[i]; Fixed32 z = vtx->z[i];
+            Fixed32 term1 = FIXED_MUL_64(x, cos_h_cos_v);
+            Fixed32 term2 = FIXED_MUL_64(y, sin_h_cos_v);
+            Fixed32 term3 = FIXED_MUL_64(z, sin_v);
+            Fixed32 zo = FIXED_ADD(FIXED_SUB(FIXED_SUB(FIXED_NEG(term1), term2), term3), owner->auto_suggested_distance);
+            if (zo > 0) {
+                Fixed32 xo = FIXED_ADD(FIXED_NEG(FIXED_MUL_64(x, sin_h)), FIXED_MUL_64(y, cos_h));
+                Fixed32 yo = FIXED_ADD(FIXED_SUB(FIXED_NEG(FIXED_MUL_64(x, cos_h_sin_v)), FIXED_MUL_64(y, sin_h_sin_v)), FIXED_MUL_64(z, cos_v));
+                float px = FIXED_TO_FLOAT(xo) / FIXED_TO_FLOAT(zo);
+                float py = FIXED_TO_FLOAT(yo) / FIXED_TO_FLOAT(zo);
+                if (px < pxmin) pxmin = px;
+                if (px > pxmax) pxmax = px;
+                if (py < pymin) pymin = py;
+                if (py > pymax) pymax = py;
+            }
+        }
+        // Compute projection scale (pixels per projected unit) to fit viewport with margin m
+        float margin = 0.9f;
+        float winw = (float)(CENTRE_X * 2);
+        float winh = (float)(CENTRE_Y * 2);
+        float s = 100.0f; // fallback
+        if (pxmax > pxmin && pymax > pymin) {
+            float s1 = (winw * margin) / (pxmax - pxmin);
+            float s2 = (winh * margin) / (pymax - pymin);
+            s = (s1 < s2) ? s1 : s2;
+        }
+        owner->auto_suggested_proj_scale = FLOAT_TO_FIXED(s);
+        owner->auto_fit_ready = 1;
+    }
+
+    // printf("\n\nAnalyse terminee. %d lignes lues.\n", line_number - 1);
+    return vertex_count;  // Return the number of vertices read
+}
+
+// Function to read faces into parallel arrays in FaceArrays3D structure
+int readFaces_model(const char* filename, Model3D* model) {
+    FILE *file;
+    char line[MAX_LINE_LENGTH];
+    int line_number = 1;
+    int face_count = 0;
+    int i;
+    
+    // Validate model structure
+    if (model == NULL || model->faces.vertex_count == NULL) {
+        printf("Error: Invalid model structure for readFaces_model\n");
+        return -1;
+    }
+    
+    // Open file in read mode
+    file = fopen(filename, "r");
+    if (file == NULL) {
+        printf("Error: Unable to open file '%s' to read faces\n", filename);
+        return -1;
+    }
+    
+    printf("\nReading faces from file '%s' ", filename);
+    
+    int buffer_pos = 0;  // Current position in the packed buffer
+    
+    // Read file line by line
+    while (fgets(line, sizeof(line), file) != NULL) {
+        // Check if line starts with "f " (face)
+        if (line[0] == 'f' && line[1] == ' ') {
+            if (face_count < MAX_FACES) {
+                // Initialize face data
+                model->faces.vertex_count[face_count] = 0;
+                model->faces.display_flag[face_count] = 1;  // Displayable by default
+                model->faces.saved_vertex_count[face_count] = 0;  // no hide/restore backup yet
+                model->faces.vertex_indices_ptr[face_count] = buffer_pos;  // Store offset to this face's indices
+                
+                // Parse vertices from this face
+                char *ptr = line + 2;  // Start after "f "
+                int temp_indices[MAX_FACE_VERTICES];
+                int temp_vertex_count = 0;
+                int invalid_index_found = 0;
+                
+                // Parse character by character
+                while (*ptr != '\0' && *ptr != '\n' && temp_vertex_count < MAX_FACE_VERTICES) {
+                    // Skip spaces and tabs
+                    while (*ptr == ' ' || *ptr == '\t') ptr++;
+                    
+                    if (*ptr == '\0' || *ptr == '\n') break;
+                    
+                    // Read the number
+                    int vertex_index = 0;
+                    while (*ptr >= '0' && *ptr <= '9') {
+                        vertex_index = vertex_index * 10 + (*ptr - '0');
+                        ptr++;
+                    }
+                    
+                    // Skip texture/normal data (after /)
+                    while (*ptr != '\0' && *ptr != ' ' && *ptr != '\t' && *ptr != '\n') {
+                        ptr++;
+                    }
+                    
+                    // Validate vertex index
+                    if (vertex_index >= 1) {
+                        if (vertex_index > readVertices_last_count) {
+                            // Index out of bounds
+                            invalid_index_found = 1;
+                        }
+                        temp_indices[temp_vertex_count] = vertex_index;
+                        temp_vertex_count++;
+                    }
+                }
+                
+                // Check for errors
+                if (invalid_index_found) {
+                    printf("\nERROR: Face at line %d references vertex index > %d vertices\n", 
+                           line_number, readVertices_last_count);
+                    fclose(file);
+                    return -1;
+                } else {
+                    // Store valid indices into the packed buffer
+                    for (i = 0; i < temp_vertex_count; i++) {
+                        model->faces.vertex_indices_buffer[buffer_pos++] = temp_indices[i];
+                    }
+                    model->faces.vertex_count[face_count] = temp_vertex_count;
+                    model->faces.total_indices += temp_vertex_count;
+                    
+                    // Skip faces with zero vertices
+                    if (model->faces.vertex_count[face_count] > 0) {
+                        face_count++;
+                        if (face_count % 10 == 0) {printf(".");}
+                    } else {
+                        printf("     -> WARNING: Face without valid vertices ignored\n");
+                    }
+                }
+            } else {
+                printf("     -> WARNING: Face limit reached (%d)\n", MAX_FACES);
+            }
+        }
+        
+        line_number++;
+    }
+    
+    // Close file
+    fclose(file);
+    
+    model->faces.face_count = face_count;
+    
+    // Initialize sorted_face_indices with identity mapping (will be sorted later)
+    for (i = 0; i < face_count; i++) {
+        model->faces.sorted_face_indices[i] = i;
+    }
+    
+    printf("\nReading faces finished : %d faces read.\n", face_count);
+    return face_count;
+}
+
+/*
+ * Return non-zero if any edge of face `fi` crosses the infinite plane of
+ * face `fj`.  Crossing is detected when the signed distance of an edge's
+ * endpoints to `fj`'s plane have opposite signs.  Zero distance is treated
+ * as touching and does not count as crossing.
+ */
+static void check_intersect(Model3D* model) {
+    if (!model) return;
+    compute_face_bboxes3D(model);
+    FaceArrays3D* faces = &model->faces;
+    int fc = faces->face_count;
+    /* no logging in check_intersect per request */
+    if (fc <= 1) {
+        /* no output when insufficient faces */
+        keypress();
+        return;
+    }
+
+    /* let user know the process may take some time */
+    printf("check_intersect: scanning %d faces, please wait...\n", fc);
+
+    /* tolerance in fixed-point (16.16) */
+    const Fixed32 eps = FLOAT_TO_FIXED(0.02f);
+
+    int count = 0;
+    int ip_count = 0; /* interpenetration counter */
+    /* we may split faces as we go; if a split occurs we restart the scan from
+       the beginning so that newly created pieces are also checked. */
+    int changed;
+    do {
+        changed = 0;
+        fc = faces->face_count; /* update after any splits */
+        for (int i = 0; i < fc; ++i) {
+            Fixed32 minx_i = faces->minx3[i];
+            Fixed32 maxx_i = faces->maxx3[i];
+            Fixed32 miny_i = faces->miny3[i];
+            Fixed32 maxy_i = faces->maxy3[i];
+            Fixed32 minz_i = faces->minz3[i];
+            Fixed32 maxz_i = faces->maxz3[i];
+            for (int j = i + 1; j < fc; ++j) {
+                Fixed32 minx_j = faces->minx3[j];
+                Fixed32 maxx_j = faces->maxx3[j];
+                Fixed32 miny_j = faces->miny3[j];
+                Fixed32 maxy_j = faces->maxy3[j];
+                Fixed32 minz_j = faces->minz3[j];
+                Fixed32 maxz_j = faces->maxz3[j];
+                /* check overlap on all three axes with epsilon tolerance */
+                if (minx_i <= maxx_j + eps && maxx_i >= minx_j - eps &&
+                    miny_i <= maxy_j + eps && maxy_i >= miny_j - eps &&
+                    minz_i <= maxz_j + eps && maxz_i >= minz_j - eps) {
+                    /* compute overlap extents along each axis */
+                    Fixed32 ox = (minx_i < minx_j ? minx_j : minx_i);
+                    Fixed32 ux = (maxx_i < maxx_j ? maxx_i : maxx_j);
+                    Fixed32 oy = (miny_i < miny_j ? miny_j : miny_i);
+                    Fixed32 uy = (maxy_i < maxy_j ? maxy_i : maxy_j);
+                    Fixed32 oz = (minz_i < minz_j ? minz_j : minz_i);
+                    Fixed32 uz = (maxz_i < maxz_j ? maxz_i : maxz_j);
+                    float dx = FIXED_TO_FLOAT(ux - ox);
+                    float dy = FIXED_TO_FLOAT(uy - oy);
+                    float dz = FIXED_TO_FLOAT(uz - oz);
+                    /* log raw fixed bbox values for debugging */
+
+                    /* log computed floats regardless of overlap */
+
+                    /* normally ignore pure-touching boxes, but we still
+                     * want to run the plane‑crossing check when one dimension
+                     * collapses to zero (as happens after centering), because
+                     * the face may still pass through the plane of the other.
+                     * dz>=0 is already allowed earlier; now accept dy>=0 as well.
+                     */
+                    if (dx >= 0.0f && dy >= 0.0f) {
+
+                        /* overlap detected; previously printed details */
+                        ++count;
+                        if (faces_share_vertex_or_edge(faces, i, j)) {
+                            /* share info suppressed */
+
+                        } else {
+                            double a1,b1,c1,d1, a2,b2,c2,d2;
+                            compute_face_plane(model, i, &a1, &b1, &c1, &d1);
+                            compute_face_plane(model, j, &a2, &b2, &c2, &d2);
+                            double norm1 = sqrt(a1*a1 + b1*b1 + c1*c1);
+                            double norm2 = sqrt(a2*a2 + b2*b2 + c2*c2);
+                            int coplanar = 0;
+                            if (norm1 > 0 && norm2 > 0) {
+                                double dot = a1*a2 + b1*b2 + c1*c2;
+                                double cosang = dot / (norm1 * norm2);
+                                if (fabs(fabs(cosang) - 1.0) < 0.01) {
+                                    double dist = fabs(d1 - d2) / norm1;
+                                    if (dist < FIXED_TO_FLOAT(eps)) {
+                                        coplanar = 1;
+                                    }
+                                }
+                            }
+                            if (coplanar) {
+                                /* coplanar skip message suppressed */
+
+                            }
+                            if (!coplanar) {
+                                /* use the stricter interior-crossing predicate for
+                                   statistics. boundary contacts (points/edges lying on
+                                   the other face) no longer count as interpenetrations.
+                                   this avoids the dozens of false positives seen earlier. */
+                                int interior = edge_crosses_interior(model, i, j) ||
+                                               edge_crosses_interior(model, j, i);
+                                if (interior) {
+                                    ++ip_count;
+
+                                } else {
+
+                                }
+                                /* now perform splitting decisions using the original
+                                   crossing-count heuristic (boundary hits may still
+                                   justify a cut). */
+                                /* compute crossing counts in both directions once */
+                            int cross_i_j = count_edge_crossings(model, i, j);
+                            int cross_j_i = count_edge_crossings(model, j, i);
+                            /* special rule: if exactly two edges of i cross j and none
+                               of j cross i, we want to split face i by plane j instead
+                               of the usual orientation. */
+                            if (cross_i_j == 2 && cross_j_i == 0) {
+                                /* two-edge reverse case, no output */
+                                if (split_face_by_plane(model, i, j, NULL, NULL, NULL, 0, 0)) {
+                                    changed = 1;
+                                    break;
+                                }
+                            } else if (cross_j_i == 2 && cross_i_j == 0) {
+                                /* two-edge normal case, no output */
+                                if (split_face_by_plane(model, j, i, NULL, NULL, NULL, 0, 0)) {
+                                    changed = 1;
+                                    break;
+                                }
+                            } else {
+                                /* fall back to standard behaviour */
+                                if (cross_i_j > 0) {
+                                    int force = (cross_i_j == 1);
+                                    if (split_face_by_plane(model, j, i, NULL, NULL, NULL, 0, force)) {
+                                        changed = 1;
+                                        break;
+                                    }
+                                }
+                                if (!changed && cross_j_i > 0) {
+                                    int force = (cross_j_i == 1);
+                                    if (split_face_by_plane(model, i, j, NULL, NULL, NULL, 0, force)) {
+                                        changed = 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            }
+                            }
+                        }
+                    }
+                }
+            }
+            if (changed) break;
+    } while (changed);
+    /* report statistics before exiting */
+    printf("Total overlapping pairs: %d\n", count);
+    printf("Total interpenetrating pairs: %d\n", ip_count);
+    printf("Final face count: %d\n", faces->face_count);
+
+}
+
+/*
+ * Return !0 if faces i and j share a vertex or an entire edge.
+ * Comparison is done on the original 1-based vertex indices stored in
+ * the face buffers.  Sharing just one vertex is sufficient to consider the
+ * pair "touching" for the purposes of the interpenetration test.
+ */
+static int faces_share_vertex_or_edge(FaceArrays3D* faces, int i, int j) {
+    int cnti = faces->vertex_count[i];
+    int offi = faces->vertex_indices_ptr[i];
+    int cntj = faces->vertex_count[j];
+    int offj = faces->vertex_indices_ptr[j];
+    for (int a = 0; a < cnti; ++a) {
+        int vi = faces->vertex_indices_buffer[offi + a];
+        for (int b = 0; b < cntj; ++b) {
+            if (vi == faces->vertex_indices_buffer[offj + b]) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * Return non-zero if any edge of face `ei` actually intersects the interior of
+ * face `fj`.  This refines the previous plane-crossing test by computing the
+ * intersection point and verifying it lies within the polygon of `fj`.
+ */
+
+/* Helper: return !0 if an edge of face `ei` crosses the interior of
+ * face `fj` **strictly** (intersection point lies in the polygon interior,
+ * not on a boundary).  This is used to decide whether a pair really
+ * interpenetrates for the purpose of counting, ignoring mere boundary
+ * contacts that do not represent true crossings.
+ */
+/* forward declaration of helper used by edge_crosses_interior */
+
+static int edge_crosses_interior(Model3D* model, int ei, int fj) {
+    double a, b, c, d;
+    compute_face_plane(model, fj, &a, &b, &c, &d);
+    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
+
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[ei]; if (cnt < 2) return 0;
+
+    /* choose 2D projection plane */
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj = (abs_a >= abs_b && abs_a >= abs_c) ? 0
+            : (abs_b >= abs_a && abs_b >= abs_c) ? 1 : 2;
+
+    /* build polygon for fj */
+    int nfj = faces->vertex_count[fj];
+    int *vx = (int*)malloc(sizeof(int) * nfj);
+    int *vy = (int*)malloc(sizeof(int) * nfj);
+    for (int m = 0; m < nfj; ++m) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
+        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
+        int ix, iy;
+        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
+        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
+        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
+        vx[m] = ix; vy[m] = iy;
+    }
+
+    /* we'll call strict_inside below with the current polygon data; the
+       real definition lives after this function (see forward declaration
+       above). */
+
+    int result = 0;
+    for (int k = 0; k < cnt && !result; ++k) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
+        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k+1)%cnt)] - 1;
+        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
+        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
+        const double plane_eps = 0.02;
+        double sdA = a*Ax + b*Ay + c*Az + d;
+        double sdB = a*Bx + b*By + c*Bz + d;
+        if (fabs(sdA) < plane_eps) sdA = 0.0;
+        if (fabs(sdB) < plane_eps) sdB = 0.0;
+        if (sdA * sdB < 0.0) {
+            double t = -sdA / (sdB - sdA);
+            double Px = Ax + t*(Bx - Ax);
+            double Py = Ay + t*(By - Ay);
+            double Pz = Az + t*(Bz - Az);
+            int px, py;
+            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
+            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
+            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
+            if (strict_inside(px, py, nfj, vx, vy)) result = 1;
+        }
+    }
+    free(vx); free(vy);
+    return result;
+}
+
+/*
+ * Helper: compute the plane equation (a x + b y + c z + d = 0) for a face.
+ * Uses the first three vertices of the face; if the face has <3 vertices the
+ * coefficients are zeroed.  The coordinates are taken from the original
+ * object-space arrays (fixed-point values cast to double).
+ */
+/* compute_plane_float: same as compute_face_plane but converts
+   fixed-point coordinates to floating values before computing coefficients.
+   The resulting plane is in the same units as FIXED_TO_FLOAT() and thus
+   compatible with distance calculations that also use FIXED_TO_FLOAT. */
+static void compute_face_plane_float(Model3D* model, int fidx,
+                                     double *a, double *b, double *c, double *d) {
+    if (!model || fidx < 0 || fidx >= model->faces.face_count) {
+        *a = *b = *c = *d = 0.0;
+        return;
+    }
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[fidx];
+    if (cnt < 3) {
+        *a = *b = *c = *d = 0.0;
+        return;
+    }
+    int off = faces->vertex_indices_ptr[fidx];
+    int vi0 = faces->vertex_indices_buffer[off] - 1;
+    int vi1 = faces->vertex_indices_buffer[off + 1] - 1;
+    int vi2 = faces->vertex_indices_buffer[off + 2] - 1;
+    double x0 = FIXED_TO_FLOAT(vtx->x[vi0]);
+    double y0 = FIXED_TO_FLOAT(vtx->y[vi0]);
+    double z0 = FIXED_TO_FLOAT(vtx->z[vi0]);
+    double x1 = FIXED_TO_FLOAT(vtx->x[vi1]);
+    double y1 = FIXED_TO_FLOAT(vtx->y[vi1]);
+    double z1 = FIXED_TO_FLOAT(vtx->z[vi1]);
+    double x2 = FIXED_TO_FLOAT(vtx->x[vi2]);
+    double y2 = FIXED_TO_FLOAT(vtx->y[vi2]);
+    double z2 = FIXED_TO_FLOAT(vtx->z[vi2]);
+    double ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
+    double vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
+    *a = uy * vz - uz * vy;
+    *b = uz * vx - ux * vz;
+    *c = ux * vy - uy * vx;
+    *d = -(*a * x0 + *b * y0 + *c * z0);
+}
+
+/* original compute_face_plane retained for callers that expect fixed-coord
+   planes; kept so that older routines (e.g. check_intersect) continue to
+   operate exactly as before. */
+static void compute_face_plane(Model3D* model, int fidx,
+                               double *a, double *b, double *c, double *d) {
+    if (!model || fidx < 0 || fidx >= model->faces.face_count) {
+        *a = *b = *c = *d = 0.0;
+        return;
+    }
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[fidx];
+    if (cnt < 3) {
+        *a = *b = *c = *d = 0.0;
+        return;
+    }
+    int off = faces->vertex_indices_ptr[fidx];
+    int vi0 = faces->vertex_indices_buffer[off] - 1;
+    int vi1 = faces->vertex_indices_buffer[off + 1] - 1;
+    int vi2 = faces->vertex_indices_buffer[off + 2] - 1;
+    double x0 = (double)vtx->x[vi0];
+    double y0 = (double)vtx->y[vi0];
+    double z0 = (double)vtx->z[vi0];
+    double x1 = (double)vtx->x[vi1];
+    double y1 = (double)vtx->y[vi1];
+    double z1 = (double)vtx->z[vi1];
+    double x2 = (double)vtx->x[vi2];
+    double y2 = (double)vtx->y[vi2];
+    double z2 = (double)vtx->z[vi2];
+    double ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
+    double vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
+    *a = uy * vz - uz * vy;
+    *b = uz * vx - ux * vz;
+    *c = ux * vy - uy * vx;
+    *d = -(*a * x0 + *b * y0 + *c * z0);
+}
+
+/* Definition of strict_inside helper moved outside of any other function
+   to satisfy the compiler.  See the forward declaration at the top of this
+   section. */
+static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_local) {
+    int m;
+    /* inside or boundary? reuse existing test */
+    if (!point_in_poly_arrays_int(px, py, nfj_local, vx_local, vy_local))
+        return 0;
+    /* if point equals any vertex or lies on any edge, reject */
+    for (m = 0; m < nfj_local; ++m) {
+        int x1 = vx_local[m], y1 = vy_local[m];
+        if (px == x1 && py == y1) return 0;
+        {
+            int m2 = (m + 1) % nfj_local;
+            int x2 = vx_local[m2], y2 = vy_local[m2];
+            long long dx = (long long)x2 - x1, dy = (long long)y2 - y1;
+            long long dxp = (long long)px - x1, dyp = (long long)py - y1;
+            if (dx * dyp == dy * dxp) {
+                /* collinear, now check within segment bounds */
+                if ((px >= x1 && px <= x2) || (px >= x2 && px <= x1)) {
+                    if ((py >= y1 && py <= y2) || (py >= y2 && py <= y1))
+                        return 0;
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+/* existing count_edge_crossings follows here unchanged */
+static int count_edge_crossings(Model3D* model, int ei, int fj) {
+    int count = 0;
+    double a, b, c, d;
+    compute_face_plane(model, fj, &a, &b, &c, &d);
+    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[ei];
+    if (cnt < 2) return 0;
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj;
+    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
+    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
+    else proj = 2;
+    int nfj = faces->vertex_count[fj];
+    int *vx = (int*)malloc(sizeof(int) * nfj);
+    int *vy = (int*)malloc(sizeof(int) * nfj);
+    for (int m = 0; m < nfj; ++m) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
+        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
+        int ix, iy;
+        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
+        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
+        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
+        vx[m] = ix;
+        vy[m] = iy;
+    }
+    for (int k = 0; k < cnt; ++k) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
+        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k + 1) % cnt)] - 1;
+        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
+        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
+        const double plane_eps = 0.02;
+        double sdA = a*Ax + b*Ay + c*Az + d;
+        double sdB = a*Bx + b*By + c*Bz + d;
+        if (fabs(sdA) < plane_eps) sdA = 0.0;
+        if (fabs(sdB) < plane_eps) sdB = 0.0;
+        if (sdA == 0.0 && sdB == 0.0) {
+            int pax, pay, pbx, pby;
+            if (proj == 0) { pax = FIXED_TO_INT((Fixed32)Ay); pay = FIXED_TO_INT((Fixed32)Az);
+                             pbx = FIXED_TO_INT((Fixed32)By); pby = FIXED_TO_INT((Fixed32)Bz); }
+            else if (proj == 1) { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Az);
+                                  pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)Bz); }
+            else { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Ay);
+                   pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)By); }
+            if (point_in_poly_arrays_int(pax, pay, nfj, vx, vy) ||
+                point_in_poly_arrays_int(pbx, pby, nfj, vx, vy)) {
+                count++;
+            }
+            continue;
+        }
+        if (sdA * sdB < 0.0) {
+            double t = -sdA / (sdB - sdA);
+            double Px = Ax + t*(Bx - Ax);
+            double Py = Ay + t*(By - Ay);
+            double Pz = Az + t*(Bz - Az);
+            int px, py;
+            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
+            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
+            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
+            if (point_in_poly_arrays_int(px, py, nfj, vx, vy)) {
+                count++;
+            }
+        }
+    }
+    free(vx); free(vy);
+    return count;
+}
+
+static int edge_intersects_face(Model3D* model, int ei, int fj) {
+
+    double a, b, c, d;
+    compute_face_plane(model, fj, &a, &b, &c, &d);
+    if (a == 0.0 && b == 0.0 && c == 0.0) {
+        /* degenerate plane */
+        return 0;
+    }
+
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[ei];
+    if (cnt < 2) return 0;
+
+    /* choose projection plane by largest component of normal */
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj; // 0=drop x,1=drop y,2=drop z
+    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
+    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
+    else proj = 2;
+
+    /* build projected vertex arrays for face fj */
+    int nfj = faces->vertex_count[fj];
+    int *vx = (int*)malloc(sizeof(int) * nfj);
+    int *vy = (int*)malloc(sizeof(int) * nfj);
+    for (int m = 0; m < nfj; ++m) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
+        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
+        int ix, iy;
+        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
+        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
+        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
+        vx[m] = ix;
+        vy[m] = iy;
+    }
+
+    for (int k = 0; k < cnt; ++k) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
+        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k + 1) % cnt)] - 1;
+        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
+        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
+        const double plane_eps = 0.02; /* tolerance */
+        double sdA = a*Ax + b*Ay + c*Az + d;
+        double sdB = a*Bx + b*By + c*Bz + d;
+        if (fabs(sdA) < plane_eps) sdA = 0.0;
+        if (fabs(sdB) < plane_eps) sdB = 0.0;
+        /* if both endpoints lie on plane, we still need to check whether the
+           segment actually overlaps the interior of fj (coplanar case). */
+        if (sdA == 0.0 && sdB == 0.0) {
+            /* project A and B to 2D and test if either lies inside the
+               polygon (ignoring boundary).  This catches the t.obj case
+               where the entire vertical face sits in the horizontal plane. */
+            int pax, pay, pbx, pby;
+            if (proj == 0) { pax = FIXED_TO_INT((Fixed32)Ay); pay = FIXED_TO_INT((Fixed32)Az);
+                             pbx = FIXED_TO_INT((Fixed32)By); pby = FIXED_TO_INT((Fixed32)Bz); }
+            else if (proj == 1) { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Az);
+                                  pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)Bz); }
+            else { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Ay);
+                   pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)By); }
+            if (point_in_poly_arrays_int(pax, pay, nfj, vx, vy) ||
+                point_in_poly_arrays_int(pbx, pby, nfj, vx, vy)) {
+
+
+                free(vx); free(vy);
+                return 1;
+            }
+            /* otherwise continue to next edge */
+            continue;
+        }
+        if (sdA * sdB < 0.0) {
+            double t = -sdA / (sdB - sdA);
+            double Px = Ax + t*(Bx - Ax);
+            double Py = Ay + t*(By - Ay);
+            double Pz = Az + t*(Bz - Az);
+            int px, py;
+            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
+            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
+            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
+
+            if (point_in_poly_arrays_int(px, py, nfj, vx, vy)) {
+                free(vx); free(vy);
+                return 1;
+            } else {
+            }
+        }
+    }
+
+    free(vx); free(vy);
+    return 0;
+}
+
+/* Split face `f1` by the infinite plane defined by face `f2`.  The
+   behaviour is unchanged from the previous implementation except that the
+   caller may supply an output buffer to receive the indices of any new
+   vertices generated along the cutting line (these are the intersection
+   points inserted during clipping).  This allows the caller to reuse the
+   same points when splitting the other face, ensuring geometric consistency.
+
+   Additionally, the caller may provide an optional array of
+   `constraint_verts` lying along the intersection line.  When supplied the
+   routine projects each candidate intersection point onto the line and
+   ignores those outside the interval spanned by the constraint points.  This
+   prevents the opposite face from being split by the full plane when only a
+   finite segment of the line lies within the overlapping region.
+
+   If `out_newverts` is non-null, up to `*out_n` indices will be written and
+   `*out_n` updated.  The function returns 1 if a split occurred (bboxes are
+   recomputed), or 0 otherwise. */
+/*
+ * Split face `f1` by the infinite plane defined by face `f2`.
+ *
+ * New behaviour relative to earlier revisions:
+ *   - When `force_one_edge` is nonzero the routine will attempt the split
+ *     even if all vertices of `f1` lie on the same side of the cutter plane.
+ *     This supports the "one-edge crossing" rule requested by the user:
+ *     if exactly one edge of `f1` intersects the interior of `f2` the face
+ *     will still be subdivided.  (The opposite direction is still tested by
+ *     the caller when appropriate.)
+ *   - When forced, the routine will also bypass the usual vertex-count
+ *     check; the original face is retained even if the opposite fragment has
+ *     fewer than three vertices.  A degenerate fragment (count<3) is simply
+ *     discarded rather than causing failure.
+ *
+ * All other parameters behave as before.  The caller may still supply
+ * `out_newverts`/`out_n` and `constraint_verts`/`constraint_n` for clipping.
+ */
+/* build identifier printed in logs so user can verify they ran
+   the newly compiled binary.  Update this string each time the splitting logic
+   is modified. */
+
+static int split_face_by_plane(Model3D* model, int f1, int f2,
+                               int *out_newverts, int *out_n,
+                               int *constraint_verts, int constraint_n,
+                               int force_one_edge) {
+
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[f1];
+
+    if (cnt < 3) return 0;
+
+
+    /* plane of cutting face (float units for distance calc) */
+    double a, b, c, d;
+    compute_face_plane_float(model, f2, &a, &b, &c, &d);
+
+    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
+
+    const double plane_eps = 0.02;
+
+    /* collect distances for each vertex of f1 */
+    double *dist = (double*)malloc(sizeof(double) * cnt);
+    int *orig = (int*)malloc(sizeof(int) * cnt);
+    if (!dist || !orig) {
+        free(dist);
+        free(orig);
+        return 0;
+    }
+    for (int i = 0; i < cnt; ++i) {
+        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + i] - 1;
+        orig[i] = vi;
+        double x = FIXED_TO_FLOAT(vtx->x[vi]);
+        double y = FIXED_TO_FLOAT(vtx->y[vi]);
+        double z = FIXED_TO_FLOAT(vtx->z[vi]);
+
+        double sd = a * x + b * y + c * z + d;  /* now consistent scaling */
+        if (fabs(sd) < plane_eps) sd = 0.0;
+        dist[i] = sd;
+
+    }
+
+    int hasPos = 0, hasNeg = 0;
+    for (int i = 0; i < cnt; ++i) {
+        if (dist[i] > 0.0) hasPos = 1;
+        if (dist[i] < 0.0) hasNeg = 1;
+    }
+    if (!hasPos || !hasNeg) {
+        if (!force_one_edge) {
+
+            free(dist);
+            free(orig);
+            return 0;
+        } else {
+            /* forced split: log that we're ignoring one-sided result */
+
+        }
+    }
+
+    int pos_list[MAX_FACE_VERTICES * 2];
+    int neg_list[MAX_FACE_VERTICES * 2];
+    int cop_list[MAX_FACE_VERTICES];
+    int pos_n = 0, neg_n = 0, cop_n = 0;
+
+    /* temporary buffer to record intersections if requested */
+    int newbuf[MAX_FACE_VERTICES];
+    int newcount = 0;
+
+    /* prepare constraint segment if provided */
+    double seg_min = 0, seg_max = 0;
+    int have_constraint = 0;
+    double dirx=0, diry=0, dirz=0;
+    if (constraint_verts && constraint_n >= 2) {
+        /* compute direction of intersection line from normals of both planes */
+        double a1,b1,c1,d1;
+        compute_face_plane(model, f1, &a1, &b1, &c1, &d1);
+        /* n1 = plane normal of f2 (a,b,c from above), n2 = normal of f1 */
+        dirx = b * c1 - c * b1;
+        diry = c * a1 - a * c1;
+        dirz = a * b1 - b * a1;
+        double len = sqrt(dirx*dirx + diry*diry + dirz*dirz);
+        if (len > 0) {
+            dirx /= len; diry /= len; dirz /= len;
+            /* compute projection of each constraint point onto this direction */
+            double p0x = FIXED_TO_FLOAT(model->vertices.x[constraint_verts[0]]);
+            double p0y = FIXED_TO_FLOAT(model->vertices.y[constraint_verts[0]]);
+            double p0z = FIXED_TO_FLOAT(model->vertices.z[constraint_verts[0]]);
+            seg_min = seg_max = 0.0;
+            for (int ci = 0; ci < constraint_n; ++ci) {
+                int vi = constraint_verts[ci];
+                double cx = FIXED_TO_FLOAT(model->vertices.x[vi]);
+                double cy = FIXED_TO_FLOAT(model->vertices.y[vi]);
+                double cz = FIXED_TO_FLOAT(model->vertices.z[vi]);
+                double t = ( (cx - p0x) * dirx + (cy - p0y) * diry + (cz - p0z) * dirz );
+                if (ci == 0 || t < seg_min) seg_min = t;
+                if (ci == 0 || t > seg_max) seg_max = t;
+            }
+            have_constraint = 1;
+            if (have_constraint) {
+
+            }
+        }
+    }
+
+    for (int i = 0; i < cnt; ++i) {
+        int j = (i + 1) % cnt;
+        double di = dist[i], dj = dist[j];
+        int vi = orig[i], vj = orig[j];
+
+        if (di == 0.0) cop_list[cop_n++] = vi;
+        if (di >= 0.0) pos_list[pos_n++] = vi;
+        if (di <= 0.0) neg_list[neg_n++] = vi;
+
+        if (di * dj < 0.0) {
+            double t = di / (di - dj);
+            double ix = FIXED_TO_FLOAT(vtx->x[vi]) + t * (FIXED_TO_FLOAT(vtx->x[vj]) - FIXED_TO_FLOAT(vtx->x[vi]));
+            double iy = FIXED_TO_FLOAT(vtx->y[vi]) + t * (FIXED_TO_FLOAT(vtx->y[vj]) - FIXED_TO_FLOAT(vtx->y[vi]));
+            double iz = FIXED_TO_FLOAT(vtx->z[vi]) + t * (FIXED_TO_FLOAT(vtx->z[vj]) - FIXED_TO_FLOAT(vtx->z[vi]));
+            /* if constraints provided, ensure intersection lies within segment */
+            if (have_constraint) {
+                int refvi = constraint_verts[0];
+                double rpx = FIXED_TO_FLOAT(model->vertices.x[refvi]);
+                double rpy = FIXED_TO_FLOAT(model->vertices.y[refvi]);
+                double rpz = FIXED_TO_FLOAT(model->vertices.z[refvi]);
+                double pt = ((ix - rpx) * dirx + (iy - rpy) * diry + (iz - rpz) * dirz);
+                if (pt < seg_min - 1e-6 || pt > seg_max + 1e-6) {
+
+                    continue;
+                }
+            }
+            int newvi = add_vertex(model, FLOAT_TO_FIXED((float)ix),
+                                           FLOAT_TO_FIXED((float)iy),
+                                           FLOAT_TO_FIXED((float)iz));
+            if (newvi >= 0) {
+                pos_list[pos_n++] = newvi;
+                neg_list[neg_n++] = newvi;
+                if (out_newverts && newcount < MAX_FACE_VERTICES) {
+                    newbuf[newcount++] = newvi;
+                }
+            }
+        }
+    }
+
+    if (out_newverts && out_n) {
+        *out_n = newcount;
+        for (int k = 0; k < newcount; ++k) out_newverts[k] = newbuf[k];
+    }
+
+    free(dist);
+    free(orig);
+
+    cleanup_list(pos_list, &pos_n);
+    cleanup_list(neg_list, &neg_n);
+    cleanup_list(cop_list, &cop_n);
+    remove_duplicates(pos_list, &pos_n);
+    remove_duplicates(neg_list, &neg_n);
+    if (cop_n >= 3) remove_duplicates(cop_list, &cop_n);
+
+
+    /* normally we require both sides to have at least three verts, but a
+       forced one-edge split bypasses this check. */
+    if (!force_one_edge && (pos_n < 3 || neg_n < 3)) return 0;
+
+    /* ensure polygon vertex order is sensible before measuring area */
+    reorder_poly(model, f1, pos_list, &pos_n);
+    reorder_poly(model, f1, neg_list, &neg_n);
+
+    /* calculate areas using the plane of the face being split (f1) rather
+       than the cutter plane.  This avoids the zero-area issue when the
+       two faces are perpendicular. */
+    double a1, b1, c1, d1;
+    compute_face_plane(model, f1, &a1, &b1, &c1, &d1);
+    double area_pos = poly_signed_area(model, pos_list, pos_n, a1, b1, c1);
+    double area_neg = poly_signed_area(model, neg_list, neg_n, a1, b1, c1);
+    if (fabs(area_pos) < 0.001 || fabs(area_neg) < 0.001) {
+        /* area seems small or zero; log for debugging but do not abort the
+           split.  numeric quantization sometimes makes a valid polygon appear
+           degenerate (see t.obj case). */
+
+        /* continue regardless */
+    }
+
+    reorder_poly(model, f1, pos_list, &pos_n);
+    reorder_poly(model, f1, neg_list, &neg_n);
+
+    int orig_cnt = faces->vertex_count[f1];
+    int orig_off = faces->vertex_indices_ptr[f1];
+    /* choose which side becomes the "kept" polygon.  if one side lacks
+       enough vertices we keep the other, unless both have >=3 in which case
+       keep the positive side by convention. */
+    int *keep_list = NULL, keep_n = 0;
+    int *other_list = NULL, other_n = 0;
+    if (pos_n >= 3 && (neg_n < 3 || !force_one_edge)) {
+        keep_list = pos_list; keep_n = pos_n;
+        other_list = neg_list; other_n = neg_n;
+    } else if (neg_n >= 3 && (pos_n < 3 || force_one_edge && pos_n < 3)) {
+        keep_list = neg_list; keep_n = neg_n;
+        other_list = pos_list; other_n = pos_n;
+    } else {
+        /* both valid or both too small; default to positive side */
+        keep_list = pos_list; keep_n = pos_n;
+        other_list = neg_list; other_n = neg_n;
+    }
+
+    if (keep_n <= orig_cnt) {
+        for (int k = 0; k < keep_n; ++k)
+            faces->vertex_indices_buffer[orig_off + k] = keep_list[k] + 1;
+        faces->vertex_count[f1] = keep_n;
+    } else {
+        int new_off = faces->total_indices;
+        for (int k = 0; k < keep_n; ++k)
+            faces->vertex_indices_buffer[new_off + k] = keep_list[k] + 1;
+        faces->vertex_indices_ptr[f1] = new_off;
+        faces->vertex_count[f1] = keep_n;
+        faces->total_indices += keep_n;
+    }
+    int orig_disp = faces->display_flag[f1];
+
+
+
+    /* create opposite fragment only if it has enough vertices */
+    if (other_n >= 3) {
+        int fneg = faces->face_count++;
+        faces->vertex_count[fneg] = other_n;
+        faces->vertex_indices_ptr[fneg] = faces->total_indices;
+        for (int k = 0; k < other_n; ++k)
+            faces->vertex_indices_buffer[faces->total_indices + k] = other_list[k] + 1;
+        faces->total_indices += other_n;
+        faces->sorted_face_indices[fneg] = fneg;
+        faces->display_flag[fneg] = orig_disp;
+    }
+
+    if (cop_n >= 3) {
+        int fcop = faces->face_count++;
+        faces->vertex_count[fcop] = cop_n;
+        faces->vertex_indices_ptr[fcop] = faces->total_indices;
+        for (int k = 0; k < cop_n; ++k)
+            faces->vertex_indices_buffer[faces->total_indices + k] = cop_list[k] + 1;
+        faces->total_indices += cop_n;
+        faces->sorted_face_indices[fcop] = fcop;
+        faces->display_flag[fcop] = orig_disp;
+    }
+
+    compute_face_bboxes3D(model);
+    return 1;
+}
+
+/* utility: append a new vertex to the model's vertex arrays and return
+   0-based index, or -1 if capacity exceeded */
+static int add_vertex(Model3D* model, Fixed32 x, Fixed32 y, Fixed32 z) {
+    if (!model) return -1;
+    VertexArrays3D* vtx = &model->vertices;
+    if (vtx->vertex_count >= MAX_VERTICES) return -1;
+    int idx = vtx->vertex_count;
+    vtx->x[idx]  = x;
+    vtx->y[idx]  = y;
+    vtx->z[idx]  = z;
+    vtx->xo[idx] = 0;
+    vtx->yo[idx] = 0;
+    vtx->zo[idx] = 0;
+    vtx->x2d[idx] = 0;
+    vtx->y2d[idx] = 0;
+    vtx->vertex_count++;
+    return idx;
+}
+
+/* utility: remove consecutive duplicate indices from a polygon list; also
+   check wrap-around duplicates */
+static void cleanup_list(int *arr, int *n) {
+    if (*n <= 1) return;
+    int w = 0;
+    for (int i = 0; i < *n; ++i) {
+        if (i == 0 || arr[i] != arr[i-1]) {
+            arr[w++] = arr[i];
+        }
+    }
+    if (w > 1 && arr[0] == arr[w-1]) w--;
+    *n = w;
+}
+
+/* Remove any duplicate index appearing later in the list, preserving only
+   the first occurrence. This prevents repeated vertices from creating
+   self-intersections. */
+static void remove_duplicates(int *arr, int *n) {
+    int w = 0;
+    for (int i = 0; i < *n; ++i) {
+        int found = 0;
+        for (int j = 0; j < w; ++j) {
+            if (arr[i] == arr[j]) { found = 1; break; }
+        }
+        if (!found) arr[w++] = arr[i];
+    }
+    *n = w;
+}
+
+/* Clip the polygon of face `fidx` against the half-space defined by
+   plane `a*x + b*y + c*z + d >= 0` when `keepPositive` is true, otherwise
+   the complementary <=0 side is retained.  The resulting vertex indices are
+   written into `outbuf` with count returned via `*outcnt`.  Intersection
+   points are created with `add_vertex`. */
+static void clip_face_plane(Model3D* model, int fidx,
+                             double a, double b, double c, double d,
+                             int keepPositive, int *outbuf, int *outcnt) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int cnt = faces->vertex_count[fidx];
+    *outcnt = 0;
+    if (cnt <= 0) return;
+    int off = faces->vertex_indices_ptr[fidx];
+    int prev_vi = faces->vertex_indices_buffer[off] - 1;
+    double x = (double)vtx->x[prev_vi];
+    double y = (double)vtx->y[prev_vi];
+    double z = (double)vtx->z[prev_vi];
+    double sd_prev = a*x + b*y + c*z + d;
+    for (int k = 0; k < cnt; ++k) {
+        int vi = faces->vertex_indices_buffer[off + k] - 1;
+        x = (double)vtx->x[vi];
+        y = (double)vtx->y[vi];
+        z = (double)vtx->z[vi];
+        double sd = a*x + b*y + c*z + d;
+        int in_prev = keepPositive ? (sd_prev >= 0) : (sd_prev <= 0);
+        int in_curr = keepPositive ? (sd >= 0) : (sd <= 0);
+        if (in_curr) {
+            outbuf[*outcnt] = vi;
+            (*outcnt)++;
+        }
+        if (in_prev ^ in_curr) {
+            /* compute intersection point */
+            double t = sd_prev / (sd_prev - sd);
+            double ix = (double)vtx->x[prev_vi] + t * ((double)vtx->x[vi] - (double)vtx->x[prev_vi]);
+            double iy = (double)vtx->y[prev_vi] + t * ((double)vtx->y[vi] - (double)vtx->y[prev_vi]);
+            double iz = (double)vtx->z[prev_vi] + t * ((double)vtx->z[vi] - (double)vtx->z[prev_vi]);
+            int newvi = add_vertex(model,
+                                   FLOAT_TO_FIXED((float)ix),
+                                   FLOAT_TO_FIXED((float)iy),
+                                   FLOAT_TO_FIXED((float)iz));
+            if (newvi >= 0) {
+                outbuf[*outcnt] = newvi;
+                (*outcnt)++;
+            }
+        }
+        prev_vi = vi;
+        sd_prev = sd;
+    }
+}
+/* compute signed area of a polygon (vertex list) projected onto a plane
+   defined by normal (a,b,c).  returns positive for CCW orientation. */
+static double poly_signed_area(Model3D* model, int *list, int n,
+                               double a, double b, double c) {
+    if (n < 3) return 0.0;
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj;
+    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
+    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
+    else proj = 2;
+    VertexArrays3D* vtx = &model->vertices;
+    double area = 0;
+    for (int i = 0; i < n; ++i) {
+        int vi = list[i];
+        int vj = list[(i + 1) % n];
+        double x1,y1,x2,y2;
+        if (proj == 0) {
+            x1 = FIXED_TO_FLOAT(vtx->y[vi]); y1 = FIXED_TO_FLOAT(vtx->z[vi]);
+            x2 = FIXED_TO_FLOAT(vtx->y[vj]); y2 = FIXED_TO_FLOAT(vtx->z[vj]);
+        } else if (proj == 1) {
+            x1 = FIXED_TO_FLOAT(vtx->x[vi]); y1 = FIXED_TO_FLOAT(vtx->z[vi]);
+            x2 = FIXED_TO_FLOAT(vtx->x[vj]); y2 = FIXED_TO_FLOAT(vtx->z[vj]);
+        } else {
+            x1 = FIXED_TO_FLOAT(vtx->x[vi]); y1 = FIXED_TO_FLOAT(vtx->y[vi]);
+            x2 = FIXED_TO_FLOAT(vtx->x[vj]); y2 = FIXED_TO_FLOAT(vtx->y[vj]);
+        }
+        area += (x1 * y2 - x2 * y1);
+    }
+    return area * 0.5;
+}
+
+/* Reorder `list` of vertex indices (length `*n`) so that they are sorted
+   counter‑clockwise around the centroid when projected onto the plane of
+   face `fidx`.  This ensures a simple, non‑self‑intersecting polygon. */
+static void reorder_poly(Model3D* model, int fidx, int *list, int *n) {
+    if (!model || *n < 3) return;
+    /* compute projection plane from face normal */
+    double a, b, c, d;
+    compute_face_plane(model, fidx, &a, &b, &c, &d);
+    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
+    int proj;
+    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
+    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
+    else proj = 2;
+
+    /* gather 2D coordinates */
+    double *px = (double*)malloc(sizeof(double) * (*n));
+    double *py = (double*)malloc(sizeof(double) * (*n));
+    if (!px || !py) {
+        free(px); free(py);
+        return;
+    }
+    VertexArrays3D* vtx = &model->vertices;
+    for (int i = 0; i < *n; ++i) {
+        int vi = list[i];
+        double X = (double)vtx->x[vi];
+        double Y = (double)vtx->y[vi];
+        double Z = (double)vtx->z[vi];
+        if (proj == 0) { px[i] = Y; py[i] = Z; }
+        else if (proj == 1) { px[i] = X; py[i] = Z; }
+        else { px[i] = X; py[i] = Y; }
+    }
+    /* compute centroid */
+    double cx = 0, cy = 0;
+    for (int i = 0; i < *n; ++i) { cx += px[i]; cy += py[i]; }
+    cx /= *n; cy /= *n;
+    /* compute angles */
+    double *ang = (double*)malloc(sizeof(double) * (*n));
+    if (!ang) { free(px); free(py); return; }
+    for (int i = 0; i < *n; ++i) {
+        ang[i] = atan2(py[i] - cy, px[i] - cx);
+    }
+    /* simple insertion sort on angles (small n) */
+    for (int i = 1; i < *n; ++i) {
+        int idx = list[i];
+        double a0 = ang[i];
+        int j = i - 1;
+        while (j >= 0 && ang[j] > a0) {
+            ang[j+1] = ang[j];
+            list[j+1] = list[j];
+            j--;
+        }
+        ang[j+1] = a0;
+        list[j+1] = idx;
+    }
+    /* ensure orientation matches original sign (ccw positive) */
+    double area = 0;
+    for (int i = 0; i < *n; ++i) {
+        int k = (i + 1) % *n;
+        double x1 = px[i], y1 = py[i];
+        double x2 = px[k], y2 = py[k];
+        area += (x1 * y2 - x2 * y1);
+    }
+    if (area < 0) {
+        /* reverse order */
+        for (int i = 0; i < *n/2; ++i) {
+            int t = list[i]; list[i] = list[*n-1-i]; list[*n-1-i] = t;
+        }
+    }
+    free(px); free(py); free(ang);
+}
+
+/* Compute object-space axis-aligned bounding box for every face.  Allocates
+ * arrays inside faces->minx3 etc.  Must be called after vertices and faces are
+ * loaded; it does nothing if face_count is zero.
+ */
+static void compute_face_bboxes3D(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int fc = faces->face_count;
+    if (fc <= 0) return;
+    /* allocate arrays (free previous if any) */
+    if (faces->minx3) free(faces->minx3);
+    if (faces->maxx3) free(faces->maxx3);
+    if (faces->miny3) free(faces->miny3);
+    if (faces->maxy3) free(faces->maxy3);
+    if (faces->minz3) free(faces->minz3);
+    if (faces->maxz3) free(faces->maxz3);
+    faces->minx3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->maxx3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->miny3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->maxy3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->minz3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    faces->maxz3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
+    if (!faces->minx3||!faces->maxx3||!faces->miny3||!faces->maxy3||!faces->minz3||!faces->maxz3) {
+        /* if allocation failed, free and clear */
+        free(faces->minx3); free(faces->maxx3); free(faces->miny3);
+        free(faces->maxy3); free(faces->minz3); free(faces->maxz3);
+        faces->minx3 = faces->maxx3 = faces->miny3 = faces->maxy3 = faces->minz3 = faces->maxz3 = NULL;
+        return;
+    }
+    for (int fi = 0; fi < fc; ++fi) {
+        int cnt = faces->vertex_count[fi];
+        int off = faces->vertex_indices_ptr[fi];
+        Fixed32 mnx=0,mxx=0,mny=0,mxy=0,mnz=0,mxz=0;
+        for (int k = 0; k < cnt; ++k) {
+            int vi = faces->vertex_indices_buffer[off + k] - 1;
+            Fixed32 x = vtx->x[vi];
+            Fixed32 y = vtx->y[vi];
+            Fixed32 z = vtx->z[vi];
+            if (k==0 || x < mnx) mnx = x;
+            if (k==0 || x > mxx) mxx = x;
+            if (k==0 || y < mny) mny = y;
+            if (k==0 || y > mxy) mxy = y;
+            if (k==0 || z < mnz) mnz = z;
+            if (k==0 || z > mxz) mxz = z;
+        }
+        faces->minx3[fi] = mnx;
+        faces->maxx3[fi] = mxx;
+        faces->miny3[fi] = mny;
+        faces->maxy3[fi] = mxy;
+        faces->minz3[fi] = mnz;
+        faces->maxz3[fi] = mxz;
+    }
+}
+
+
+segment "painter_core";
 // ============================================================================
 //  1. PAINTER CORE
 //  Newell/Sancha algorithm and all painter variants
 // ============================================================================
+
+/**
+ * processModelFast -- Combined transformation, projection, and painter invocation
+ * ============================================================================
+ * Responsibilities:
+ *  - Transform model vertices into observer-space (xo/yo/zo) using Fixed32 arithmetic.
+ *  - Project to integer screen coords (x2d/y2d) using configured projection scale.
+ *  - If using the FLOAT painter mode, populate float caches (float_xo/float_yo/float_zo etc.)
+ *    used by the float-based painter for efficient per-face computations.
+ *  - Call `calculateFaceDepths()` to compute per-face depth metrics, bboxes and plane coeffs.
+ *  - Dispatch to the selected painter implementation (FAST, FIXED, or FLOAT) to build
+ *    the final `sorted_face_indices` for rendering.
+ *
+ * Notes:
+ *  - Autoscaling is **not** performed here; any autoscale (previously implemented in an archived helper) must be applied
+ *    before calling `processModelFast()` (e.g. at load time or via explicit user action). The archived helper's implementation is in `chutier.txt`.
+ *  - The painter may only sort the visible faces when back-face culling is enabled. Culled
+ *    faces are appended after visible faces to preserve index stability.
+ *  - Timing instrumentation prints per-stage costs when not in PERFORMANCE_MODE.
+ *  - OPTIMISATION : pre calculate matrix coefficients and use direct table access 
+ *   for trig functions to avoid function call overhead. 100% Fixed32 loop with no conversions for maximum speed.
+ */
+
+void processModelFast(Model3D* model, ObserverParams* params, const char* filename) {
+    int i;
+
+    Fixed32 cos_h, sin_h, cos_v, sin_v, cos_w, sin_w;
+    Fixed32 x, y, z, zo, xo, yo;
+    Fixed32 inv_zo, x2d_temp, y2d_temp;
+    
+    // Direct table access - ultra-fast! (no function calls)
+    cos_h = cos_deg_int(params->angle_h);
+    sin_h = sin_deg_int(params->angle_h);
+    cos_v = cos_deg_int(params->angle_v);
+    sin_v = sin_deg_int(params->angle_v);
+    cos_w = cos_deg_int(params->angle_w);
+    sin_w = sin_deg_int(params->angle_w);
+
+    // Pre-calculate all trigonometric products in Fixed32 - using 64-bit multiply
+    const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
+    const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
+    const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
+    const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
+
+    /* Precomputed rotation matrix - 9 coefficients */
+    Fixed32 M00, M01, M02;
+    Fixed32 M10, M11, M12;
+    Fixed32 M20, M21, M22;
+
+    // Use global projection scale, which is synced with auto-fit when applied
+    Fixed32 scale = s_global_proj_scale_fixed;
+    const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
+    const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
+    Fixed32 distance = params->distance;
+    // Apply auto-scale if any
+    //distance = FIXED_MUL_64(distance, INT_TO_FIXED(4));
+    
+    // 100% Fixed32 loop - ZERO conversions, maximum speed!
+    VertexArrays3D* vtx = &model->vertices;
+    Fixed32 *x_arr = vtx->x, *y_arr = vtx->y, *z_arr = vtx->z;
+    Fixed32 *xo_arr = vtx->xo, *yo_arr = vtx->yo, *zo_arr = vtx->zo;
+    int *x2d_arr = vtx->x2d, *y2d_arr = vtx->y2d;
+    int vcount = vtx->vertex_count;
+
+    long t_loop_start = GetTick();
+    
+    M20 = FIXED_NEG(cos_h_cos_v);
+    M21 = FIXED_NEG(sin_h_cos_v);
+    M22 = FIXED_NEG(sin_v);
+
+    if (params->angle_w == 0) {
+        M00 = FIXED_NEG(sin_h);
+        M01 = cos_h;
+        M02 = 0;
+        M10 = FIXED_NEG(cos_h_sin_v);
+        M11 = FIXED_NEG(sin_h_sin_v);
+        M12 = cos_v;
+    } else {
+        M00 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(cos_w), sin_h),
+                        FIXED_MUL_64(sin_w, cos_h_sin_v));
+        M01 = FIXED_SUB(FIXED_MUL_64(cos_w, cos_h),
+                        FIXED_MUL_64(sin_w, FIXED_NEG(sin_h_sin_v)));
+        M02 = FIXED_MUL_64(FIXED_NEG(sin_w), cos_v);
+        M10 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(sin_w), sin_h),
+                        FIXED_MUL_64(FIXED_NEG(cos_w), cos_h_sin_v));
+        M11 = FIXED_ADD(FIXED_MUL_64(sin_w, cos_h),
+                        FIXED_MUL_64(FIXED_NEG(cos_w), sin_h_sin_v));
+        M12 = FIXED_MUL_64(cos_w, cos_v);
+    }
+
+
+    for (i = 0; i < vcount; i++) {
+        x = x_arr[i];
+        y = y_arr[i];
+        z = z_arr[i];
+
+        zo = FIXED_ADD(
+                FIXED_ADD(
+                    FIXED_ADD(FIXED_MUL_64(M20, x),
+                            FIXED_MUL_64(M21, y)),
+                    FIXED_MUL_64(M22, z)),
+                distance);
+
+        if (zo > 0) {
+            xo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M00, x),
+                                    FIXED_MUL_64(M01, y)),
+                        FIXED_MUL_64(M02, z));
+            yo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M10, x),
+                                    FIXED_MUL_64(M11, y)),
+                        FIXED_MUL_64(M12, z));
+            zo_arr[i] = zo;
+            xo_arr[i] = xo;
+            yo_arr[i] = yo;
+            inv_zo = FIXED_DIV_64(scale, zo);
+            x2d_arr[i] = FIXED_ROUND_TO_INT(
+                            FIXED_ADD(FIXED_MUL_64(xo, inv_zo), centre_x_f));
+            y2d_arr[i] = FIXED_ROUND_TO_INT(
+                            FIXED_SUB(centre_y_f, FIXED_MUL_64(yo, inv_zo)));
+        } else {
+            zo_arr[i] = zo;
+            xo_arr[i] = 0;
+            yo_arr[i] = 0;
+            x2d_arr[i] = -1;
+            y2d_arr[i] = -1;
+        }
+    }
+
+    long t_loop_end = GetTick();
+
+    // Face sorting after transformation
+    long t_start, t_end;
+    t_start = GetTick();
+    calculateFaceDepths(model, NULL, model->faces.face_count);
+    if (shaded_by_orientation) {
+        computeOrientationShading(model);
+    }
+    t_end = GetTick();
+
+
+    if (framePolyOnly) goto skip_calc; // Skip face calculations for framed polygons only display
+
+    // CRITICAL: Reset sorted_face_indices before each sort to prevent corruption
+    // for (i = 0; i < model->faces.face_count; i++) {
+    //     model->faces.sorted_face_indices[i] = i;
+    // }
+    // painter_newell_sancha 
+    t_start = GetTick();
+    if (painter_mode == PAINTER_MODE_FAST) {
+        painter_newell_sancha_fast(model, model->faces.face_count);
+    } else if (painter_mode == PAINTER_MODE_FIXED) {
+        painter_newell_sancha(model, model->faces.face_count);
+    } else if (painter_mode == PAINTER_MODE_CORRECT) {
+        /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
+        painter_correct(model, model->faces.face_count, 0);
+    } else if (painter_mode == PAINTER_MODE_GEO) {
+        painter_geoV2(model, model->faces.face_count);
+    } else if (painter_mode == PAINTER_MODE_CORRECTV2) {
+        /* painter_correctV2: experimental face splitting version */
+        painter_correctV2(model, model->faces.face_count, 0);
+    } 
+    t_end = GetTick();
+
+    skip_calc:;
+}
 
 // Comparator support for qsort in painter_newell_sancha
 static int cmp_faces_by_zmean(const void* pa, const void* pb) {
@@ -61,6 +2033,39 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
     return 0;
 }
 
+
+/**
+ * PAINTER'S ALGORITHM - NEWELL / SANCHA (detailed)
+ * =================================================
+ * Overview:
+ *  - The painter builds an ordering of faces for correct filled-polygon rendering without
+ *    performing geometric splits. The algorithm follows the Newell/Sancha approach:
+ *      1) Compute per-face depth metrics (z_min/z_max/z_mean) and planar coefficients.
+ *      2) Initially sort faces by z_mean (descending) to obtain a broadly correct depth order.
+ *      3) Use axis-aligned bounding-box overlap tests (X and Y) to detect candidate overlapping faces.
+ *      4) For overlapping pairs, apply robust pairwise ordering tests using plane/triangle votes and
+ *         local sampling; if the order is ambiguous, record the pair in the `inconclusive_pairs`
+ *         buffer for diagnostic framing and later inspection (no automatic splitting).
+ *
+ * Visibility & culling:
+ *  - When `cull_back_faces` is enabled, the painter operates primarily on the subset of faces
+ *    with `display_flag == 1` (visible). Culled faces are appended afterwards to preserve
+ *    stable indices and deterministic behavior of `sorted_face_indices`.
+ *
+ * Modes:
+ *  - FAST: performs only low-cost tests (depth + bbox) and skips plane calculations for speed.
+ *  - FIXED: Fixed-point Newell/Sancha implementation.
+
+ * Notes:
+ *  - The algorithm is intentionally conservative: inconclusive pairs are stored rather than
+ *    forcing a risky swap that may introduce visual artifacts.
+ *  - Use `frameInconclusivePairs()` in diagnostics to highlight such pairs in the rendered view.
+ *
+ * Usage:
+ *  - Call `painter_newell_sancha(model, face_count)` (or a mode-specific variant) after
+ *    `calculateFaceDepths()` / `processModelFast()` has computed observer-space coordinates.
+ */
+
 /**
  * FAST PUBLISHABLE PASS (painter_newell_sancha_fast)
  * --------------------------------------------------
@@ -105,219 +2110,6 @@ void painter_newell_sancha_fast(Model3D* model, int face_count) {
     qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
     qsort_faces_ptr_for_cmp = NULL;
 }
-
-// --- Pair cache (used by painter_geoV2) ---
-static PairCache* pair_cache_create(int capacity) {
-    PairCache* c = (PairCache*)malloc(sizeof(PairCache));
-    if (!c) return NULL;
-    c->capacity = capacity;
-    c->slots = (PairCacheEntry*)calloc(capacity, sizeof(PairCacheEntry));
-    if (!c->slots) { free(c); return NULL; }
-    return c;
-}
-
-static void pair_cache_destroy(PairCache* c) {
-    if (c) { free(c->slots); free(c); }
-}
-
-static int pair_cache_slot(PairCache* c, int f1, int f2) {
-    // Canonical key independent of order
-    int a = (f1 < f2) ? f1 : f2;
-    int b = (f1 < f2) ? f2 : f1;
-    unsigned int h = (unsigned int)(a * 2654435761u ^ b * 2246822519u);
-    return (int)(h % (unsigned int)c->capacity);
-}
-
-static int pair_cache_find(PairCache* c, int f1, int f2) {
-    int slot, i;
-    if (!c) return 0;
-    slot = pair_cache_slot(c, f1, f2);
-    for (i = 0; i < 8; i++) {
-        int pos = (slot + i) % c->capacity;
-        PairCacheEntry* e = &c->slots[pos];
-        if (!e->occupied) return 0;  // slot vide -> paire inconnue
-        if ((e->face1 == f1 && e->face2 == f2)) return  e->relation;
-        if ((e->face1 == f2 && e->face2 == f1)) return -e->relation;
-    }
-    return 0;
-}
-
-static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation) {
-    int slot, i;
-    if (!c) return;
-    slot = pair_cache_slot(c, f1, f2);
-    for (i = 0; i < 8; i++) {
-        int pos = (slot + i) % c->capacity;
-        PairCacheEntry* e = &c->slots[pos];
-        if (!e->occupied ||
-            (e->face1 == f1 && e->face2 == f2) ||
-            (e->face1 == f2 && e->face2 == f1)) {
-            e->face1    = f1;
-            e->face2    = f2;
-            e->relation = relation;
-            e->occupied = 1;
-            return;
-        }
-    }
-}
-
-
-// --- Painter variants ---
-
-void painter_geoV2(Model3D* model, int face_count) {
-    FaceArrays3D* faces = &model->faces;
-    int i;
-
-    Fixed32* face_zmean = faces->z_mean;
-    if (!face_zmean) return;
-
-    Fixed32* face_zmin = faces->z_min;   /* may be NULL */
-    Fixed32* face_zmax = faces->z_max;
-
-    printf("Running painter_geoV2 with %d faces (cull_back_faces=%d)...\n",
-           face_count, cull_back_faces);
-
-    painter_newell_sancha_fast(model, face_count);
-
-    int visible_count = face_count;
-    if (cull_back_faces) {
-        visible_count = 0;
-        for (i = 0; i < face_count; ++i) {
-            if (faces->display_flag[i]) ++visible_count;
-        }
-    }
-
-    if (visible_count < 2) {
-        printf("Total swaps: 0\n");
-        return;
-    }
-
-    int swap_count = 0;
-    int swapped;
-
-    /* ------------------------------------------------------------------
-       Fixed-size hash cache.
-       Independent of face_count → predictable memory use and high
-       chance of successful allocation even for 6000-face models.
-       4096 entries is largely sufficient for the number of unique
-       pairs actually touched by the adjacent bubble.
-       ------------------------------------------------------------------ */
-    PairCache* cache = pair_cache_create(4096);
-    if (!cache) {
-        /* Last-chance smaller sizes */
-        cache = pair_cache_create(2048);
-        if (!cache)
-            cache = pair_cache_create(1024);
-    }
-    if (!cache) {
-        printf("painter_geoV2: warning - no pair cache, geometric pass disabled\n");
-        return;   /* better to keep the initial sort than run extremely slowly */
-    }
-
-    /* Inconclusive buffer */
-    if (inconclusive_pairs) {
-        free(inconclusive_pairs);
-        inconclusive_pairs = NULL;
-    }
-    inconclusive_pairs_capacity = face_count * 4;
-    inconclusive_pairs_count = 0;
-    if (inconclusive_pairs_capacity > 0) {
-        inconclusive_pairs = (InconclusivePair*)malloc(
-            inconclusive_pairs_capacity * sizeof(InconclusivePair));
-        if (!inconclusive_pairs)
-            inconclusive_pairs_capacity = 0;
-    }
-
-    int limit = visible_count - 1;
-    int new_limit;
-    const int MAX_PASSES = visible_count * 2;
-    int pass = 0;
-
-    do {
-        swapped = 0;
-        new_limit = 0;
-        ++pass;
-
-        for (i = 0; i < limit; ++i) {
-            int f1 = faces->sorted_face_indices[i];
-            int f2 = faces->sorted_face_indices[i + 1];
-
-            if (pair_cache_find(cache, f1, f2) != 0)
-                continue;
-
-            /* Geometric tests – source of truth */
-            int geo = geometric_face_relation(model, f1, f2);
-            if (geo == -1) {
-                pair_cache_insert(cache, f1, f2, 1);
-                continue;
-            }
-            if (geo == 1)
-                goto do_swap;
-
-            int geo2 = geometric_face_relation(model, f2, f1);
-            if (geo2 == -1)
-                goto do_swap;
-            if (geo2 == 1) {
-                pair_cache_insert(cache, f1, f2, 1);
-                continue;
-            }
-
-            /* Z test – only to skip the expensive ray-cast */
-            int z_disjoint = 0;
-            if (face_zmin && face_zmax) {
-                if (face_zmax[f1] <= face_zmin[f2] ||
-                    face_zmax[f2] <= face_zmin[f1])
-                    z_disjoint = 1;
-            } else {
-                Fixed32 dz = face_zmean[f1] - face_zmean[f2];
-                if (dz > FLOAT_TO_FIXED(1.0f) || dz < FLOAT_TO_FIXED(-1.0f))
-                    z_disjoint = 1;
-            }
-
-            if (!z_disjoint && projected_polygons_overlap(model, f1, f2)) {
-                int rc = ray_cast_hierarchical(model, f1, f2);
-                if (rc < 0)
-                    goto do_swap;
-                if (rc > 0) {
-                    pair_cache_insert(cache, f1, f2, 1);
-                    continue;
-                }
-            }
-
-            /* Inconclusive */
-            if (inconclusive_pairs &&
-                inconclusive_pairs_count < inconclusive_pairs_capacity) {
-                inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
-                inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
-                inconclusive_pairs_count++;
-            }
-            pair_cache_insert(cache, f1, f2, 1);
-            continue;
-
-        do_swap:
-            {
-                int tmp = faces->sorted_face_indices[i];
-                faces->sorted_face_indices[i]     = faces->sorted_face_indices[i + 1];
-                faces->sorted_face_indices[i + 1] = tmp;
-                swapped = 1;
-                swap_count++;
-                pair_cache_insert(cache, f2, f1, 1);
-                new_limit = i;
-            }
-        }
-
-        limit = new_limit;
-
-    } while (swapped && limit > 0 && pass < MAX_PASSES);
-
-    if (pass >= MAX_PASSES) {
-        printf("painter_geoV2: safety limit reached (%d passes)\n", pass);
-    }
-
-    pair_cache_destroy(cache);
-    printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
-}
-
 void painter_newell_sancha_old(Model3D* model, int face_count) {
     // ...existing code...
     FaceArrays3D* faces = &model->faces;
@@ -738,6 +2530,219 @@ void painter_newell_sancha(Model3D* model, int face_count)
     free(ordered);
     free(hash_table);
 }
+
+// --- Pair cache (used by painter_geoV2) ---
+static PairCache* pair_cache_create(int capacity) {
+    PairCache* c = (PairCache*)malloc(sizeof(PairCache));
+    if (!c) return NULL;
+    c->capacity = capacity;
+    c->slots = (PairCacheEntry*)calloc(capacity, sizeof(PairCacheEntry));
+    if (!c->slots) { free(c); return NULL; }
+    return c;
+}
+
+static void pair_cache_destroy(PairCache* c) {
+    if (c) { free(c->slots); free(c); }
+}
+
+static int pair_cache_slot(PairCache* c, int f1, int f2) {
+    // Canonical key independent of order
+    int a = (f1 < f2) ? f1 : f2;
+    int b = (f1 < f2) ? f2 : f1;
+    unsigned int h = (unsigned int)(a * 2654435761u ^ b * 2246822519u);
+    return (int)(h % (unsigned int)c->capacity);
+}
+
+static int pair_cache_find(PairCache* c, int f1, int f2) {
+    int slot, i;
+    if (!c) return 0;
+    slot = pair_cache_slot(c, f1, f2);
+    for (i = 0; i < 8; i++) {
+        int pos = (slot + i) % c->capacity;
+        PairCacheEntry* e = &c->slots[pos];
+        if (!e->occupied) return 0;  // slot vide -> paire inconnue
+        if ((e->face1 == f1 && e->face2 == f2)) return  e->relation;
+        if ((e->face1 == f2 && e->face2 == f1)) return -e->relation;
+    }
+    return 0;
+}
+
+static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation) {
+    int slot, i;
+    if (!c) return;
+    slot = pair_cache_slot(c, f1, f2);
+    for (i = 0; i < 8; i++) {
+        int pos = (slot + i) % c->capacity;
+        PairCacheEntry* e = &c->slots[pos];
+        if (!e->occupied ||
+            (e->face1 == f1 && e->face2 == f2) ||
+            (e->face1 == f2 && e->face2 == f1)) {
+            e->face1    = f1;
+            e->face2    = f2;
+            e->relation = relation;
+            e->occupied = 1;
+            return;
+        }
+    }
+}
+
+
+// --- Painter variants ---
+
+void painter_geoV2(Model3D* model, int face_count) {
+    FaceArrays3D* faces = &model->faces;
+    int i;
+
+    Fixed32* face_zmean = faces->z_mean;
+    if (!face_zmean) return;
+
+    Fixed32* face_zmin = faces->z_min;   /* may be NULL */
+    Fixed32* face_zmax = faces->z_max;
+
+    printf("Running painter_geoV2 with %d faces (cull_back_faces=%d)...\n",
+           face_count, cull_back_faces);
+
+    painter_newell_sancha_fast(model, face_count);
+
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i]) ++visible_count;
+        }
+    }
+
+    if (visible_count < 2) {
+        printf("Total swaps: 0\n");
+        return;
+    }
+
+    int swap_count = 0;
+    int swapped;
+
+    /* ------------------------------------------------------------------
+       Fixed-size hash cache.
+       Independent of face_count → predictable memory use and high
+       chance of successful allocation even for 6000-face models.
+       4096 entries is largely sufficient for the number of unique
+       pairs actually touched by the adjacent bubble.
+       ------------------------------------------------------------------ */
+    PairCache* cache = pair_cache_create(4096);
+    if (!cache) {
+        /* Last-chance smaller sizes */
+        cache = pair_cache_create(2048);
+        if (!cache)
+            cache = pair_cache_create(1024);
+    }
+    if (!cache) {
+        printf("painter_geoV2: warning - no pair cache, geometric pass disabled\n");
+        return;   /* better to keep the initial sort than run extremely slowly */
+    }
+
+    /* Inconclusive buffer */
+    if (inconclusive_pairs) {
+        free(inconclusive_pairs);
+        inconclusive_pairs = NULL;
+    }
+    inconclusive_pairs_capacity = face_count * 4;
+    inconclusive_pairs_count = 0;
+    if (inconclusive_pairs_capacity > 0) {
+        inconclusive_pairs = (InconclusivePair*)malloc(
+            inconclusive_pairs_capacity * sizeof(InconclusivePair));
+        if (!inconclusive_pairs)
+            inconclusive_pairs_capacity = 0;
+    }
+
+    int limit = visible_count - 1;
+    int new_limit;
+    const int MAX_PASSES = visible_count * 2;
+    int pass = 0;
+
+    do {
+        swapped = 0;
+        new_limit = 0;
+        ++pass;
+
+        for (i = 0; i < limit; ++i) {
+            int f1 = faces->sorted_face_indices[i];
+            int f2 = faces->sorted_face_indices[i + 1];
+
+            if (pair_cache_find(cache, f1, f2) != 0)
+                continue;
+
+            /* Geometric tests – source of truth */
+            int geo = geometric_face_relation(model, f1, f2);
+            if (geo == -1) {
+                pair_cache_insert(cache, f1, f2, 1);
+                continue;
+            }
+            if (geo == 1)
+                goto do_swap;
+
+            int geo2 = geometric_face_relation(model, f2, f1);
+            if (geo2 == -1)
+                goto do_swap;
+            if (geo2 == 1) {
+                pair_cache_insert(cache, f1, f2, 1);
+                continue;
+            }
+
+            /* Z test – only to skip the expensive ray-cast */
+            int z_disjoint = 0;
+            if (face_zmin && face_zmax) {
+                if (face_zmax[f1] <= face_zmin[f2] ||
+                    face_zmax[f2] <= face_zmin[f1])
+                    z_disjoint = 1;
+            } else {
+                Fixed32 dz = face_zmean[f1] - face_zmean[f2];
+                if (dz > FLOAT_TO_FIXED(1.0f) || dz < FLOAT_TO_FIXED(-1.0f))
+                    z_disjoint = 1;
+            }
+
+            if (!z_disjoint && projected_polygons_overlap(model, f1, f2)) {
+                int rc = ray_cast_hierarchical(model, f1, f2);
+                if (rc < 0)
+                    goto do_swap;
+                if (rc > 0) {
+                    pair_cache_insert(cache, f1, f2, 1);
+                    continue;
+                }
+            }
+
+            /* Inconclusive */
+            if (inconclusive_pairs &&
+                inconclusive_pairs_count < inconclusive_pairs_capacity) {
+                inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
+                inconclusive_pairs[inconclusive_pairs_count].face2 = f2;
+                inconclusive_pairs_count++;
+            }
+            pair_cache_insert(cache, f1, f2, 1);
+            continue;
+
+        do_swap:
+            {
+                int tmp = faces->sorted_face_indices[i];
+                faces->sorted_face_indices[i]     = faces->sorted_face_indices[i + 1];
+                faces->sorted_face_indices[i + 1] = tmp;
+                swapped = 1;
+                swap_count++;
+                pair_cache_insert(cache, f2, f1, 1);
+                new_limit = i;
+            }
+        }
+
+        limit = new_limit;
+
+    } while (swapped && limit > 0 && pass < MAX_PASSES);
+
+    if (pass >= MAX_PASSES) {
+        printf("painter_geoV2: safety limit reached (%d passes)\n", pass);
+    }
+
+    pair_cache_destroy(cache);
+    printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
+}
+
 
 /* painter_correct
  * ----------------
@@ -1406,12 +3411,6 @@ static int move_element_remove_and_insert_pos(int *arr, int n, int from, int ins
     return 1;
 }
 
-
-// ============================================================================
-//  2. ORDERING TESTS & OVERLAP
-//  Geometric relation tests, polygon overlap, ray casting
-// ============================================================================
-
 /* projected_polygons_overlap
  * --------------------------
  *
@@ -1450,7 +3449,15 @@ static int move_element_remove_and_insert_pos(int *arr, int n, int from, int ins
  * When a clipping result is valid in both directions, prefer (f1 clipped by f2) to preserve Python semantics.
  * Debug hooks print clipping and centroid details when enabled.
  */
-segment "projected_polygons_overlap";
+
+
+
+
+segment "ordering";
+// ============================================================================
+//  2. ORDERING TESTS & OVERLAP
+//  Geometric relation tests, polygon overlap, ray casting
+// ============================================================================
 
 /* Unit tests for segs_intersect: run with command-line flag --run-segs-test */
 static int use_fixed_clipping = 1; /* enable Fixed64 clipping by default (non-invasive) */
@@ -1862,7 +3869,6 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
     return 0;
 }
 
-
 /* Plane-based pair relation used by `painter_correct` fast path:
  * - Only evaluates geometric plane tests (equivalent to tests 4..7)
  * - Returns -1 if f1 is before f2, 1 if f1 is after f2, 0 if inconclusive
@@ -1998,7 +4004,6 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
     return 0;
 }
 
-segment "code03";
 
 /* Evaluate tests 1..7 individually for a pair (f1, f2).
  * out[0]..out[6] will be filled with:
@@ -2932,153 +4937,13 @@ static int compute_intersection_centroid_ordered_qd_fixed(Model3D* model, int su
     return 1;
 }
 
+
+
+segment "transform";
 // ============================================================================
 //  3. TRANSFORM & PROJECTION
 //  Observer-space transform, depth calculation, 2D projection
 // ============================================================================
-
-segment "code10";
-void processModelFast(Model3D* model, ObserverParams* params, const char* filename) {
-    int i;
-
-    Fixed32 cos_h, sin_h, cos_v, sin_v, cos_w, sin_w;
-    Fixed32 x, y, z, zo, xo, yo;
-    Fixed32 inv_zo, x2d_temp, y2d_temp;
-    
-    // Direct table access - ultra-fast! (no function calls)
-    cos_h = cos_deg_int(params->angle_h);
-    sin_h = sin_deg_int(params->angle_h);
-    cos_v = cos_deg_int(params->angle_v);
-    sin_v = sin_deg_int(params->angle_v);
-    cos_w = cos_deg_int(params->angle_w);
-    sin_w = sin_deg_int(params->angle_w);
-
-    // Pre-calculate all trigonometric products in Fixed32 - using 64-bit multiply
-    const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
-    const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
-    const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
-    const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
-
-    /* Precomputed rotation matrix - 9 coefficients */
-    Fixed32 M00, M01, M02;
-    Fixed32 M10, M11, M12;
-    Fixed32 M20, M21, M22;
-
-    // Use global projection scale, which is synced with auto-fit when applied
-    Fixed32 scale = s_global_proj_scale_fixed;
-    const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
-    const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
-    Fixed32 distance = params->distance;
-    // Apply auto-scale if any
-    //distance = FIXED_MUL_64(distance, INT_TO_FIXED(4));
-    
-    // 100% Fixed32 loop - ZERO conversions, maximum speed!
-    VertexArrays3D* vtx = &model->vertices;
-    Fixed32 *x_arr = vtx->x, *y_arr = vtx->y, *z_arr = vtx->z;
-    Fixed32 *xo_arr = vtx->xo, *yo_arr = vtx->yo, *zo_arr = vtx->zo;
-    int *x2d_arr = vtx->x2d, *y2d_arr = vtx->y2d;
-    int vcount = vtx->vertex_count;
-
-    long t_loop_start = GetTick();
-    
-    M20 = FIXED_NEG(cos_h_cos_v);
-    M21 = FIXED_NEG(sin_h_cos_v);
-    M22 = FIXED_NEG(sin_v);
-
-    if (params->angle_w == 0) {
-        M00 = FIXED_NEG(sin_h);
-        M01 = cos_h;
-        M02 = 0;
-        M10 = FIXED_NEG(cos_h_sin_v);
-        M11 = FIXED_NEG(sin_h_sin_v);
-        M12 = cos_v;
-    } else {
-        M00 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(cos_w), sin_h),
-                        FIXED_MUL_64(sin_w, cos_h_sin_v));
-        M01 = FIXED_SUB(FIXED_MUL_64(cos_w, cos_h),
-                        FIXED_MUL_64(sin_w, FIXED_NEG(sin_h_sin_v)));
-        M02 = FIXED_MUL_64(FIXED_NEG(sin_w), cos_v);
-        M10 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(sin_w), sin_h),
-                        FIXED_MUL_64(FIXED_NEG(cos_w), cos_h_sin_v));
-        M11 = FIXED_ADD(FIXED_MUL_64(sin_w, cos_h),
-                        FIXED_MUL_64(FIXED_NEG(cos_w), sin_h_sin_v));
-        M12 = FIXED_MUL_64(cos_w, cos_v);
-    }
-
-
-    for (i = 0; i < vcount; i++) {
-        x = x_arr[i];
-        y = y_arr[i];
-        z = z_arr[i];
-
-        zo = FIXED_ADD(
-                FIXED_ADD(
-                    FIXED_ADD(FIXED_MUL_64(M20, x),
-                            FIXED_MUL_64(M21, y)),
-                    FIXED_MUL_64(M22, z)),
-                distance);
-
-        if (zo > 0) {
-            xo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M00, x),
-                                    FIXED_MUL_64(M01, y)),
-                        FIXED_MUL_64(M02, z));
-            yo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M10, x),
-                                    FIXED_MUL_64(M11, y)),
-                        FIXED_MUL_64(M12, z));
-            zo_arr[i] = zo;
-            xo_arr[i] = xo;
-            yo_arr[i] = yo;
-            inv_zo = FIXED_DIV_64(scale, zo);
-            x2d_arr[i] = FIXED_ROUND_TO_INT(
-                            FIXED_ADD(FIXED_MUL_64(xo, inv_zo), centre_x_f));
-            y2d_arr[i] = FIXED_ROUND_TO_INT(
-                            FIXED_SUB(centre_y_f, FIXED_MUL_64(yo, inv_zo)));
-        } else {
-            zo_arr[i] = zo;
-            xo_arr[i] = 0;
-            yo_arr[i] = 0;
-            x2d_arr[i] = -1;
-            y2d_arr[i] = -1;
-        }
-    }
-
-    long t_loop_end = GetTick();
-
-    // Face sorting after transformation
-    long t_start, t_end;
-    t_start = GetTick();
-    calculateFaceDepths(model, NULL, model->faces.face_count);
-    if (shaded_by_orientation) {
-        computeOrientationShading(model);
-    }
-    t_end = GetTick();
-
-
-    if (framePolyOnly) goto skip_calc; // Skip face calculations for framed polygons only display
-
-    // CRITICAL: Reset sorted_face_indices before each sort to prevent corruption
-    // for (i = 0; i < model->faces.face_count; i++) {
-    //     model->faces.sorted_face_indices[i] = i;
-    // }
-    // painter_newell_sancha 
-    t_start = GetTick();
-    if (painter_mode == PAINTER_MODE_FAST) {
-        painter_newell_sancha_fast(model, model->faces.face_count);
-    } else if (painter_mode == PAINTER_MODE_FIXED) {
-        painter_newell_sancha(model, model->faces.face_count);
-    } else if (painter_mode == PAINTER_MODE_CORRECT) {
-        /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
-        painter_correct(model, model->faces.face_count, 0);
-    } else if (painter_mode == PAINTER_MODE_GEO) {
-        painter_geoV2(model, model->faces.face_count);
-    } else if (painter_mode == PAINTER_MODE_CORRECTV2) {
-        /* painter_correctV2: experimental face splitting version */
-        painter_correctV2(model, model->faces.face_count, 0);
-    } 
-    t_end = GetTick();
-
-    skip_calc:;
-}
 
 /**
  * CALCULATING MINIMUM FACE DEPTHS AND VISIBILITY FLAGS
@@ -3130,7 +4995,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
  *   - The function optionally logs culling counts when not in PERFORMANCE_MODE.
  *   - The function is intentionally designed to be O(n) over faces and linear in face vertex counts.
  */
-segment "code14";
+
 void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
     int i, j;
     int culled_count = 0; // diagnostic: number of faces culled by back-face test (observer-space)
@@ -3274,7 +5139,7 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
     }
 }
 
-segment "code19";
+
 // Simple helper: compute 2D projected coordinates from observer-space coords and a projection scale
 // Minimal version taking only Model3D* and angle_w (unused here)
 // - model: model containing vertices and x2d/y2d output arrays
@@ -3395,12 +5260,115 @@ void normalizeAutoFitDistanceTo150(Model3D* model) {
         FIXED_TO_FLOAT(factor));
 }
 
+/**
+ * OBSERVER PARAMETER INPUT
+ * ========================
+ * 
+ * This function presents a text interface to allow the
+ * user to specify 3D visualization parameters.
+ * 
+ * REQUESTED PARAMETERS:
+ * - Horizontal angle: rotation around Y-axis (left/right view)
+ * - Vertical angle: rotation around X-axis (up/down view)
+ * - Distance: observer distance (zoom)
+ * - Screen rotation angle: final rotation in 2D plane
+ * 
+ * ERROR HANDLING:
+ * - Default values if input failure
+ * - Automatic string->Fixed32 conversion with atof() then FLOAT_TO_FIXED
+ */
+void getObserverParams(ObserverParams* params, Model3D* model) {
+    char input[50];  // Buffer for user input
+    
+    // Display section header
+    printf("\nObserver parameters:\n");
+    printf("============================\n");
+    printf("(Press ENTER to use default values - apply suggested auto-fit if available)\n");
+    
+    // Input horizontal angle (rotation around Y)
+    printf("Horizontal angle (degrees, default %d): ", params->angle_h);
+    if (fgets(input, sizeof(input), stdin) != NULL) {
+        // Remove newline
+        input[strcspn(input, "\n")] = 0;
+        if (strlen(input) != 0) {
+            params->angle_h = atoi(input);  // Parse integer degrees from input
+        }
+    }
+    
+    // Input vertical angle (rotation around X)  
+    printf("Vertical angle (degrees, default %d): ", params->angle_v);
+    if (fgets(input, sizeof(input), stdin) != NULL) {
+        // Remove newline
+        input[strcspn(input, "\n")] = 0;
+        if (strlen(input) != 0) {
+            params->angle_v = atoi(input);  // Parse integer degrees from input
+        }
+    }
+    
 
+    // Input screen rotation angle (final 2D rotation)
+    printf("Screen rotation angle (degrees, default %d): ", params->angle_w);
+    if (fgets(input, sizeof(input), stdin) != NULL) {
+        // Remove newline
+        input[strcspn(input, "\n")] = 0;
+        if (strlen(input) != 0) {
+            params->angle_w = atoi(input);  // Parse integer degrees from input
+        }
+    }
+
+    // Input observation distance (zoom/perspective).
+    // Press ENTER = auto-scale + center using sphere-based fit (default target),
+    // or enter a numeric value to use that distance directly (no scaling).
+    printf("Distance (ENTER = auto-scale, or enter a value): ");
+
+    if (fgets(input, sizeof(input), stdin) != NULL) {
+        // Remove newline
+        input[strcspn(input, "\n")] = 0;
+        if (strlen(input) == 0) {
+            // User pressed ENTER: if we have auto-fit suggestions from load, apply them; otherwise use default distance
+            if (model != NULL && model->auto_fit_ready) {
+                params->distance = model->auto_suggested_distance;
+                // Apply suggested projection scale to model so subsequent processing uses it
+                model->auto_proj_scale = model->auto_suggested_proj_scale;
+                model->auto_fit_applied = 1;
+                printf("Auto-fit applied (distance=%.4f proj_scale=%.2f). Use +/- to adjust.\n", FIXED_TO_FLOAT(model->auto_suggested_distance), FIXED_TO_FLOAT(model->auto_suggested_proj_scale));
+            } else if (model != NULL) {
+                // No precomputed suggestion: fallback to sensible default
+                params->distance = FLOAT_TO_FIXED(30.0);
+            } else {
+                params->distance = FLOAT_TO_FIXED(30.0);
+            }
+        } else {
+            // User provided a distance value -> use it directly (no auto-scale)
+            params->distance = FLOAT_TO_FIXED(atof(input)); // String->Fixed32 conversion
+        }
+    } else {
+        // fgets failed; default behavior: if we have a model, apply precomputed auto-fit suggestions, else fallback distance
+        if (model != NULL && model->auto_fit_ready) {
+            params->distance = model->auto_suggested_distance;
+            model->auto_proj_scale = model->auto_suggested_proj_scale;
+            model->auto_fit_applied = 1;
+            printf("Auto-fit applied (distance=%.4f proj_scale=%.2f). Use +/- to adjust.\n", FIXED_TO_FLOAT(model->auto_suggested_distance), FIXED_TO_FLOAT(model->auto_suggested_proj_scale));
+        } else if (model != NULL) {
+            params->distance = FLOAT_TO_FIXED(30.0);
+        } else {
+            params->distance = FLOAT_TO_FIXED(30.0);        // Default distance: balanced view (Fixed Point)
+        }
+    }
+
+    // Store the current observer distance for use in geometric epsilon scaling 
+    // and other distance-dependent calculations.
+    current_observer_distance = params->distance;
+}
+
+
+
+
+segment "rendering";
 // ============================================================================
 //  4. RENDERING (QuickDraw + Scanline Z-Buffer)
 // ============================================================================
 
-segment "code17";
 // Function to draw polygons with QuickDraw
 void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_count_total) {
     int i, j;
@@ -3622,7 +5590,7 @@ void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int 
 // Draw a single face (by face index) using the same QuickDraw path as drawPolygons
 // - respects face validity and display_flag
 // - uses globalPolyHandle and poly_handle_locked like drawPolygons
-segment "code16";
+
 void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
     if (!model) return;
     FaceArrays3D* faces = &model->faces;
@@ -3912,7 +5880,7 @@ void generate_random_colors(int face_count) {
     }
 }
 
-segment "code24";
+
 /* display_model_face_ids
  * ----------------------
  * Draw the model in wireframe and overlay each face id centered on its polygon.
@@ -3988,7 +5956,6 @@ void display_model_face_ids(Model3D* model, ObserverParams* params, const char* 
     for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
     free(backup_flags);
 }
-
 
 // --- Scanline Z-Buffer ---
 
@@ -4109,7 +6076,7 @@ done:
     }
 }
 
-void renderModelScanlineZBuffer(Model3D* model) {
+void renderModelScanlineZBuffer_old (Model3D* model) {
     VertexArrays3D* vtx = &model->vertices;
     FaceArrays3D* faces = &model->faces;
     int vcount = vtx->vertex_count;
@@ -4265,7 +6232,416 @@ void renderModelScanlineZBuffer(Model3D* model) {
     }
 }
 
+void renderModelScanlineZBuffer_fast(Model3D* model) {
+    VertexArrays3D* vtx = &model->vertices;
+    FaceArrays3D* faces = &model->faces;
+    int vcount = vtx->vertex_count;
+    int fcount = faces->face_count;
+    int y, f, i;
 
+    // --- 1/z per vertex (inchangé) ---
+    static float* inv_z = NULL;
+    static int inv_z_capacity = 0;
+    if (inv_z_capacity < vcount) {
+        if (inv_z) free(inv_z);
+        inv_z = (float*)malloc(vcount * sizeof(float));
+        inv_z_capacity = vcount;
+    }
+    for (i = 0; i < vcount; i++) {
+        float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
+        inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
+    }
+
+    static float zbuffer_line[SCREEN_WIDTH];
+    ScanIntersection hits[MAX_SPAN_INTERSECTIONS];
+
+    SetPenMode(0);
+    applyPalette(palette);
+
+    // Bounds de clipping en "model space" (constantes pour toute la frame)
+    int clip_x_min = -pan_dx;
+    int clip_x_max = SCREEN_WIDTH - 1 - pan_dx;
+
+    for (y = 0; y < SCREEN_HEIGHT; y++) {
+        int screenY = y + pan_dy;
+        if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
+
+        // Reset Z-buffer (parcours pointeur, plus facile à optimiser pour le compilateur)
+        float* zb_clear = zbuffer_line;
+        float* zb_clear_end = zbuffer_line + SCREEN_WIDTH;
+        while (zb_clear < zb_clear_end) *zb_clear++ = -1.0f;
+
+        for (f = 0; f < fcount; f++) {
+            int n, offt, k, hit_count;
+
+            if (!faces->display_flag[f]) continue;
+            n = faces->vertex_count[f];
+            if (n < 3) continue;
+            if (y < faces->miny[f] || y > faces->maxy[f]) continue;
+
+            // OPTIM 1 : couleurs une seule fois par face
+            int fillColor = getFaceFillColor(f);
+            int frameColor = getFaceFrameColor(f, fillColor);
+
+            offt = faces->vertex_indices_ptr[f];
+            hit_count = 0;
+
+            // --- Intersections edge/scanline ---
+            for (k = 0; k < n; k++) {
+                int k2 = (k + 1 < n) ? (k + 1) : 0;
+                int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
+                int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
+
+                int y1 = vtx->y2d[vid1];
+                int y2 = vtx->y2d[vid2];
+                int dy = y2 - y1;
+
+                if (dy == 0) continue;                    // edge horizontal
+                if (dy > 0) {
+                    if (y < y1 || y >= y2) continue;      // half-open [y1, y2)
+                } else {
+                    if (y < y2 || y >= y1) continue;      // half-open [y2, y1)
+                }
+
+                int x1 = vtx->x2d[vid1];
+                int x2 = vtx->x2d[vid2];
+
+                float t = (float)(y - y1) / (float)dy;
+                int xi = x1 + (int)((x2 - x1) * t + 0.5f);
+                float izf = inv_z[vid1] + (inv_z[vid2] - inv_z[vid1]) * t;
+
+                if (hit_count < MAX_SPAN_INTERSECTIONS) {
+                    hits[hit_count].x = xi;
+                    hits[hit_count].inv_z = izf;
+                    hit_count++;
+                }
+            }
+
+            if (hit_count < 2) continue;
+
+            // OPTIM 2 : tri spécialisé (cas triangle = 2 hits, 90% du temps)
+            if (hit_count == 2) {
+                if (hits[0].x > hits[1].x) {
+                    ScanIntersection tmp = hits[0];
+                    hits[0] = hits[1];
+                    hits[1] = tmp;
+                }
+            } else {
+                int a, b;
+                for (a = 1; a < hit_count; a++) {
+                    ScanIntersection key = hits[a];
+                    b = a - 1;
+                    while (b >= 0 && hits[b].x > key.x) {
+                        hits[b + 1] = hits[b];
+                        b--;
+                    }
+                    hits[b + 1] = key;
+                }
+            }
+
+            // --- Remplissage des spans ---
+            int p;
+            for (p = 0; p + 1 < hit_count; p += 2) {
+                int xa = hits[p].x;
+                int xb = hits[p + 1].x;
+                float iza = hits[p].inv_z;
+                float izb = hits[p + 1].inv_z;
+
+                if (xa > xb) continue;
+
+                // OPTIM 3 : clipping X avant la boucle, pas dedans
+                if (xb < clip_x_min || xa > clip_x_max) continue;
+
+                int x0 = xa;
+                int x1 = xb;
+                float iz0 = iza;
+
+                // --- FIX : cas dégénéré (span d'1 pixel) traité à part,
+                // AVANT toute division, pour éviter une division par
+                // zéro sur (xb - xa) == 0. Le clipping peut aussi
+                // réduire un span normal à 1 pixel après ajustement
+                // (voir plus bas), donc ce cas est revérifié après clip. ---
+                if (x0 == x1) {
+                    int sx0 = x0 + pan_dx;
+                    if (iz0 > zbuffer_line[x0]) {
+                        zbuffer_line[x0] = iz0;
+                        drawPixel(sx0, screenY, frameColor);
+                    }
+                    continue;
+                }
+
+                // dIz calculé seulement si xb != xa (span >= 2 pixels avant clip)
+                float dIz = (izb - iza) / (float)(xb - xa);
+
+                if (x0 < clip_x_min) {
+                    iz0 += dIz * (clip_x_min - x0);  // pas de division, juste un fmul
+                    x0 = clip_x_min;
+                }
+                if (x1 > clip_x_max) x1 = clip_x_max;
+                if (x0 > x1) continue;
+
+                int sx0 = x0 + pan_dx;
+                int sx1 = x1 + pan_dx;
+
+                // OPTIM 4 : pas de branche contour/fill dans la boucle interne
+                if (x0 == x1) {
+                    // Span réduit à 1 pixel par le clipping (pas par les
+                    // coordonnées d'origine) - dIz est valide ici puisqu'il
+                    // a été calculé avant clip, donc pas de division par 0.
+                    if (iz0 > zbuffer_line[x0]) {
+                        zbuffer_line[x0] = iz0;
+                        drawPixel(sx0, screenY, frameColor);
+                    }
+                } else {
+                    // Premier pixel = contour
+                    if (iz0 > zbuffer_line[x0]) {
+                        zbuffer_line[x0] = iz0;
+                        drawPixel(sx0, screenY, frameColor);
+                    }
+
+                    // Milieu = fill (boucle la plus chaude : 0 branche, accès pointeur)
+                    float iz = iz0 + dIz;
+                    float* zb = &zbuffer_line[x0 + 1];
+                    int x;
+                    for (x = x0 + 1; x < x1; x++) {
+                        if (iz > *zb) {
+                            *zb = iz;
+                            drawPixel(x + pan_dx, screenY, fillColor);
+                        }
+                        iz += dIz;
+                        zb++;
+                    }
+
+                    // Dernier pixel = contour (iz accumulé = profondeur exacte au clip)
+                    if (iz > *zb) {
+                        *zb = iz;
+                        drawPixel(sx1, screenY, frameColor);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void renderModelScanlineZBuffer_biased(Model3D* model) {
+    VertexArrays3D* vtx = &model->vertices;
+    FaceArrays3D* faces = &model->faces;
+    int vcount = vtx->vertex_count;
+    int fcount = faces->face_count;
+    int y, f, i;
+    static const float Z_FIGHT_BIAS = 0.001f;  // or 0.0001f;
+
+    // --- 1/z per vertex (inchangé) ---
+    static float* inv_z = NULL;
+    static int inv_z_capacity = 0;
+    if (inv_z_capacity < vcount) {
+        if (inv_z) free(inv_z);
+        inv_z = (float*)malloc(vcount * sizeof(float));
+        inv_z_capacity = vcount;
+    }
+    for (i = 0; i < vcount; i++) {
+        float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
+        inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
+    }
+
+    static float zbuffer_line[SCREEN_WIDTH];
+    ScanIntersection hits[MAX_SPAN_INTERSECTIONS];
+
+    SetPenMode(0);
+    applyPalette(palette);
+
+    // Bounds de clipping en "model space" (constantes pour toute la frame)
+    int clip_x_min = -pan_dx;
+    int clip_x_max = SCREEN_WIDTH - 1 - pan_dx;
+
+    for (y = 0; y < SCREEN_HEIGHT; y++) {
+        int screenY = y + pan_dy;
+        if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
+
+        // Reset Z-buffer (parcours pointeur, plus facile à optimiser pour le compilateur)
+        float* zb_clear = zbuffer_line;
+        float* zb_clear_end = zbuffer_line + SCREEN_WIDTH;
+        while (zb_clear < zb_clear_end) *zb_clear++ = -1.0f;
+
+        for (f = 0; f < fcount; f++) {
+            int n, offt, k, hit_count;
+
+            if (!faces->display_flag[f]) continue;
+            n = faces->vertex_count[f];
+            if (n < 3) continue;
+            if (y < faces->miny[f] || y > faces->maxy[f]) continue;
+
+            // OPTIM 1 : couleurs une seule fois par face
+            int fillColor = getFaceFillColor(f);
+            int frameColor = getFaceFrameColor(f, fillColor);
+
+            // Biais anti Z-fighting - cette fonction n'est appelee que quand
+            // cull_back_faces est desactive (voir le dispatcher
+            // renderModelScanlineZBuffer), donc pas besoin de re-tester
+            // cull_back_faces ici : toujours pertinent d'appliquer le biais
+            // sur les faces front.
+            float depthBias = (faces->plane_d[f] > 0) ? Z_FIGHT_BIAS : 0.0f;
+
+            offt = faces->vertex_indices_ptr[f];
+            hit_count = 0;
+
+            // --- Intersections edge/scanline ---
+            for (k = 0; k < n; k++) {
+                int k2 = (k + 1 < n) ? (k + 1) : 0;
+                int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
+                int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
+
+                int y1 = vtx->y2d[vid1];
+                int y2 = vtx->y2d[vid2];
+                int dy = y2 - y1;
+
+                if (dy == 0) continue;                    // edge horizontal
+                if (dy > 0) {
+                    if (y < y1 || y >= y2) continue;      // half-open [y1, y2)
+                } else {
+                    if (y < y2 || y >= y1) continue;      // half-open [y2, y1)
+                }
+
+                int x1 = vtx->x2d[vid1];
+                int x2 = vtx->x2d[vid2];
+
+                float t = (float)(y - y1) / (float)dy;
+                int xi = x1 + (int)((x2 - x1) * t + 0.5f);
+                float izf = inv_z[vid1] + (inv_z[vid2] - inv_z[vid1]) * t;
+                izf += depthBias; // biais applique une fois par intersection
+
+                if (hit_count < MAX_SPAN_INTERSECTIONS) {
+                    hits[hit_count].x = xi;
+                    hits[hit_count].inv_z = izf;
+                    hit_count++;
+                }
+            }
+
+            if (hit_count < 2) continue;
+
+            // OPTIM 2 : tri spécialisé (cas triangle = 2 hits, 90% du temps)
+            if (hit_count == 2) {
+                if (hits[0].x > hits[1].x) {
+                    ScanIntersection tmp = hits[0];
+                    hits[0] = hits[1];
+                    hits[1] = tmp;
+                }
+            } else {
+                int a, b;
+                for (a = 1; a < hit_count; a++) {
+                    ScanIntersection key = hits[a];
+                    b = a - 1;
+                    while (b >= 0 && hits[b].x > key.x) {
+                        hits[b + 1] = hits[b];
+                        b--;
+                    }
+                    hits[b + 1] = key;
+                }
+            }
+
+            // --- Remplissage des spans ---
+            int p;
+            for (p = 0; p + 1 < hit_count; p += 2) {
+                int xa = hits[p].x;
+                int xb = hits[p + 1].x;
+                float iza = hits[p].inv_z;
+                float izb = hits[p + 1].inv_z;
+
+                if (xa > xb) continue;
+
+                // OPTIM 3 : clipping X avant la boucle, pas dedans
+                if (xb < clip_x_min || xa > clip_x_max) continue;
+
+                int x0 = xa;
+                int x1 = xb;
+                float iz0 = iza;
+
+                // --- FIX : cas degenere (span d'1 pixel) traite a part,
+                // AVANT toute division, pour eviter une division par zero
+                // sur (xb - xa) == 0. ---
+                if (x0 == x1) {
+                    int sx0 = x0 + pan_dx;
+                    if (iz0 > zbuffer_line[x0]) {
+                        zbuffer_line[x0] = iz0;
+                        drawPixel(sx0, screenY, frameColor);
+                    }
+                    continue;
+                }
+
+                // dIz calcule seulement si xb != xa (span >= 2 pixels avant clip)
+                float dIz = (izb - iza) / (float)(xb - xa);
+
+                if (x0 < clip_x_min) {
+                    iz0 += dIz * (clip_x_min - x0);  // pas de division, juste un fmul
+                    x0 = clip_x_min;
+                }
+                if (x1 > clip_x_max) x1 = clip_x_max;
+                if (x0 > x1) continue;
+
+                int sx0 = x0 + pan_dx;
+                int sx1 = x1 + pan_dx;
+
+                // OPTIM 4 : pas de branche contour/fill dans la boucle interne
+                if (x0 == x1) {
+                    // Span reduit a 1 pixel par le clipping (pas par les
+                    // coordonnees d'origine) - dIz est valide ici puisqu'il
+                    // a ete calcule avant clip, donc pas de division par 0.
+                    if (iz0 > zbuffer_line[x0]) {
+                        zbuffer_line[x0] = iz0;
+                        drawPixel(sx0, screenY, frameColor);
+                    }
+                } else {
+                    // Premier pixel = contour
+                    if (iz0 > zbuffer_line[x0]) {
+                        zbuffer_line[x0] = iz0;
+                        drawPixel(sx0, screenY, frameColor);
+                    }
+
+                    // Milieu = fill (boucle la plus chaude : 0 branche, acces pointeur)
+                    float iz = iz0 + dIz;
+                    float* zb = &zbuffer_line[x0 + 1];
+                    int x;
+                    for (x = x0 + 1; x < x1; x++) {
+                        if (iz > *zb) {
+                            *zb = iz;
+                            drawPixel(x + pan_dx, screenY, fillColor);
+                        }
+                        iz += dIz;
+                        zb++;
+                    }
+
+                    // Dernier pixel = contour (iz accumule = profondeur exacte au clip)
+                    if (iz > *zb) {
+                        *zb = iz;
+                        drawPixel(sx1, screenY, frameColor);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- Dispatcher --------------------------------------------------------
+// Choisit la version adaptee selon cull_back_faces :
+//  - actif  -> pas de faces back rendues, donc pas de collision front/back
+//              coplanaire possible -> version rapide, sans aucun surcout
+//              lie au biais anti Z-fighting.
+//  - inactif -> les deux faces d'une paire coplanaire peuvent etre visibles
+//              -> version avec biais, seule capable de forcer le front a
+//              gagner le Z-test de facon fiable.
+void renderModelScanlineZBuffer(Model3D* model) {
+    if (cull_back_faces) {
+        renderModelScanlineZBuffer_fast(model);
+    } else {
+        renderModelScanlineZBuffer_biased(model);
+    }
+}
+
+
+
+
+
+segment "color";
 // ============================================================================
 //  5. PALETTE & COLOR MANAGEMENT
 // ============================================================================
@@ -4325,7 +6701,6 @@ void initPalettes(void)
     }
 }
 
-segment "code20";
 void DoColor() {
         Rect r;
         unsigned char pstr[4];  // Pascal string: [length][characters...]]
@@ -4355,9 +6730,48 @@ void DoColor() {
         }
 }
 
+void screen2Black() {
+    asm 
+    {
+        lda #0x0000
+        ldx #0x7CFE
+    loop:
+        sta 0xE12000,x
+        dex
+        dex
+        bne loop
+    }
+}
 
+static void computeOrientationShading(Model3D* model) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    int face_count = faces->face_count;
+
+    for (int i = 0; i < face_count; ++i) {
+        float a_f = (float)FIXED64_TO_FLOAT(faces->plane_a[i]);
+        float b_f = (float)FIXED64_TO_FLOAT(faces->plane_b[i]);
+        float c_f = (float)FIXED64_TO_FLOAT(faces->plane_c[i]);
+        float mag = sqrtf(a_f * a_f + b_f * b_f + c_f * c_f);
+        if (mag <= 0.0f) {
+            face_shade_color[i] = COL_FILL_DEFAULT;
+        } else {
+            float cosz = fabsf(c_f / mag);
+            int shade = (int)(cosz * 15.0f + 0.5f);
+            if (shade < 0) shade = 0;
+            else if (shade > 15) shade = 15;
+            face_shade_color[i] = shade;
+        }
+    }
+}
+
+
+
+
+
+segment "inspection";
 // ============================================================================
-//  6. DEBUG & INSPECTION TOOLS
+//  6. INSPECTION TOOLS & DEBUGGING
 // ============================================================================
 
 void debug_two_faces(Model3D* model, int f1, int f2) {
@@ -4370,7 +6784,7 @@ void debug_two_faces(Model3D* model, int f1, int f2) {
     DoText();
 }
 
-segment "code05";
+
 /* inspect_faces_before
  * --------------------
  * Purpose:
@@ -4870,7 +7284,7 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     cull_back_faces = old_cull;
 }
 
-segment "code04";
+
 /* showFace
  * --------
  * Purpose:
@@ -5338,7 +7752,6 @@ static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of
  *  - Uses depth (z_min/z_max), axis-aligned bbox separation (X/Y) and plane-based
  *    vertex-side tests (observer-side checks) mirroring painter logic.
  */
-segment "code01";
 static int pair_order_relation(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
@@ -5738,7 +8151,7 @@ int check_sort_repair_fast(Model3D* model, int face_count) {
  * - Stores textual results in memory and only prints them when user presses SPACE.
  * - Keyboard: ESC=return, Left/Right/Up/Down navigation (custom wrap rules), SPACE=show text.
  */
-segment "inspect_face_pair_ui";
+
 /* Helper: geometric painter-based order wrapper
  * ------------------------------------------------
  * Returns: -1 if f1 is before f2, 1 if f1 is after f2, 0 if undetermined
@@ -5755,6 +8168,7 @@ static int geo_face_order(Model3D* model, int f1, int f2) {
     return r;
 }
 
+segment "raytrace";
 /* Diagnostic result container for face-pair comparison */
 typedef struct {
     int z_verdict;           /* 0=undetermined, 1=f1 in front, 2=f2 in front */
@@ -6191,7 +8605,6 @@ static void inspect_face_pair_ui(Model3D* model) {
 /* Core diagnostic: performs the ordered suite of tests (text-mode safe unless use_qd=1)
  * Tests executed in the order requested by the UI design and records textual lines.
  */
-segment "compare_faces_diagnostic";
 /* Helper: dump diagnostic results into a text file (appends).
  * The filename uses the convention f<id1>VSf<id2>.txt so each pair gets
  * its own file.  A header line and all saved result_text entries are
@@ -7003,2203 +9416,10 @@ static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const
     return key;
 }
 
-// ============================================================================
-//  7. 3D MODEL MANAGEMENT, UTILITIES & SYSTEM HELPERS
-// ============================================================================
-
-/* show_help_pager
- * ----------------
- * Display the interactive help menu in pages limited to 20 lines each.
- * The header is repeated at the top of every page. The user can press
- * SPACE to continue to the next page or 'Q'/'q' to quit the help early.
- */
-static void show_help_pager(void) {
-    const char* header[] = {
-        "===================================",
-        "    HELP - Keyboard Controller",
-        "===================================",
-        "" /* blank line */
-    };
-    const int header_count = sizeof(header)/sizeof(header[0]);
-
-    const char* lines[] = {
-        "Space: Display model info",
-        "A/Z: Decrease/Increase distance",
-        "+/-: Adjust projection scale (+/-10%)",
-        "K: Edit angles/distance (ENTER may auto-fit)",
-        "Arrow Left/Right: Change horizontal angle",
-        "Arrow Up/Down: Change vertical angle",
-        "W/X: Change screen rotation angle",
-        "C: Toggle color palette display",
-        "G: Cycle palettes",
-        "!: Toggle orientation shading",
-        "J: Toggle jittered rendering",
-        ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
-        ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
-        "1: Painter = FAST (simple sort only)",
-        "2: Painter = NORMAL (Fixed32/64)",
-        "3: Painter = GEO (geometry-only). Can be slow for large models",
-        "4: Painter = CORRECT (painter_correct)",
-        "5: Painter = CORRECTV2",
-        "O: Render scanline Z-Buffer (alternative to painter algorithm)",
-        "6: Both colors RANDOM mode",
-        "7: Choose fill color",
-        "8: Choose frame color",
-        "9: Reset colors, palette 0, and shading OFF",
-        "P: Toggle frame-only polygons",
-        "B: Toggle back-face culling",
-        "I: Toggle display of inconclusive pairs",
-        "E/e: Pan left", 
-        "R/r: Pan right",
-        "T/t: Pan up",
-        "Y/y: Pan down",
-        "0: Reset pan",
-        "D: Inspect faces BEFORE target",
-        "S: Inspect faces AFTER target",
-        "V: Show single face (navigate with arrows, show normals, space for details and other actions including hide/restore a face or all faces)",
-        "Q: Interactive face-pair inspector (space for details, then R/E/G for more actions)",
-        "M: Debug pair_plane_before",
-        "L: Label faces with IDs",
-        "F: Dump face data (3D, 2D, sort order) to file",
-        "N: Load new model",
-        "*: save SHGR screen as a PIC ($C1) not compressed file",
-        "H: Display this help message",
-        "ESC: Quit program"
-    };
-    int n = sizeof(lines)/sizeof(lines[0]);
-
-    const int max_lines = 20; // page height limit
-    int content_per_page = max_lines - header_count;
-    if (content_per_page <= 0) content_per_page = 1;
-
-    int pos = 0;
-    while (pos < n) {
-        // Print header
-        for (int h = 0; h < header_count; ++h) printf("%s\n", header[h]);
-        // Print a page of content
-        int end = pos + content_per_page;
-        for (int i = pos; i < end && i < n; ++i) printf("%s\n", lines[i]);
-
-        // Prompt for next action on every page.
-        printf("\nPress ESC to quit, any other key to continue...\n");
-        char key = getkeypress(); 
-
-        if (key == 27) return; // ESC quits
-
-        // Any other key advances page. If on final page, wrap to first page.
-        if (end >= n) {
-            pos = 0;
-        } else {
-            pos = end;
-        }
-
-        // clear a separating line between pages
-        DoText();
-        printf("\n");
-    }
-}
-
-segment "code21";
-void DoText() {
-        shroff();
-        putchar((char) 12); // Clear screen    
-}
-void setProDOSFileType(const char* filename, int fileType, long auxType) {
-    FileInfoRecGS pb;
-    GSString255 gsName;
-
-    gsName.length = strlen(filename);
-    strncpy((char*)gsName.text, filename, gsName.length);
-
-    pb.pCount = 5;              // verify against your GSOS.h - number of params for this call
-    pb.pathname = &gsName;
-    pb.access = 0xC3;           // standard full-access default, unchanged
-    pb.fileType = fileType;     // e.g. 0xC1
-    pb.auxType = auxType;       // e.g. 0x0000
-    pb.storageType = 0;         // 0 = leave unchanged (per GS/OS SetFileInfo semantics)
-    pb.optionList = 0;
-
-    SetFileInfoGS(&pb);
-}
-
-#define SHR_BASE        0xE12000UL
-#define SHR_SIZE        32768UL
-void saveSHRAsRawPic(const char *filename)
-{
-    FILE *out;
-    unsigned char *shr;
-    unsigned long i;
-
-    /*
-     * Adresse réelle de la mémoire SHR :
-     *
-     * $E1:2000 = $E12000
-     *
-     * Le cast en pointeur 32 bits permet à ORCA/C
-     * d'utiliser l'adressage long.
-     */
-    shr = (volatile unsigned char *)SHR_BASE;
-
-    out = fopen(filename, "wb");
-
-    if (out == NULL) {
-        printf("Error: unable to open %s for writing\n", filename);
-        return;
-    }
-
-    /*
-     * Copie brute des 32 Ko SHR.
-     *
-     * $E12000 -> $E19FFF
-     */
-    for (i = 0; i < SHR_SIZE; i++) {
-        fputc(shr[i], out);
-    }
-
-    fclose(out);
-
-    /*
-     * PIC, non compressé.
-     */
-    setProDOSFileType(filename, 0xC1, 0x0000);
-
-    printf("Saved %s\n", filename);
-}
-
-// --- Generic screenshot entry point, callable after ANY renderer ---
-void saveNextScreenshot(void) {
-    char fname[16];
-    int idx;
-    FILE* test;
-
-    for (idx = 0; idx < 1000; idx++) {
-        sprintf(fname, "screen%03d.PIC", idx);
-        test = fopen(fname, "rb");
-        if (test == NULL) {
-            break; // this index is free
-        }
-        fclose(test);
-    }
-
-    if (idx >= 1000) {
-        printf("Error: no available screen index (000-999 all used)\n");
-        return;
-    }
-
-    saveSHRAsRawPic(fname);
-}
-
-
-/*
- * CREATING A NEW 3D MODEL
- * ========================
- * 
- * This function dynamically allocates all structures necessary
- * for a 3D model. Dynamic allocation is crucial on Apple IIGS
- * because the stack is limited and cannot contain large arrays.
- * 
- * ALLOCATION STRATEGY:
- * 1. Main Model3D structure allocation
- * 2. Vertex array allocation (MAX_VERTICES elements)
- * 3. Face array allocation (MAX_FACES elements)
- * 4. On failure: cleanup of previous allocations
- * 
- * ERROR HANDLING:
- * - Check each allocation
- * - Automatic cascade cleanup on partial failure
- * - Return NULL if unable to allocate
- */
-Model3D* createModel3D(void) {
-    // Step 1: Main structure allocation
-    Model3D* model = (Model3D*)malloc(sizeof(Model3D));
-    if (model == NULL) {
-        return NULL;
-    }
-    int n = MAX_VERTICES;
-    model->vertices.vertex_count = n;
-
-    // Initialize auto-scale metadata
-    model->auto_scale = FIXED_ONE;
-    model->auto_center_x = 0;
-    model->auto_center_y = 0;
-    model->auto_center_z = 0;
-    model->auto_scaled = 0;
-    model->auto_centered = 0;
-    model->orig_x = NULL;
-    model->orig_y = NULL;
-    model->orig_z = NULL;
-    /* initialize new 3D bbox pointers */
-    model->faces.minx3 = NULL;
-    model->faces.maxx3 = NULL;
-    model->faces.miny3 = NULL;
-    model->faces.maxy3 = NULL;
-    model->faces.minz3 = NULL;
-    model->faces.maxz3 = NULL;
-
-    /* Auto-fit suggestion defaults */
-    model->auto_suggested_distance = 0;
-    model->auto_suggested_proj_scale = 0;
-    model->auto_proj_scale = 0;
-    model->auto_fit_ready = 0;
-    model->auto_fit_applied = 0;
-
-    model->coord_buf = NULL;
-    model->coord_buf_capacity = 0;
-    
-    // Step 2: Allocate vertex arrays using malloc (handles bank crossing better)
-    // Note: malloc() should handle bank boundaries better than NewHandle()
-    model->vertices.x = (Fixed32*)malloc(n * sizeof(Fixed32));
-    model->vertices.y = (Fixed32*)malloc(n * sizeof(Fixed32));
-    model->vertices.z = (Fixed32*)malloc(n * sizeof(Fixed32));
-    model->vertices.xo = (Fixed32*)malloc(n * sizeof(Fixed32));
-    model->vertices.yo = (Fixed32*)malloc(n * sizeof(Fixed32));
-    model->vertices.zo = (Fixed32*)malloc(n * sizeof(Fixed32));
-    model->vertices.x2d = (int*)malloc(n * sizeof(int));
-    model->vertices.y2d = (int*)malloc(n * sizeof(int));
-    
-    if (!model->vertices.x || !model->vertices.y || !model->vertices.z ||
-        !model->vertices.xo || !model->vertices.yo || !model->vertices.zo ||
-        !model->vertices.x2d || !model->vertices.y2d) {
-        printf("Error: Unable to allocate memory for vertex arrays\n");
-        keypress();
-        // Allocation failed, cleanup
-        if (model->vertices.x) free(model->vertices.x);
-        if (model->vertices.y) free(model->vertices.y);
-        if (model->vertices.z) free(model->vertices.z);
-        if (model->vertices.xo) free(model->vertices.xo);
-        if (model->vertices.yo) free(model->vertices.yo);
-        if (model->vertices.zo) free(model->vertices.zo);
-        if (model->vertices.x2d) free(model->vertices.x2d);
-        if (model->vertices.y2d) free(model->vertices.y2d);
-        free(model);
-        return NULL;
-    }
-    
-    // Set dummy handles to NULL (not used with malloc)
-    model->vertices.xHandle = NULL;
-    model->vertices.yHandle = NULL;
-    model->vertices.zHandle = NULL;
-    model->vertices.xoHandle = NULL;
-    model->vertices.yoHandle = NULL;
-    model->vertices.zoHandle = NULL;
-    model->vertices.x2dHandle = NULL;
-    model->vertices.y2dHandle = NULL;
-    
-    // Step 3: Face array allocation using parallel arrays (like vertices)
-    // Each element stored separately to fit 32KB limit per allocation
-    int nf = MAX_FACES;
-    
-    // Allocate vertex count array: nf * 4 bytes = 24KB
-    model->faces.vertex_count = (int*)malloc(nf * sizeof(int));
-    if (!model->faces.vertex_count) {
-        printf("Error: Unable to allocate memory for face vertex_count array\n");
-        keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model);
-        return NULL;
-    }
-
-    // Allocate saved_vertex_count array (hide/restore backup), zero-initialized:
-    // 0 means "not currently hidden / no backup" for every face by default.
-    model->faces.saved_vertex_count = (int*)calloc(nf, sizeof(int));
-    if (!model->faces.saved_vertex_count) {
-        printf("Error: Unable to allocate memory for face saved_vertex_count array\n");
-        keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model);
-        return NULL;
-    }
-    
-    // Allocate SINGLE packed buffer for all vertex indices
-    // Estimate: average 3.5 indices per face (mix of triangles and quads)
-    // For 6000 faces: ~21KB. We allocate conservatively at 5 per face = 120KB max
-    int estimated_total_indices = nf * 5;
-    model->faces.vertex_indices_buffer = (int*)malloc(estimated_total_indices * sizeof(int));
-    if (!model->faces.vertex_indices_buffer) {
-        printf("Error: Unable to allocate memory for vertex_indices_buffer\n");
-        keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model);
-        return NULL;
-    }
-    
-    // Allocate offset array: one offset per face into the packed buffer
-    model->faces.vertex_indices_ptr = (int*)malloc(nf * sizeof(int));
-    if (!model->faces.vertex_indices_ptr) {
-        printf("Error: Unable to allocate memory for vertex_indices_ptr array\n");
-        keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model);
-        return NULL;
-    }
-    
-    // Allocate z_min and z_max arrays (min and max depth per face)
-    model->faces.z_min = (Fixed32*)malloc(nf * sizeof(Fixed32));
-    model->faces.z_max = (Fixed32*)malloc(nf * sizeof(Fixed32));
-    if (!model->faces.z_min || !model->faces.z_max) {
-        printf("Error: Unable to allocate memory for face depth arrays\n");
-        keypress();
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        free(model);
-        return NULL;
-    }
-    // Allocate z_mean array (mean depth per face) - used by painter_newell_sancha
-    model->faces.z_mean = (Fixed32*)malloc(nf * sizeof(Fixed32));
-    if (!model->faces.z_mean) {
-        printf("Error: Unable to allocate memory for face z_mean array\n");
-        keypress();
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        free(model);
-        return NULL;
-    }
-
-    // Allocate plane coefficient arrays (normalized normals + d term)
-    model->faces.plane_a = (Fixed64*)malloc(nf * sizeof(Fixed64));
-    model->faces.plane_b = (Fixed64*)malloc(nf * sizeof(Fixed64));
-    model->faces.plane_c = (Fixed64*)malloc(nf * sizeof(Fixed64));
-    model->faces.plane_d = (Fixed64*)malloc(nf * sizeof(Fixed64));
-    if (!model->faces.plane_a || !model->faces.plane_b || !model->faces.plane_c || !model->faces.plane_d) {
-        printf("Error: Unable to allocate memory for face plane arrays\n");
-        keypress();
-        if (model->faces.plane_a) free(model->faces.plane_a);
-        if (model->faces.plane_b) free(model->faces.plane_b);
-        if (model->faces.plane_c) free(model->faces.plane_c);
-        if (model->faces.plane_d) free(model->faces.plane_d);
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        free(model->faces.z_max);
-        free(model);
-        return NULL;
-    }
-
-    // Allocate cached 2D bounding boxes arrays
-    model->faces.minx = (int*)malloc(nf * sizeof(int));
-    model->faces.maxx = (int*)malloc(nf * sizeof(int));
-    model->faces.miny = (int*)malloc(nf * sizeof(int));
-    model->faces.maxy = (int*)malloc(nf * sizeof(int));
-    if (!model->faces.minx || !model->faces.maxx || !model->faces.miny || !model->faces.maxy) {
-        printf("Error: Unable to allocate memory for face bounding box arrays\n");
-        keypress();
-        if (model->faces.minx) free(model->faces.minx);
-        if (model->faces.maxx) free(model->faces.maxx);
-        if (model->faces.miny) free(model->faces.miny);
-        if (model->faces.maxy) free(model->faces.maxy);
-        if (model->faces.plane_a) free(model->faces.plane_a);
-        if (model->faces.plane_b) free(model->faces.plane_b);
-        if (model->faces.plane_c) free(model->faces.plane_c);
-        if (model->faces.plane_d) free(model->faces.plane_d);
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        free(model->faces.z_max);
-        free(model);
-        return NULL;
-    }
-    
-    // Allocate display_flag array: nf * 4 bytes = 24KB
-    model->faces.display_flag = (int*)malloc(nf * sizeof(int));
-    if (!model->faces.display_flag) {
-        printf("Error: Unable to allocate memory for face display_flag array\n");
-        keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        free(model);
-        return NULL;
-    }
-    
-
-    
-    // Allocate sorted_face_indices array: nf * 4 bytes = 24KB max
-    model->faces.sorted_face_indices = (int*)malloc(nf * sizeof(int));
-    if (!model->faces.sorted_face_indices) {
-        printf("Error: Unable to allocate memory for sorted_face_indices array\n");
-        keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        free(model->faces.display_flag);
-        free(model);
-        return NULL;
-    }
-    
-    // Initialize structure
-    model->faces.vertex_countHandle = NULL;
-    model->faces.vertex_indicesBufferHandle = NULL;
-    model->faces.vertex_indicesPtrHandle = NULL;
-    model->faces.z_maxHandle = NULL;
-    model->faces.display_flagHandle = NULL;
-    model->faces.sorted_face_indicesHandle = NULL;
-    model->faces.total_indices = 0;
-    
-
-    return model;
-}
-
-/**
- * MEMORY CLEANUP - DESTROY MODEL 3D
- * 
- * This function frees all memory allocated by createModel3D().
- * Must be called when the model is no longer needed to prevent memory leaks.
- * 
- * CLEANUP SEQUENCE:
- * 1. Free all vertex arrays (x, y, z, xo, yo, zo, x2d, y2d)
- * 2. Free all face arrays (vertex_count, vertex_indices_buffer, vertex_indices_ptr, z_max, display_flag, sorted_face_indices)
- * 3. Free main Model3D structure
- */
-segment "code07";
-void destroyModel3D(Model3D* model) {
-    if (model != NULL) {
-        // Free all vertex arrays
-        if (model->vertices.x) free(model->vertices.x);
-        if (model->vertices.y) free(model->vertices.y);
-        if (model->vertices.z) free(model->vertices.z);
-        if (model->vertices.xo) free(model->vertices.xo);
-        if (model->vertices.yo) free(model->vertices.yo);
-        if (model->vertices.zo) free(model->vertices.zo);
-        if (model->vertices.x2d) free(model->vertices.x2d);
-        if (model->vertices.y2d) free(model->vertices.y2d);
-        
-        // Free all face arrays (now simplified with packed buffer)
-        if (model->faces.vertex_count) free(model->faces.vertex_count);
-        if (model->faces.vertex_indices_buffer) free(model->faces.vertex_indices_buffer);
-        if (model->faces.vertex_indices_ptr) free(model->faces.vertex_indices_ptr);
-        if (model->faces.z_max) free(model->faces.z_max);
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.plane_a) free(model->faces.plane_a);
-        if (model->faces.plane_b) free(model->faces.plane_b);
-        if (model->faces.plane_c) free(model->faces.plane_c);
-        if (model->faces.plane_d) free(model->faces.plane_d);
-        if (model->faces.minx) free(model->faces.minx);
-        if (model->faces.maxx) free(model->faces.maxx);
-        if (model->faces.miny) free(model->faces.miny);
-        if (model->faces.maxy) free(model->faces.maxy);
-        if (model->faces.minx3) free(model->faces.minx3);
-        if (model->faces.maxx3) free(model->faces.maxx3);
-        if (model->faces.miny3) free(model->faces.miny3);
-        if (model->faces.maxy3) free(model->faces.maxy3);
-        if (model->faces.minz3) free(model->faces.minz3);
-        if (model->faces.maxz3) free(model->faces.maxz3);
-        if (model->faces.display_flag) free(model->faces.display_flag);
-        if (model->faces.sorted_face_indices) free(model->faces.sorted_face_indices);
-        if (model->faces.saved_vertex_count) free(model->faces.saved_vertex_count);
-
-        // Free optional buffers and backups
-        if (model->orig_x) free(model->orig_x);
-        if (model->orig_y) free(model->orig_y);
-        if (model->orig_z) free(model->orig_z);
-        if (model->coord_buf) free(model->coord_buf);
-        
-        // Free main structure
-        free(model);
-    }
-}
-
-segment "code08";
-
-/**
- * COMPLETE 3D MODEL LOADING
- * ==========================
- * 
- * This function coordinates the complete loading of an OBJ file
- * by successively calling the vertex and face reading functions.
- * 
- * LOADING PIPELINE:
- * 1. Input parameter validation
- * 2. Read vertices from file
- * 3. Read faces from file  
- * 4. Update counters in structure
- * 
- * ERROR HANDLING:
- * - Vertex reading failure: immediate stop
- * - Face reading failure: warning but continue
- *   (vertices-only model remains usable)
- */
-int loadModel3D(Model3D* model, const char* filename) {
-    // Input parameter validation
-    if (model == NULL || filename == NULL) {
-        return -1;  // Invalid parameters
-    }
-    
-    // Step 1: Read vertices from OBJ file
-    // --- Update global counter for face index verification ---
-    readVertices_last_count = model->vertices.vertex_count;
-    
-    int vcount = readVertices(filename, &model->vertices, MAX_VERTICES, model);
-    if (vcount < 0) {
-        return -1;  // Critical failure: unable to read vertices
-    }
-    model->vertices.vertex_count = vcount;
-    
-    // Step 2: Read faces from OBJ file (using chunked allocation)
-    // This function handles reading faces into 2 chunks transparently
-    int fcount = readFaces_model(filename, model);
-    if (fcount < 0) {
-        // Critical failure: unable to read faces
-        printf("\nWarning: Unable to read faces\n");
-        model->faces.face_count = 0;  // No faces available
-    } else {
-        model->faces.face_count = fcount;
-        /* compute 3D bounding boxes for all faces */
-        /* overlap scan is controlled by caller */
-    }
-    return 0;  // Success: model loaded (with or without faces)
-}
-
-/* Compute object-space axis-aligned bounding box for every face.  Allocates
- * arrays inside faces->minx3 etc.  Must be called after vertices and faces are
- * loaded; it does nothing if face_count is zero.
- */
-static void compute_face_bboxes3D(Model3D* model) {
-    if (!model) return;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int fc = faces->face_count;
-    if (fc <= 0) return;
-    /* allocate arrays (free previous if any) */
-    if (faces->minx3) free(faces->minx3);
-    if (faces->maxx3) free(faces->maxx3);
-    if (faces->miny3) free(faces->miny3);
-    if (faces->maxy3) free(faces->maxy3);
-    if (faces->minz3) free(faces->minz3);
-    if (faces->maxz3) free(faces->maxz3);
-    faces->minx3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
-    faces->maxx3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
-    faces->miny3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
-    faces->maxy3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
-    faces->minz3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
-    faces->maxz3 = (Fixed32*)malloc(fc * sizeof(Fixed32));
-    if (!faces->minx3||!faces->maxx3||!faces->miny3||!faces->maxy3||!faces->minz3||!faces->maxz3) {
-        /* if allocation failed, free and clear */
-        free(faces->minx3); free(faces->maxx3); free(faces->miny3);
-        free(faces->maxy3); free(faces->minz3); free(faces->maxz3);
-        faces->minx3 = faces->maxx3 = faces->miny3 = faces->maxy3 = faces->minz3 = faces->maxz3 = NULL;
-        return;
-    }
-    for (int fi = 0; fi < fc; ++fi) {
-        int cnt = faces->vertex_count[fi];
-        int off = faces->vertex_indices_ptr[fi];
-        Fixed32 mnx=0,mxx=0,mny=0,mxy=0,mnz=0,mxz=0;
-        for (int k = 0; k < cnt; ++k) {
-            int vi = faces->vertex_indices_buffer[off + k] - 1;
-            Fixed32 x = vtx->x[vi];
-            Fixed32 y = vtx->y[vi];
-            Fixed32 z = vtx->z[vi];
-            if (k==0 || x < mnx) mnx = x;
-            if (k==0 || x > mxx) mxx = x;
-            if (k==0 || y < mny) mny = y;
-            if (k==0 || y > mxy) mxy = y;
-            if (k==0 || z < mnz) mnz = z;
-            if (k==0 || z > mxz) mxz = z;
-        }
-        faces->minx3[fi] = mnx;
-        faces->maxx3[fi] = mxx;
-        faces->miny3[fi] = mny;
-        faces->maxy3[fi] = mxy;
-        faces->minz3[fi] = mnz;
-        faces->maxz3[fi] = mxz;
-    }
-}
-
-/*
- * Helper: compute the plane equation (a x + b y + c z + d = 0) for a face.
- * Uses the first three vertices of the face; if the face has <3 vertices the
- * coefficients are zeroed.  The coordinates are taken from the original
- * object-space arrays (fixed-point values cast to double).
- */
-/* compute_plane_float: same as compute_face_plane but converts
-   fixed-point coordinates to floating values before computing coefficients.
-   The resulting plane is in the same units as FIXED_TO_FLOAT() and thus
-   compatible with distance calculations that also use FIXED_TO_FLOAT. */
-static void compute_face_plane_float(Model3D* model, int fidx,
-                                     double *a, double *b, double *c, double *d) {
-    if (!model || fidx < 0 || fidx >= model->faces.face_count) {
-        *a = *b = *c = *d = 0.0;
-        return;
-    }
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int cnt = faces->vertex_count[fidx];
-    if (cnt < 3) {
-        *a = *b = *c = *d = 0.0;
-        return;
-    }
-    int off = faces->vertex_indices_ptr[fidx];
-    int vi0 = faces->vertex_indices_buffer[off] - 1;
-    int vi1 = faces->vertex_indices_buffer[off + 1] - 1;
-    int vi2 = faces->vertex_indices_buffer[off + 2] - 1;
-    double x0 = FIXED_TO_FLOAT(vtx->x[vi0]);
-    double y0 = FIXED_TO_FLOAT(vtx->y[vi0]);
-    double z0 = FIXED_TO_FLOAT(vtx->z[vi0]);
-    double x1 = FIXED_TO_FLOAT(vtx->x[vi1]);
-    double y1 = FIXED_TO_FLOAT(vtx->y[vi1]);
-    double z1 = FIXED_TO_FLOAT(vtx->z[vi1]);
-    double x2 = FIXED_TO_FLOAT(vtx->x[vi2]);
-    double y2 = FIXED_TO_FLOAT(vtx->y[vi2]);
-    double z2 = FIXED_TO_FLOAT(vtx->z[vi2]);
-    double ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
-    double vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
-    *a = uy * vz - uz * vy;
-    *b = uz * vx - ux * vz;
-    *c = ux * vy - uy * vx;
-    *d = -(*a * x0 + *b * y0 + *c * z0);
-}
-
-/* original compute_face_plane retained for callers that expect fixed-coord
-   planes; kept so that older routines (e.g. check_intersect) continue to
-   operate exactly as before. */
-static void compute_face_plane(Model3D* model, int fidx,
-                               double *a, double *b, double *c, double *d) {
-    if (!model || fidx < 0 || fidx >= model->faces.face_count) {
-        *a = *b = *c = *d = 0.0;
-        return;
-    }
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int cnt = faces->vertex_count[fidx];
-    if (cnt < 3) {
-        *a = *b = *c = *d = 0.0;
-        return;
-    }
-    int off = faces->vertex_indices_ptr[fidx];
-    int vi0 = faces->vertex_indices_buffer[off] - 1;
-    int vi1 = faces->vertex_indices_buffer[off + 1] - 1;
-    int vi2 = faces->vertex_indices_buffer[off + 2] - 1;
-    double x0 = (double)vtx->x[vi0];
-    double y0 = (double)vtx->y[vi0];
-    double z0 = (double)vtx->z[vi0];
-    double x1 = (double)vtx->x[vi1];
-    double y1 = (double)vtx->y[vi1];
-    double z1 = (double)vtx->z[vi1];
-    double x2 = (double)vtx->x[vi2];
-    double y2 = (double)vtx->y[vi2];
-    double z2 = (double)vtx->z[vi2];
-    double ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
-    double vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
-    *a = uy * vz - uz * vy;
-    *b = uz * vx - ux * vz;
-    *c = ux * vy - uy * vx;
-    *d = -(*a * x0 + *b * y0 + *c * z0);
-}
-
-
-/**
- * PAINTER'S ALGORITHM - NEWELL / SANCHA (detailed)
- * =================================================
- * Overview:
- *  - The painter builds an ordering of faces for correct filled-polygon rendering without
- *    performing geometric splits. The algorithm follows the Newell/Sancha approach:
- *      1) Compute per-face depth metrics (z_min/z_max/z_mean) and planar coefficients.
- *      2) Initially sort faces by z_mean (descending) to obtain a broadly correct depth order.
- *      3) Use axis-aligned bounding-box overlap tests (X and Y) to detect candidate overlapping faces.
- *      4) For overlapping pairs, apply robust pairwise ordering tests using plane/triangle votes and
- *         local sampling; if the order is ambiguous, record the pair in the `inconclusive_pairs`
- *         buffer for diagnostic framing and later inspection (no automatic splitting).
- *
- * Visibility & culling:
- *  - When `cull_back_faces` is enabled, the painter operates primarily on the subset of faces
- *    with `display_flag == 1` (visible). Culled faces are appended afterwards to preserve
- *    stable indices and deterministic behavior of `sorted_face_indices`.
- *
- * Modes:
- *  - FAST: performs only low-cost tests (depth + bbox) and skips plane calculations for speed.
- *  - FIXED: Full fixed-point Newell/Sancha implementation with all pairwise tests and corrections.
-
- * Notes:
- *  - The algorithm is intentionally conservative: inconclusive pairs are stored rather than
- *    forcing a risky swap that may introduce visual artifacts.
- *  - Use `frameInconclusivePairs()` in diagnostics to highlight such pairs in the rendered view.
- *
- * Usage:
- *  - Call `painter_newell_sancha(model, face_count)` (or a mode-specific variant) after
- *    `calculateFaceDepths()` / `processModelFast()` has computed observer-space coordinates.
- */
-
- // >>>>>>
-
-
-/*
- * Return non-zero if any edge of face `fi` crosses the infinite plane of
- * face `fj`.  Crossing is detected when the signed distance of an edge's
- * endpoints to `fj`'s plane have opposite signs.  Zero distance is treated
- * as touching and does not count as crossing.
- */
-/*
- * Return !0 if faces i and j share a vertex or an entire edge.
- * Comparison is done on the original 1-based vertex indices stored in
- * the face buffers.  Sharing just one vertex is sufficient to consider the
- * pair "touching" for the purposes of the interpenetration test.
- */
-static int faces_share_vertex_or_edge(FaceArrays3D* faces, int i, int j) {
-    int cnti = faces->vertex_count[i];
-    int offi = faces->vertex_indices_ptr[i];
-    int cntj = faces->vertex_count[j];
-    int offj = faces->vertex_indices_ptr[j];
-    for (int a = 0; a < cnti; ++a) {
-        int vi = faces->vertex_indices_buffer[offi + a];
-        for (int b = 0; b < cntj; ++b) {
-            if (vi == faces->vertex_indices_buffer[offj + b]) {
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-/*
- * Return non-zero if any edge of face `ei` actually intersects the interior of
- * face `fj`.  This refines the previous plane-crossing test by computing the
- * intersection point and verifying it lies within the polygon of `fj`.
- */
-
-/* Helper: return !0 if an edge of face `ei` crosses the interior of
- * face `fj` **strictly** (intersection point lies in the polygon interior,
- * not on a boundary).  This is used to decide whether a pair really
- * interpenetrates for the purpose of counting, ignoring mere boundary
- * contacts that do not represent true crossings.
- */
-/* forward declaration of helper used by edge_crosses_interior */
-static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_local);
-
-static int edge_crosses_interior(Model3D* model, int ei, int fj) {
-    double a, b, c, d;
-    compute_face_plane(model, fj, &a, &b, &c, &d);
-    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
-
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int cnt = faces->vertex_count[ei]; if (cnt < 2) return 0;
-
-    /* choose 2D projection plane */
-    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
-    int proj = (abs_a >= abs_b && abs_a >= abs_c) ? 0
-            : (abs_b >= abs_a && abs_b >= abs_c) ? 1 : 2;
-
-    /* build polygon for fj */
-    int nfj = faces->vertex_count[fj];
-    int *vx = (int*)malloc(sizeof(int) * nfj);
-    int *vy = (int*)malloc(sizeof(int) * nfj);
-    for (int m = 0; m < nfj; ++m) {
-        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
-        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
-        int ix, iy;
-        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
-        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
-        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
-        vx[m] = ix; vy[m] = iy;
-    }
-
-    /* we'll call strict_inside below with the current polygon data; the
-       real definition lives after this function (see forward declaration
-       above). */
-
-    int result = 0;
-    for (int k = 0; k < cnt && !result; ++k) {
-        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
-        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k+1)%cnt)] - 1;
-        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
-        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
-        const double plane_eps = 0.02;
-        double sdA = a*Ax + b*Ay + c*Az + d;
-        double sdB = a*Bx + b*By + c*Bz + d;
-        if (fabs(sdA) < plane_eps) sdA = 0.0;
-        if (fabs(sdB) < plane_eps) sdB = 0.0;
-        if (sdA * sdB < 0.0) {
-            double t = -sdA / (sdB - sdA);
-            double Px = Ax + t*(Bx - Ax);
-            double Py = Ay + t*(By - Ay);
-            double Pz = Az + t*(Bz - Az);
-            int px, py;
-            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
-            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
-            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
-            if (strict_inside(px, py, nfj, vx, vy)) result = 1;
-        }
-    }
-    free(vx); free(vy);
-    return result;
-}
-
-/* Definition of strict_inside helper moved outside of any other function
-   to satisfy the compiler.  See the forward declaration at the top of this
-   section. */
-static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_local) {
-    int m;
-    /* inside or boundary? reuse existing test */
-    if (!point_in_poly_arrays_int(px, py, nfj_local, vx_local, vy_local))
-        return 0;
-    /* if point equals any vertex or lies on any edge, reject */
-    for (m = 0; m < nfj_local; ++m) {
-        int x1 = vx_local[m], y1 = vy_local[m];
-        if (px == x1 && py == y1) return 0;
-        {
-            int m2 = (m + 1) % nfj_local;
-            int x2 = vx_local[m2], y2 = vy_local[m2];
-            long long dx = (long long)x2 - x1, dy = (long long)y2 - y1;
-            long long dxp = (long long)px - x1, dyp = (long long)py - y1;
-            if (dx * dyp == dy * dxp) {
-                /* collinear, now check within segment bounds */
-                if ((px >= x1 && px <= x2) || (px >= x2 && px <= x1)) {
-                    if ((py >= y1 && py <= y2) || (py >= y2 && py <= y1))
-                        return 0;
-                }
-            }
-        }
-    }
-    return 1;
-}
-
-/* existing count_edge_crossings follows here unchanged */
-static int count_edge_crossings(Model3D* model, int ei, int fj) {
-    int count = 0;
-    double a, b, c, d;
-    compute_face_plane(model, fj, &a, &b, &c, &d);
-    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int cnt = faces->vertex_count[ei];
-    if (cnt < 2) return 0;
-    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
-    int proj;
-    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
-    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
-    else proj = 2;
-    int nfj = faces->vertex_count[fj];
-    int *vx = (int*)malloc(sizeof(int) * nfj);
-    int *vy = (int*)malloc(sizeof(int) * nfj);
-    for (int m = 0; m < nfj; ++m) {
-        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
-        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
-        int ix, iy;
-        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
-        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
-        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
-        vx[m] = ix;
-        vy[m] = iy;
-    }
-    for (int k = 0; k < cnt; ++k) {
-        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
-        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k + 1) % cnt)] - 1;
-        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
-        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
-        const double plane_eps = 0.02;
-        double sdA = a*Ax + b*Ay + c*Az + d;
-        double sdB = a*Bx + b*By + c*Bz + d;
-        if (fabs(sdA) < plane_eps) sdA = 0.0;
-        if (fabs(sdB) < plane_eps) sdB = 0.0;
-        if (sdA == 0.0 && sdB == 0.0) {
-            int pax, pay, pbx, pby;
-            if (proj == 0) { pax = FIXED_TO_INT((Fixed32)Ay); pay = FIXED_TO_INT((Fixed32)Az);
-                             pbx = FIXED_TO_INT((Fixed32)By); pby = FIXED_TO_INT((Fixed32)Bz); }
-            else if (proj == 1) { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Az);
-                                  pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)Bz); }
-            else { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Ay);
-                   pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)By); }
-            if (point_in_poly_arrays_int(pax, pay, nfj, vx, vy) ||
-                point_in_poly_arrays_int(pbx, pby, nfj, vx, vy)) {
-                count++;
-            }
-            continue;
-        }
-        if (sdA * sdB < 0.0) {
-            double t = -sdA / (sdB - sdA);
-            double Px = Ax + t*(Bx - Ax);
-            double Py = Ay + t*(By - Ay);
-            double Pz = Az + t*(Bz - Az);
-            int px, py;
-            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
-            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
-            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
-            if (point_in_poly_arrays_int(px, py, nfj, vx, vy)) {
-                count++;
-            }
-        }
-    }
-    free(vx); free(vy);
-    return count;
-}
-
-static int edge_intersects_face(Model3D* model, int ei, int fj) {
-
-    double a, b, c, d;
-    compute_face_plane(model, fj, &a, &b, &c, &d);
-    if (a == 0.0 && b == 0.0 && c == 0.0) {
-        /* degenerate plane */
-        return 0;
-    }
-
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int cnt = faces->vertex_count[ei];
-    if (cnt < 2) return 0;
-
-    /* choose projection plane by largest component of normal */
-    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
-    int proj; // 0=drop x,1=drop y,2=drop z
-    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
-    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
-    else proj = 2;
-
-    /* build projected vertex arrays for face fj */
-    int nfj = faces->vertex_count[fj];
-    int *vx = (int*)malloc(sizeof(int) * nfj);
-    int *vy = (int*)malloc(sizeof(int) * nfj);
-    for (int m = 0; m < nfj; ++m) {
-        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
-        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
-        int ix, iy;
-        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
-        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
-        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
-        vx[m] = ix;
-        vy[m] = iy;
-    }
-
-    for (int k = 0; k < cnt; ++k) {
-        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
-        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k + 1) % cnt)] - 1;
-        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
-        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
-        const double plane_eps = 0.02; /* tolerance */
-        double sdA = a*Ax + b*Ay + c*Az + d;
-        double sdB = a*Bx + b*By + c*Bz + d;
-        if (fabs(sdA) < plane_eps) sdA = 0.0;
-        if (fabs(sdB) < plane_eps) sdB = 0.0;
-        /* if both endpoints lie on plane, we still need to check whether the
-           segment actually overlaps the interior of fj (coplanar case). */
-        if (sdA == 0.0 && sdB == 0.0) {
-            /* project A and B to 2D and test if either lies inside the
-               polygon (ignoring boundary).  This catches the t.obj case
-               where the entire vertical face sits in the horizontal plane. */
-            int pax, pay, pbx, pby;
-            if (proj == 0) { pax = FIXED_TO_INT((Fixed32)Ay); pay = FIXED_TO_INT((Fixed32)Az);
-                             pbx = FIXED_TO_INT((Fixed32)By); pby = FIXED_TO_INT((Fixed32)Bz); }
-            else if (proj == 1) { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Az);
-                                  pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)Bz); }
-            else { pax = FIXED_TO_INT((Fixed32)Ax); pay = FIXED_TO_INT((Fixed32)Ay);
-                   pbx = FIXED_TO_INT((Fixed32)Bx); pby = FIXED_TO_INT((Fixed32)By); }
-            if (point_in_poly_arrays_int(pax, pay, nfj, vx, vy) ||
-                point_in_poly_arrays_int(pbx, pby, nfj, vx, vy)) {
-
-
-                free(vx); free(vy);
-                return 1;
-            }
-            /* otherwise continue to next edge */
-            continue;
-        }
-        if (sdA * sdB < 0.0) {
-            double t = -sdA / (sdB - sdA);
-            double Px = Ax + t*(Bx - Ax);
-            double Py = Ay + t*(By - Ay);
-            double Pz = Az + t*(Bz - Az);
-            int px, py;
-            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
-            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
-            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
-
-            if (point_in_poly_arrays_int(px, py, nfj, vx, vy)) {
-                free(vx); free(vy);
-                return 1;
-            } else {
-            }
-        }
-    }
-
-    free(vx); free(vy);
-    return 0;
-}
-
-/* utility: append a new vertex to the model's vertex arrays and return
-   0-based index, or -1 if capacity exceeded */
-static int add_vertex(Model3D* model, Fixed32 x, Fixed32 y, Fixed32 z) {
-    if (!model) return -1;
-    VertexArrays3D* vtx = &model->vertices;
-    if (vtx->vertex_count >= MAX_VERTICES) return -1;
-    int idx = vtx->vertex_count;
-    vtx->x[idx]  = x;
-    vtx->y[idx]  = y;
-    vtx->z[idx]  = z;
-    vtx->xo[idx] = 0;
-    vtx->yo[idx] = 0;
-    vtx->zo[idx] = 0;
-    vtx->x2d[idx] = 0;
-    vtx->y2d[idx] = 0;
-    vtx->vertex_count++;
-    return idx;
-}
-
-/* utility: remove consecutive duplicate indices from a polygon list; also
-   check wrap-around duplicates */
-static void cleanup_list(int *arr, int *n) {
-    if (*n <= 1) return;
-    int w = 0;
-    for (int i = 0; i < *n; ++i) {
-        if (i == 0 || arr[i] != arr[i-1]) {
-            arr[w++] = arr[i];
-        }
-    }
-    if (w > 1 && arr[0] == arr[w-1]) w--;
-    *n = w;
-}
-
-/* Remove any duplicate index appearing later in the list, preserving only
-   the first occurrence. This prevents repeated vertices from creating
-   self-intersections. */
-static void remove_duplicates(int *arr, int *n) {
-    int w = 0;
-    for (int i = 0; i < *n; ++i) {
-        int found = 0;
-        for (int j = 0; j < w; ++j) {
-            if (arr[i] == arr[j]) { found = 1; break; }
-        }
-        if (!found) arr[w++] = arr[i];
-    }
-    *n = w;
-}
-
-/* Clip the polygon of face `fidx` against the half-space defined by
-   plane `a*x + b*y + c*z + d >= 0` when `keepPositive` is true, otherwise
-   the complementary <=0 side is retained.  The resulting vertex indices are
-   written into `outbuf` with count returned via `*outcnt`.  Intersection
-   points are created with `add_vertex`. */
-static void clip_face_plane(Model3D* model, int fidx,
-                             double a, double b, double c, double d,
-                             int keepPositive, int *outbuf, int *outcnt) {
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int cnt = faces->vertex_count[fidx];
-    *outcnt = 0;
-    if (cnt <= 0) return;
-    int off = faces->vertex_indices_ptr[fidx];
-    int prev_vi = faces->vertex_indices_buffer[off] - 1;
-    double x = (double)vtx->x[prev_vi];
-    double y = (double)vtx->y[prev_vi];
-    double z = (double)vtx->z[prev_vi];
-    double sd_prev = a*x + b*y + c*z + d;
-    for (int k = 0; k < cnt; ++k) {
-        int vi = faces->vertex_indices_buffer[off + k] - 1;
-        x = (double)vtx->x[vi];
-        y = (double)vtx->y[vi];
-        z = (double)vtx->z[vi];
-        double sd = a*x + b*y + c*z + d;
-        int in_prev = keepPositive ? (sd_prev >= 0) : (sd_prev <= 0);
-        int in_curr = keepPositive ? (sd >= 0) : (sd <= 0);
-        if (in_curr) {
-            outbuf[*outcnt] = vi;
-            (*outcnt)++;
-        }
-        if (in_prev ^ in_curr) {
-            /* compute intersection point */
-            double t = sd_prev / (sd_prev - sd);
-            double ix = (double)vtx->x[prev_vi] + t * ((double)vtx->x[vi] - (double)vtx->x[prev_vi]);
-            double iy = (double)vtx->y[prev_vi] + t * ((double)vtx->y[vi] - (double)vtx->y[prev_vi]);
-            double iz = (double)vtx->z[prev_vi] + t * ((double)vtx->z[vi] - (double)vtx->z[prev_vi]);
-            int newvi = add_vertex(model,
-                                   FLOAT_TO_FIXED((float)ix),
-                                   FLOAT_TO_FIXED((float)iy),
-                                   FLOAT_TO_FIXED((float)iz));
-            if (newvi >= 0) {
-                outbuf[*outcnt] = newvi;
-                (*outcnt)++;
-            }
-        }
-        prev_vi = vi;
-        sd_prev = sd;
-    }
-}
-
-/* compute signed area of a polygon (vertex list) projected onto a plane
-   defined by normal (a,b,c).  returns positive for CCW orientation. */
-static double poly_signed_area(Model3D* model, int *list, int n,
-                               double a, double b, double c) {
-    if (n < 3) return 0.0;
-    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
-    int proj;
-    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
-    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
-    else proj = 2;
-    VertexArrays3D* vtx = &model->vertices;
-    double area = 0;
-    for (int i = 0; i < n; ++i) {
-        int vi = list[i];
-        int vj = list[(i + 1) % n];
-        double x1,y1,x2,y2;
-        if (proj == 0) {
-            x1 = FIXED_TO_FLOAT(vtx->y[vi]); y1 = FIXED_TO_FLOAT(vtx->z[vi]);
-            x2 = FIXED_TO_FLOAT(vtx->y[vj]); y2 = FIXED_TO_FLOAT(vtx->z[vj]);
-        } else if (proj == 1) {
-            x1 = FIXED_TO_FLOAT(vtx->x[vi]); y1 = FIXED_TO_FLOAT(vtx->z[vi]);
-            x2 = FIXED_TO_FLOAT(vtx->x[vj]); y2 = FIXED_TO_FLOAT(vtx->z[vj]);
-        } else {
-            x1 = FIXED_TO_FLOAT(vtx->x[vi]); y1 = FIXED_TO_FLOAT(vtx->y[vi]);
-            x2 = FIXED_TO_FLOAT(vtx->x[vj]); y2 = FIXED_TO_FLOAT(vtx->y[vj]);
-        }
-        area += (x1 * y2 - x2 * y1);
-    }
-    return area * 0.5;
-}
-
-/* Reorder `list` of vertex indices (length `*n`) so that they are sorted
-   counter‑clockwise around the centroid when projected onto the plane of
-   face `fidx`.  This ensures a simple, non‑self‑intersecting polygon. */
-static void reorder_poly(Model3D* model, int fidx, int *list, int *n) {
-    if (!model || *n < 3) return;
-    /* compute projection plane from face normal */
-    double a, b, c, d;
-    compute_face_plane(model, fidx, &a, &b, &c, &d);
-    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
-    int proj;
-    if (abs_a >= abs_b && abs_a >= abs_c) proj = 0;
-    else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
-    else proj = 2;
-
-    /* gather 2D coordinates */
-    double *px = (double*)malloc(sizeof(double) * (*n));
-    double *py = (double*)malloc(sizeof(double) * (*n));
-    if (!px || !py) {
-        free(px); free(py);
-        return;
-    }
-    VertexArrays3D* vtx = &model->vertices;
-    for (int i = 0; i < *n; ++i) {
-        int vi = list[i];
-        double X = (double)vtx->x[vi];
-        double Y = (double)vtx->y[vi];
-        double Z = (double)vtx->z[vi];
-        if (proj == 0) { px[i] = Y; py[i] = Z; }
-        else if (proj == 1) { px[i] = X; py[i] = Z; }
-        else { px[i] = X; py[i] = Y; }
-    }
-    /* compute centroid */
-    double cx = 0, cy = 0;
-    for (int i = 0; i < *n; ++i) { cx += px[i]; cy += py[i]; }
-    cx /= *n; cy /= *n;
-    /* compute angles */
-    double *ang = (double*)malloc(sizeof(double) * (*n));
-    if (!ang) { free(px); free(py); return; }
-    for (int i = 0; i < *n; ++i) {
-        ang[i] = atan2(py[i] - cy, px[i] - cx);
-    }
-    /* simple insertion sort on angles (small n) */
-    for (int i = 1; i < *n; ++i) {
-        int idx = list[i];
-        double a0 = ang[i];
-        int j = i - 1;
-        while (j >= 0 && ang[j] > a0) {
-            ang[j+1] = ang[j];
-            list[j+1] = list[j];
-            j--;
-        }
-        ang[j+1] = a0;
-        list[j+1] = idx;
-    }
-    /* ensure orientation matches original sign (ccw positive) */
-    double area = 0;
-    for (int i = 0; i < *n; ++i) {
-        int k = (i + 1) % *n;
-        double x1 = px[i], y1 = py[i];
-        double x2 = px[k], y2 = py[k];
-        area += (x1 * y2 - x2 * y1);
-    }
-    if (area < 0) {
-        /* reverse order */
-        for (int i = 0; i < *n/2; ++i) {
-            int t = list[i]; list[i] = list[*n-1-i]; list[*n-1-i] = t;
-        }
-    }
-    free(px); free(py); free(ang);
-}
-
-/* Split face `f1` by the infinite plane defined by face `f2`.  The
-   behaviour is unchanged from the previous implementation except that the
-   caller may supply an output buffer to receive the indices of any new
-   vertices generated along the cutting line (these are the intersection
-   points inserted during clipping).  This allows the caller to reuse the
-   same points when splitting the other face, ensuring geometric consistency.
-
-   Additionally, the caller may provide an optional array of
-   `constraint_verts` lying along the intersection line.  When supplied the
-   routine projects each candidate intersection point onto the line and
-   ignores those outside the interval spanned by the constraint points.  This
-   prevents the opposite face from being split by the full plane when only a
-   finite segment of the line lies within the overlapping region.
-
-   If `out_newverts` is non-null, up to `*out_n` indices will be written and
-   `*out_n` updated.  The function returns 1 if a split occurred (bboxes are
-   recomputed), or 0 otherwise. */
-/*
- * Split face `f1` by the infinite plane defined by face `f2`.
- *
- * New behaviour relative to earlier revisions:
- *   - When `force_one_edge` is nonzero the routine will attempt the split
- *     even if all vertices of `f1` lie on the same side of the cutter plane.
- *     This supports the "one-edge crossing" rule requested by the user:
- *     if exactly one edge of `f1` intersects the interior of `f2` the face
- *     will still be subdivided.  (The opposite direction is still tested by
- *     the caller when appropriate.)
- *   - When forced, the routine will also bypass the usual vertex-count
- *     check; the original face is retained even if the opposite fragment has
- *     fewer than three vertices.  A degenerate fragment (count<3) is simply
- *     discarded rather than causing failure.
- *
- * All other parameters behave as before.  The caller may still supply
- * `out_newverts`/`out_n` and `constraint_verts`/`constraint_n` for clipping.
- */
-/* build identifier printed in logs so user can verify they ran
-   the newly compiled binary.  Update this string each time the splitting logic
-   is modified. */
-#define SPLIT_BUILD_ID "split-rule-2026-02-24a"
-
-static int split_face_by_plane(Model3D* model, int f1, int f2,
-                               int *out_newverts, int *out_n,
-                               int *constraint_verts, int constraint_n,
-                               int force_one_edge) {
-
-    if (!model) return 0;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int cnt = faces->vertex_count[f1];
-
-    if (cnt < 3) return 0;
-
-
-    /* plane of cutting face (float units for distance calc) */
-    double a, b, c, d;
-    compute_face_plane_float(model, f2, &a, &b, &c, &d);
-
-    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
-
-    const double plane_eps = 0.02;
-
-    /* collect distances for each vertex of f1 */
-    double *dist = (double*)malloc(sizeof(double) * cnt);
-    int *orig = (int*)malloc(sizeof(int) * cnt);
-    if (!dist || !orig) {
-        free(dist);
-        free(orig);
-        return 0;
-    }
-    for (int i = 0; i < cnt; ++i) {
-        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[f1] + i] - 1;
-        orig[i] = vi;
-        double x = FIXED_TO_FLOAT(vtx->x[vi]);
-        double y = FIXED_TO_FLOAT(vtx->y[vi]);
-        double z = FIXED_TO_FLOAT(vtx->z[vi]);
-
-        double sd = a * x + b * y + c * z + d;  /* now consistent scaling */
-        if (fabs(sd) < plane_eps) sd = 0.0;
-        dist[i] = sd;
-
-    }
-
-    int hasPos = 0, hasNeg = 0;
-    for (int i = 0; i < cnt; ++i) {
-        if (dist[i] > 0.0) hasPos = 1;
-        if (dist[i] < 0.0) hasNeg = 1;
-    }
-    if (!hasPos || !hasNeg) {
-        if (!force_one_edge) {
-
-            free(dist);
-            free(orig);
-            return 0;
-        } else {
-            /* forced split: log that we're ignoring one-sided result */
-
-        }
-    }
-
-    int pos_list[MAX_FACE_VERTICES * 2];
-    int neg_list[MAX_FACE_VERTICES * 2];
-    int cop_list[MAX_FACE_VERTICES];
-    int pos_n = 0, neg_n = 0, cop_n = 0;
-
-    /* temporary buffer to record intersections if requested */
-    int newbuf[MAX_FACE_VERTICES];
-    int newcount = 0;
-
-    /* prepare constraint segment if provided */
-    double seg_min = 0, seg_max = 0;
-    int have_constraint = 0;
-    double dirx=0, diry=0, dirz=0;
-    if (constraint_verts && constraint_n >= 2) {
-        /* compute direction of intersection line from normals of both planes */
-        double a1,b1,c1,d1;
-        compute_face_plane(model, f1, &a1, &b1, &c1, &d1);
-        /* n1 = plane normal of f2 (a,b,c from above), n2 = normal of f1 */
-        dirx = b * c1 - c * b1;
-        diry = c * a1 - a * c1;
-        dirz = a * b1 - b * a1;
-        double len = sqrt(dirx*dirx + diry*diry + dirz*dirz);
-        if (len > 0) {
-            dirx /= len; diry /= len; dirz /= len;
-            /* compute projection of each constraint point onto this direction */
-            double p0x = FIXED_TO_FLOAT(model->vertices.x[constraint_verts[0]]);
-            double p0y = FIXED_TO_FLOAT(model->vertices.y[constraint_verts[0]]);
-            double p0z = FIXED_TO_FLOAT(model->vertices.z[constraint_verts[0]]);
-            seg_min = seg_max = 0.0;
-            for (int ci = 0; ci < constraint_n; ++ci) {
-                int vi = constraint_verts[ci];
-                double cx = FIXED_TO_FLOAT(model->vertices.x[vi]);
-                double cy = FIXED_TO_FLOAT(model->vertices.y[vi]);
-                double cz = FIXED_TO_FLOAT(model->vertices.z[vi]);
-                double t = ( (cx - p0x) * dirx + (cy - p0y) * diry + (cz - p0z) * dirz );
-                if (ci == 0 || t < seg_min) seg_min = t;
-                if (ci == 0 || t > seg_max) seg_max = t;
-            }
-            have_constraint = 1;
-            if (have_constraint) {
-
-            }
-        }
-    }
-
-    for (int i = 0; i < cnt; ++i) {
-        int j = (i + 1) % cnt;
-        double di = dist[i], dj = dist[j];
-        int vi = orig[i], vj = orig[j];
-
-        if (di == 0.0) cop_list[cop_n++] = vi;
-        if (di >= 0.0) pos_list[pos_n++] = vi;
-        if (di <= 0.0) neg_list[neg_n++] = vi;
-
-        if (di * dj < 0.0) {
-            double t = di / (di - dj);
-            double ix = FIXED_TO_FLOAT(vtx->x[vi]) + t * (FIXED_TO_FLOAT(vtx->x[vj]) - FIXED_TO_FLOAT(vtx->x[vi]));
-            double iy = FIXED_TO_FLOAT(vtx->y[vi]) + t * (FIXED_TO_FLOAT(vtx->y[vj]) - FIXED_TO_FLOAT(vtx->y[vi]));
-            double iz = FIXED_TO_FLOAT(vtx->z[vi]) + t * (FIXED_TO_FLOAT(vtx->z[vj]) - FIXED_TO_FLOAT(vtx->z[vi]));
-            /* if constraints provided, ensure intersection lies within segment */
-            if (have_constraint) {
-                int refvi = constraint_verts[0];
-                double rpx = FIXED_TO_FLOAT(model->vertices.x[refvi]);
-                double rpy = FIXED_TO_FLOAT(model->vertices.y[refvi]);
-                double rpz = FIXED_TO_FLOAT(model->vertices.z[refvi]);
-                double pt = ((ix - rpx) * dirx + (iy - rpy) * diry + (iz - rpz) * dirz);
-                if (pt < seg_min - 1e-6 || pt > seg_max + 1e-6) {
-
-                    continue;
-                }
-            }
-            int newvi = add_vertex(model, FLOAT_TO_FIXED((float)ix),
-                                           FLOAT_TO_FIXED((float)iy),
-                                           FLOAT_TO_FIXED((float)iz));
-            if (newvi >= 0) {
-                pos_list[pos_n++] = newvi;
-                neg_list[neg_n++] = newvi;
-                if (out_newverts && newcount < MAX_FACE_VERTICES) {
-                    newbuf[newcount++] = newvi;
-                }
-            }
-        }
-    }
-
-    if (out_newverts && out_n) {
-        *out_n = newcount;
-        for (int k = 0; k < newcount; ++k) out_newverts[k] = newbuf[k];
-    }
-
-    free(dist);
-    free(orig);
-
-    cleanup_list(pos_list, &pos_n);
-    cleanup_list(neg_list, &neg_n);
-    cleanup_list(cop_list, &cop_n);
-    remove_duplicates(pos_list, &pos_n);
-    remove_duplicates(neg_list, &neg_n);
-    if (cop_n >= 3) remove_duplicates(cop_list, &cop_n);
-
-
-    /* normally we require both sides to have at least three verts, but a
-       forced one-edge split bypasses this check. */
-    if (!force_one_edge && (pos_n < 3 || neg_n < 3)) return 0;
-
-    /* ensure polygon vertex order is sensible before measuring area */
-    reorder_poly(model, f1, pos_list, &pos_n);
-    reorder_poly(model, f1, neg_list, &neg_n);
-
-    /* calculate areas using the plane of the face being split (f1) rather
-       than the cutter plane.  This avoids the zero-area issue when the
-       two faces are perpendicular. */
-    double a1, b1, c1, d1;
-    compute_face_plane(model, f1, &a1, &b1, &c1, &d1);
-    double area_pos = poly_signed_area(model, pos_list, pos_n, a1, b1, c1);
-    double area_neg = poly_signed_area(model, neg_list, neg_n, a1, b1, c1);
-    if (fabs(area_pos) < 0.001 || fabs(area_neg) < 0.001) {
-        /* area seems small or zero; log for debugging but do not abort the
-           split.  numeric quantization sometimes makes a valid polygon appear
-           degenerate (see t.obj case). */
-
-        /* continue regardless */
-    }
-
-    reorder_poly(model, f1, pos_list, &pos_n);
-    reorder_poly(model, f1, neg_list, &neg_n);
-
-    int orig_cnt = faces->vertex_count[f1];
-    int orig_off = faces->vertex_indices_ptr[f1];
-    /* choose which side becomes the "kept" polygon.  if one side lacks
-       enough vertices we keep the other, unless both have >=3 in which case
-       keep the positive side by convention. */
-    int *keep_list = NULL, keep_n = 0;
-    int *other_list = NULL, other_n = 0;
-    if (pos_n >= 3 && (neg_n < 3 || !force_one_edge)) {
-        keep_list = pos_list; keep_n = pos_n;
-        other_list = neg_list; other_n = neg_n;
-    } else if (neg_n >= 3 && (pos_n < 3 || force_one_edge && pos_n < 3)) {
-        keep_list = neg_list; keep_n = neg_n;
-        other_list = pos_list; other_n = pos_n;
-    } else {
-        /* both valid or both too small; default to positive side */
-        keep_list = pos_list; keep_n = pos_n;
-        other_list = neg_list; other_n = neg_n;
-    }
-
-    if (keep_n <= orig_cnt) {
-        for (int k = 0; k < keep_n; ++k)
-            faces->vertex_indices_buffer[orig_off + k] = keep_list[k] + 1;
-        faces->vertex_count[f1] = keep_n;
-    } else {
-        int new_off = faces->total_indices;
-        for (int k = 0; k < keep_n; ++k)
-            faces->vertex_indices_buffer[new_off + k] = keep_list[k] + 1;
-        faces->vertex_indices_ptr[f1] = new_off;
-        faces->vertex_count[f1] = keep_n;
-        faces->total_indices += keep_n;
-    }
-    int orig_disp = faces->display_flag[f1];
-
-
-
-    /* create opposite fragment only if it has enough vertices */
-    if (other_n >= 3) {
-        int fneg = faces->face_count++;
-        faces->vertex_count[fneg] = other_n;
-        faces->vertex_indices_ptr[fneg] = faces->total_indices;
-        for (int k = 0; k < other_n; ++k)
-            faces->vertex_indices_buffer[faces->total_indices + k] = other_list[k] + 1;
-        faces->total_indices += other_n;
-        faces->sorted_face_indices[fneg] = fneg;
-        faces->display_flag[fneg] = orig_disp;
-    }
-
-    if (cop_n >= 3) {
-        int fcop = faces->face_count++;
-        faces->vertex_count[fcop] = cop_n;
-        faces->vertex_indices_ptr[fcop] = faces->total_indices;
-        for (int k = 0; k < cop_n; ++k)
-            faces->vertex_indices_buffer[faces->total_indices + k] = cop_list[k] + 1;
-        faces->total_indices += cop_n;
-        faces->sorted_face_indices[fcop] = fcop;
-        faces->display_flag[fcop] = orig_disp;
-    }
-
-    compute_face_bboxes3D(model);
-    return 1;
-}
-
-/*
- * Walk all face pairs and report 3D bbox overlaps.
- * Epsilon is applied in fixed-point to give a tiny tolerance (0.02 units).
- * After scanning every combination the function blocks until a key is pressed.
- */
-static void check_intersect(Model3D* model) {
-    if (!model) return;
-    compute_face_bboxes3D(model);
-    FaceArrays3D* faces = &model->faces;
-    int fc = faces->face_count;
-    /* no logging in check_intersect per request */
-    if (fc <= 1) {
-        /* no output when insufficient faces */
-        keypress();
-        return;
-    }
-
-    /* let user know the process may take some time */
-    printf("check_intersect: scanning %d faces, please wait...\n", fc);
-
-    /* tolerance in fixed-point (16.16) */
-    const Fixed32 eps = FLOAT_TO_FIXED(0.02f);
-
-    int count = 0;
-    int ip_count = 0; /* interpenetration counter */
-    /* we may split faces as we go; if a split occurs we restart the scan from
-       the beginning so that newly created pieces are also checked. */
-    int changed;
-    do {
-        changed = 0;
-        fc = faces->face_count; /* update after any splits */
-        for (int i = 0; i < fc; ++i) {
-            Fixed32 minx_i = faces->minx3[i];
-            Fixed32 maxx_i = faces->maxx3[i];
-            Fixed32 miny_i = faces->miny3[i];
-            Fixed32 maxy_i = faces->maxy3[i];
-            Fixed32 minz_i = faces->minz3[i];
-            Fixed32 maxz_i = faces->maxz3[i];
-            for (int j = i + 1; j < fc; ++j) {
-                Fixed32 minx_j = faces->minx3[j];
-                Fixed32 maxx_j = faces->maxx3[j];
-                Fixed32 miny_j = faces->miny3[j];
-                Fixed32 maxy_j = faces->maxy3[j];
-                Fixed32 minz_j = faces->minz3[j];
-                Fixed32 maxz_j = faces->maxz3[j];
-                /* check overlap on all three axes with epsilon tolerance */
-                if (minx_i <= maxx_j + eps && maxx_i >= minx_j - eps &&
-                    miny_i <= maxy_j + eps && maxy_i >= miny_j - eps &&
-                    minz_i <= maxz_j + eps && maxz_i >= minz_j - eps) {
-                    /* compute overlap extents along each axis */
-                    Fixed32 ox = (minx_i < minx_j ? minx_j : minx_i);
-                    Fixed32 ux = (maxx_i < maxx_j ? maxx_i : maxx_j);
-                    Fixed32 oy = (miny_i < miny_j ? miny_j : miny_i);
-                    Fixed32 uy = (maxy_i < maxy_j ? maxy_i : maxy_j);
-                    Fixed32 oz = (minz_i < minz_j ? minz_j : minz_i);
-                    Fixed32 uz = (maxz_i < maxz_j ? maxz_i : maxz_j);
-                    float dx = FIXED_TO_FLOAT(ux - ox);
-                    float dy = FIXED_TO_FLOAT(uy - oy);
-                    float dz = FIXED_TO_FLOAT(uz - oz);
-                    /* log raw fixed bbox values for debugging */
-
-                    /* log computed floats regardless of overlap */
-
-                    /* normally ignore pure-touching boxes, but we still
-                     * want to run the plane‑crossing check when one dimension
-                     * collapses to zero (as happens after centering), because
-                     * the face may still pass through the plane of the other.
-                     * dz>=0 is already allowed earlier; now accept dy>=0 as well.
-                     */
-                    if (dx >= 0.0f && dy >= 0.0f) {
-
-                        /* overlap detected; previously printed details */
-                        ++count;
-                        if (faces_share_vertex_or_edge(faces, i, j)) {
-                            /* share info suppressed */
-
-                        } else {
-                            double a1,b1,c1,d1, a2,b2,c2,d2;
-                            compute_face_plane(model, i, &a1, &b1, &c1, &d1);
-                            compute_face_plane(model, j, &a2, &b2, &c2, &d2);
-                            double norm1 = sqrt(a1*a1 + b1*b1 + c1*c1);
-                            double norm2 = sqrt(a2*a2 + b2*b2 + c2*c2);
-                            int coplanar = 0;
-                            if (norm1 > 0 && norm2 > 0) {
-                                double dot = a1*a2 + b1*b2 + c1*c2;
-                                double cosang = dot / (norm1 * norm2);
-                                if (fabs(fabs(cosang) - 1.0) < 0.01) {
-                                    double dist = fabs(d1 - d2) / norm1;
-                                    if (dist < FIXED_TO_FLOAT(eps)) {
-                                        coplanar = 1;
-                                    }
-                                }
-                            }
-                            if (coplanar) {
-                                /* coplanar skip message suppressed */
-
-                            }
-                            if (!coplanar) {
-                                /* use the stricter interior-crossing predicate for
-                                   statistics. boundary contacts (points/edges lying on
-                                   the other face) no longer count as interpenetrations.
-                                   this avoids the dozens of false positives seen earlier. */
-                                int interior = edge_crosses_interior(model, i, j) ||
-                                               edge_crosses_interior(model, j, i);
-                                if (interior) {
-                                    ++ip_count;
-
-                                } else {
-
-                                }
-                                /* now perform splitting decisions using the original
-                                   crossing-count heuristic (boundary hits may still
-                                   justify a cut). */
-                                /* compute crossing counts in both directions once */
-                            int cross_i_j = count_edge_crossings(model, i, j);
-                            int cross_j_i = count_edge_crossings(model, j, i);
-                            /* special rule: if exactly two edges of i cross j and none
-                               of j cross i, we want to split face i by plane j instead
-                               of the usual orientation. */
-                            if (cross_i_j == 2 && cross_j_i == 0) {
-                                /* two-edge reverse case, no output */
-                                if (split_face_by_plane(model, i, j, NULL, NULL, NULL, 0, 0)) {
-                                    changed = 1;
-                                    break;
-                                }
-                            } else if (cross_j_i == 2 && cross_i_j == 0) {
-                                /* two-edge normal case, no output */
-                                if (split_face_by_plane(model, j, i, NULL, NULL, NULL, 0, 0)) {
-                                    changed = 1;
-                                    break;
-                                }
-                            } else {
-                                /* fall back to standard behaviour */
-                                if (cross_i_j > 0) {
-                                    int force = (cross_i_j == 1);
-                                    if (split_face_by_plane(model, j, i, NULL, NULL, NULL, 0, force)) {
-                                        changed = 1;
-                                        break;
-                                    }
-                                }
-                                if (!changed && cross_j_i > 0) {
-                                    int force = (cross_j_i == 1);
-                                    if (split_face_by_plane(model, i, j, NULL, NULL, NULL, 0, force)) {
-                                        changed = 1;
-                                        break;
-                                    }
-                                }
-                            }
-                            }
-                            }
-                        }
-                    }
-                }
-            }
-            if (changed) break;
-    } while (changed);
-    /* report statistics before exiting */
-    printf("Total overlapping pairs: %d\n", count);
-    printf("Total interpenetrating pairs: %d\n", ip_count);
-    printf("Final face count: %d\n", faces->face_count);
-
-}
-
-// ============================================================================
-//                    USER INTERFACE FUNCTIONS
-// ============================================================================
-
-/**
- * OBSERVER PARAMETER INPUT
- * ========================
- * 
- * This function presents a text interface to allow the
- * user to specify 3D visualization parameters.
- * 
- * REQUESTED PARAMETERS:
- * - Horizontal angle: rotation around Y-axis (left/right view)
- * - Vertical angle: rotation around X-axis (up/down view)
- * - Distance: observer distance (zoom)
- * - Screen rotation angle: final rotation in 2D plane
- * 
- * ERROR HANDLING:
- * - Default values if input failure
- * - Automatic string->Fixed32 conversion with atof() then FLOAT_TO_FIXED
- */
-segment "code09";
-void getObserverParams(ObserverParams* params, Model3D* model) {
-    char input[50];  // Buffer for user input
-    
-    // Display section header
-    printf("\nObserver parameters:\n");
-    printf("============================\n");
-    printf("(Press ENTER to use default values - apply suggested auto-fit if available)\n");
-    
-    // Input horizontal angle (rotation around Y)
-    printf("Horizontal angle (degrees, default %d): ", params->angle_h);
-    if (fgets(input, sizeof(input), stdin) != NULL) {
-        // Remove newline
-        input[strcspn(input, "\n")] = 0;
-        if (strlen(input) != 0) {
-            params->angle_h = atoi(input);  // Parse integer degrees from input
-        }
-    }
-    
-    // Input vertical angle (rotation around X)  
-    printf("Vertical angle (degrees, default %d): ", params->angle_v);
-    if (fgets(input, sizeof(input), stdin) != NULL) {
-        // Remove newline
-        input[strcspn(input, "\n")] = 0;
-        if (strlen(input) != 0) {
-            params->angle_v = atoi(input);  // Parse integer degrees from input
-        }
-    }
-    
-
-    // Input screen rotation angle (final 2D rotation)
-    printf("Screen rotation angle (degrees, default %d): ", params->angle_w);
-    if (fgets(input, sizeof(input), stdin) != NULL) {
-        // Remove newline
-        input[strcspn(input, "\n")] = 0;
-        if (strlen(input) != 0) {
-            params->angle_w = atoi(input);  // Parse integer degrees from input
-        }
-    }
-
-    // Input observation distance (zoom/perspective).
-    // Press ENTER = auto-scale + center using sphere-based fit (default target),
-    // or enter a numeric value to use that distance directly (no scaling).
-    printf("Distance (ENTER = auto-scale, or enter a value): ");
-
-    if (fgets(input, sizeof(input), stdin) != NULL) {
-        // Remove newline
-        input[strcspn(input, "\n")] = 0;
-        if (strlen(input) == 0) {
-            // User pressed ENTER: if we have auto-fit suggestions from load, apply them; otherwise use default distance
-            if (model != NULL && model->auto_fit_ready) {
-                params->distance = model->auto_suggested_distance;
-                // Apply suggested projection scale to model so subsequent processing uses it
-                model->auto_proj_scale = model->auto_suggested_proj_scale;
-                model->auto_fit_applied = 1;
-                printf("Auto-fit applied (distance=%.4f proj_scale=%.2f). Use +/- to adjust.\n", FIXED_TO_FLOAT(model->auto_suggested_distance), FIXED_TO_FLOAT(model->auto_suggested_proj_scale));
-            } else if (model != NULL) {
-                // No precomputed suggestion: fallback to sensible default
-                params->distance = FLOAT_TO_FIXED(30.0);
-            } else {
-                params->distance = FLOAT_TO_FIXED(30.0);
-            }
-        } else {
-            // User provided a distance value -> use it directly (no auto-scale)
-            params->distance = FLOAT_TO_FIXED(atof(input)); // String->Fixed32 conversion
-        }
-    } else {
-        // fgets failed; default behavior: if we have a model, apply precomputed auto-fit suggestions, else fallback distance
-        if (model != NULL && model->auto_fit_ready) {
-            params->distance = model->auto_suggested_distance;
-            model->auto_proj_scale = model->auto_suggested_proj_scale;
-            model->auto_fit_applied = 1;
-            printf("Auto-fit applied (distance=%.4f proj_scale=%.2f). Use +/- to adjust.\n", FIXED_TO_FLOAT(model->auto_suggested_distance), FIXED_TO_FLOAT(model->auto_suggested_proj_scale));
-        } else if (model != NULL) {
-            params->distance = FLOAT_TO_FIXED(30.0);
-        } else {
-            params->distance = FLOAT_TO_FIXED(30.0);        // Default distance: balanced view (Fixed Point)
-        }
-    }
-
-    // Store the current observer distance for use in geometric epsilon scaling 
-    // and other distance-dependent calculations.
-    current_observer_distance = params->distance;
-}
-
-/**
- * processModelFast -- Combined transformation, projection, and painter invocation
- * ============================================================================
- * Responsibilities:
- *  - Transform model vertices into observer-space (xo/yo/zo) using Fixed32 arithmetic.
- *  - Project to integer screen coords (x2d/y2d) using configured projection scale.
- *  - If using the FLOAT painter mode, populate float caches (float_xo/float_yo/float_zo etc.)
- *    used by the float-based painter for efficient per-face computations.
- *  - Call `calculateFaceDepths()` to compute per-face depth metrics, bboxes and plane coeffs.
- *  - Dispatch to the selected painter implementation (FAST, FIXED, or FLOAT) to build
- *    the final `sorted_face_indices` for rendering.
- *
- * Notes:
- *  - Autoscaling is **not** performed here; any autoscale (previously implemented in an archived helper) must be applied
- *    before calling `processModelFast()` (e.g. at load time or via explicit user action). The archived helper's implementation is in `chutier.txt`.
- *  - The painter may only sort the visible faces when back-face culling is enabled. Culled
- *    faces are appended after visible faces to preserve index stability.
- *  - Timing instrumentation prints per-stage costs when not in PERFORMANCE_MODE.
- *  - OPTIMISATION : pre calculate matrix coefficients and use direct table access 
- *   for trig functions to avoid function call overhead. 100% Fixed32 loop with no conversions for maximum speed.
- */
-
-// ============================================================================
-//                    BASIC FUNCTION IMPLEMENTATIONS
-// ============================================================================
-
-/**
- * VERTEX READING FROM OBJ FILE
- * ============================
- * 
- * This function parses an OBJ format file to extract
- * vertices (3D points). It searches for lines starting with "v "
- * and extracts X, Y, Z coordinates.
- * 
- * OBJ FORMAT FOR VERTICES:
- *   v 1.234 5.678 9.012
- *   v -2.5 0.0 3.14159
- * 
- * ALGORITHM:
- * 1. Open file in read mode
- * 2. Read line by line with fgets()
- * 3. Detect "v " lines with character verification
- * 4. Extract coordinates with sscanf()
- * 5. Store in array with bounds checking
- * 6. Progressive display for user feedback
- * 
- * ERROR HANDLING:
- * - File opening verification
- * - Array overflow protection
- * - Coordinate format validation
- */
-segment "code12";
-int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Model3D* owner) {
-    FILE *file;
-    char line[MAX_LINE_LENGTH];
-    int line_number = 1;
-    int vertex_count = 0;
-    
-    // Open file in read mode
-    file = fopen(filename, "r");
-    if (file == NULL) {
-        return -1;  // Return -1 on error
-    }
-    
-    printf("\nReading vertices from file '%s' ", filename);
-    
-    // Read file line by line
-    while (fgets(line, sizeof(line), file) != NULL) {
-        if (line[0] == 'v' && line[1] == ' ') {
-            if (vertex_count < max_vertices) {
-                float x, y, z;  // Temporary reading in float
-                if (sscanf(line + 2, "%f %f %f", &x, &y, &z) == 3) {
-                    vtx->x[vertex_count] = FLOAT_TO_FIXED(x);
-                    // OBJ files often use Z as up; convert to viewer convention by swapping axes
-                    vtx->y[vertex_count] = FLOAT_TO_FIXED(z);   // treat OBJ Z as up
-                    vtx->z[vertex_count] = FLOAT_TO_FIXED(y);  // rotate -90° around X, corrected orientation
-                    vertex_count++;
-                    if (vertex_count % 10 == 0) printf("..");
-
-                } else {
-                    printf("[\nDEBUG] readVertices: sscanf failed at line %d: %s\n", line_number, line);
-                    keypress();
-                }
-            } else {
-                printf("\n[DEBUG] readVertices: vertex limit reached (%d)\n", max_vertices);
-                keypress();
-            }
-        }
-        line_number++;
-    }
-    printf("\n");
-    printf("Reading vertices finished : %d vertices read.\n", vertex_count);
-
-    // Close file
-    fclose(file);
-
-    // Compute bbox center and save into owner (do not modify vertex coords)
-    if (vertex_count > 0 && owner) {
-        Fixed32 xmin = vtx->x[0], xmax = vtx->x[0];
-        Fixed32 ymin = vtx->y[0], ymax = vtx->y[0];
-        Fixed32 zmin = vtx->z[0], zmax = vtx->z[0];
-        for (int i = 1; i < vertex_count; ++i) {
-            if (vtx->x[i] < xmin) xmin = vtx->x[i];
-            if (vtx->x[i] > xmax) xmax = vtx->x[i];
-            if (vtx->y[i] < ymin) ymin = vtx->y[i];
-            if (vtx->y[i] > ymax) ymax = vtx->y[i];
-            if (vtx->z[i] < zmin) zmin = vtx->z[i];
-            if (vtx->z[i] > zmax) zmax = vtx->z[i];
-        }
-        owner->auto_center_x = (Fixed32)((xmin + xmax) / 2);
-        owner->auto_center_y = (Fixed32)((ymin + ymax) / 2);
-        owner->auto_center_z = (Fixed32)((zmin + zmax) / 2);
-        // Apply centering to vertex coordinates (default behavior requested)
-        for (int i = 0; i < vertex_count; ++i) {
-            vtx->x[i] = FIXED_SUB(vtx->x[i], owner->auto_center_x);
-            vtx->y[i] = FIXED_SUB(vtx->y[i], owner->auto_center_y);
-            vtx->z[i] = FIXED_SUB(vtx->z[i], owner->auto_center_z);
-        }
-        owner->auto_centered = 1; // indicate coords were centered
-
-        // --- Brute auto-fit suggestion (Fixed32) ---
-        // Compute model-space max dimension (bbox metric) and suggest a distance = k * max_dim
-        Fixed32 dx = FIXED_SUB(xmax, xmin);
-        Fixed32 dy = FIXED_SUB(ymax, ymin);
-        Fixed32 dz = FIXED_SUB(zmax, zmin);
-        Fixed32 max_dim = dx;
-        if (dy > max_dim) max_dim = dy;
-        if (dz > max_dim) max_dim = dz;
-        // k = 3 (user-specified)
-        owner->auto_suggested_distance = FIXED_MUL_64(max_dim, INT_TO_FIXED(3));
-
-        // Compute projected bounds using default observer angles (30,20,0) to suggest projection scale
-        int ah = 30, av = 20, aw = 0;
-        Fixed32 cos_h = cos_deg_int(ah), sin_h = sin_deg_int(ah);
-        Fixed32 cos_v = cos_deg_int(av), sin_v = sin_deg_int(av);
-        const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
-        const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
-        const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
-        const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
-
-        float pxmin = 1e30f, pxmax = -1e30f, pymin = 1e30f, pymax = -1e30f;
-        for (int i = 0; i < vertex_count; ++i) {
-            Fixed32 x = vtx->x[i]; Fixed32 y = vtx->y[i]; Fixed32 z = vtx->z[i];
-            Fixed32 term1 = FIXED_MUL_64(x, cos_h_cos_v);
-            Fixed32 term2 = FIXED_MUL_64(y, sin_h_cos_v);
-            Fixed32 term3 = FIXED_MUL_64(z, sin_v);
-            Fixed32 zo = FIXED_ADD(FIXED_SUB(FIXED_SUB(FIXED_NEG(term1), term2), term3), owner->auto_suggested_distance);
-            if (zo > 0) {
-                Fixed32 xo = FIXED_ADD(FIXED_NEG(FIXED_MUL_64(x, sin_h)), FIXED_MUL_64(y, cos_h));
-                Fixed32 yo = FIXED_ADD(FIXED_SUB(FIXED_NEG(FIXED_MUL_64(x, cos_h_sin_v)), FIXED_MUL_64(y, sin_h_sin_v)), FIXED_MUL_64(z, cos_v));
-                float px = FIXED_TO_FLOAT(xo) / FIXED_TO_FLOAT(zo);
-                float py = FIXED_TO_FLOAT(yo) / FIXED_TO_FLOAT(zo);
-                if (px < pxmin) pxmin = px;
-                if (px > pxmax) pxmax = px;
-                if (py < pymin) pymin = py;
-                if (py > pymax) pymax = py;
-            }
-        }
-        // Compute projection scale (pixels per projected unit) to fit viewport with margin m
-        float margin = 0.9f;
-        float winw = (float)(CENTRE_X * 2);
-        float winh = (float)(CENTRE_Y * 2);
-        float s = 100.0f; // fallback
-        if (pxmax > pxmin && pymax > pymin) {
-            float s1 = (winw * margin) / (pxmax - pxmin);
-            float s2 = (winh * margin) / (pymax - pymin);
-            s = (s1 < s2) ? s1 : s2;
-        }
-        owner->auto_suggested_proj_scale = FLOAT_TO_FIXED(s);
-        owner->auto_fit_ready = 1;
-    }
-
-    // printf("\n\nAnalyse terminee. %d lignes lues.\n", line_number - 1);
-    return vertex_count;  // Return the number of vertices read
-}
-
-
-segment "code13";
-// Function to read faces into parallel arrays in FaceArrays3D structure
-int readFaces_model(const char* filename, Model3D* model) {
-    FILE *file;
-    char line[MAX_LINE_LENGTH];
-    int line_number = 1;
-    int face_count = 0;
-    int i;
-    
-    // Validate model structure
-    if (model == NULL || model->faces.vertex_count == NULL) {
-        printf("Error: Invalid model structure for readFaces_model\n");
-        return -1;
-    }
-    
-    // Open file in read mode
-    file = fopen(filename, "r");
-    if (file == NULL) {
-        printf("Error: Unable to open file '%s' to read faces\n", filename);
-        return -1;
-    }
-    
-    printf("\nReading faces from file '%s' ", filename);
-    
-    int buffer_pos = 0;  // Current position in the packed buffer
-    
-    // Read file line by line
-    while (fgets(line, sizeof(line), file) != NULL) {
-        // Check if line starts with "f " (face)
-        if (line[0] == 'f' && line[1] == ' ') {
-            if (face_count < MAX_FACES) {
-                // Initialize face data
-                model->faces.vertex_count[face_count] = 0;
-                model->faces.display_flag[face_count] = 1;  // Displayable by default
-                model->faces.saved_vertex_count[face_count] = 0;  // no hide/restore backup yet
-                model->faces.vertex_indices_ptr[face_count] = buffer_pos;  // Store offset to this face's indices
-                
-                // Parse vertices from this face
-                char *ptr = line + 2;  // Start after "f "
-                int temp_indices[MAX_FACE_VERTICES];
-                int temp_vertex_count = 0;
-                int invalid_index_found = 0;
-                
-                // Parse character by character
-                while (*ptr != '\0' && *ptr != '\n' && temp_vertex_count < MAX_FACE_VERTICES) {
-                    // Skip spaces and tabs
-                    while (*ptr == ' ' || *ptr == '\t') ptr++;
-                    
-                    if (*ptr == '\0' || *ptr == '\n') break;
-                    
-                    // Read the number
-                    int vertex_index = 0;
-                    while (*ptr >= '0' && *ptr <= '9') {
-                        vertex_index = vertex_index * 10 + (*ptr - '0');
-                        ptr++;
-                    }
-                    
-                    // Skip texture/normal data (after /)
-                    while (*ptr != '\0' && *ptr != ' ' && *ptr != '\t' && *ptr != '\n') {
-                        ptr++;
-                    }
-                    
-                    // Validate vertex index
-                    if (vertex_index >= 1) {
-                        if (vertex_index > readVertices_last_count) {
-                            // Index out of bounds
-                            invalid_index_found = 1;
-                        }
-                        temp_indices[temp_vertex_count] = vertex_index;
-                        temp_vertex_count++;
-                    }
-                }
-                
-                // Check for errors
-                if (invalid_index_found) {
-                    printf("\nERROR: Face at line %d references vertex index > %d vertices\n", 
-                           line_number, readVertices_last_count);
-                    fclose(file);
-                    return -1;
-                } else {
-                    // Store valid indices into the packed buffer
-                    for (i = 0; i < temp_vertex_count; i++) {
-                        model->faces.vertex_indices_buffer[buffer_pos++] = temp_indices[i];
-                    }
-                    model->faces.vertex_count[face_count] = temp_vertex_count;
-                    model->faces.total_indices += temp_vertex_count;
-                    
-                    // Skip faces with zero vertices
-                    if (model->faces.vertex_count[face_count] > 0) {
-                        face_count++;
-                        if (face_count % 10 == 0) {printf(".");}
-                    } else {
-                        printf("     -> WARNING: Face without valid vertices ignored\n");
-                    }
-                }
-            } else {
-                printf("     -> WARNING: Face limit reached (%d)\n", MAX_FACES);
-            }
-        }
-        
-        line_number++;
-    }
-    
-    // Close file
-    fclose(file);
-    
-    model->faces.face_count = face_count;
-    
-    // Initialize sorted_face_indices with identity mapping (will be sorted later)
-    for (i = 0; i < face_count; i++) {
-        model->faces.sorted_face_indices[i] = i;
-    }
-    
-    printf("\nReading faces finished : %d faces read.\n", face_count);
-    return face_count;
-}
-
-
-static void computeOrientationShading(Model3D* model) {
-    if (!model) return;
-    FaceArrays3D* faces = &model->faces;
-    int face_count = faces->face_count;
-
-    for (int i = 0; i < face_count; ++i) {
-        float a_f = (float)FIXED64_TO_FLOAT(faces->plane_a[i]);
-        float b_f = (float)FIXED64_TO_FLOAT(faces->plane_b[i]);
-        float c_f = (float)FIXED64_TO_FLOAT(faces->plane_c[i]);
-        float mag = sqrtf(a_f * a_f + b_f * b_f + c_f * c_f);
-        if (mag <= 0.0f) {
-            face_shade_color[i] = COL_FILL_DEFAULT;
-        } else {
-            float cosz = fabsf(c_f / mag);
-            int shade = (int)(cosz * 15.0f + 0.5f);
-            if (shade < 0) shade = 0;
-            else if (shade > 15) shade = 15;
-            face_shade_color[i] = shade;
-        }
-    }
-}
-
-
 
 // Dump face plane coefficients and depth stats to CSV
 // Columns: face;a;b;c;d;z_min;z_mean;z_max;vertex_indices (or CSV style depending on flag)
-segment "code15";
+
 // New signature: last parameter 'alt_format' == 0 -> default (commas and dot decimal)
 //                                   == 1 -> use semicolon column separator and comma decimal separator
 void dumpFaceEquationsCSV(Model3D* model, const char* csv_filename, int alt_format) {
@@ -9366,6 +9586,192 @@ static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename) {
     printf("Wrote sorted face indices to %s (%d faces)\n", txt_filename, face_count);
 }
 
+segment "utilities";
+// ============================================================================
+//  7. 3D MODEL MANAGEMENT, UTILITIES & SYSTEM HELPERS
+// ============================================================================
+
+/* show_help_pager
+ * ----------------
+ * Display the interactive help menu in pages limited to 20 lines each.
+ * The header is repeated at the top of every page. The user can press
+ * SPACE to continue to the next page or 'Q'/'q' to quit the help early.
+ */
+static void show_help_pager(void) {
+    const char* header[] = {
+        "===================================",
+        "    HELP - Keyboard Controller",
+        "===================================",
+        "" /* blank line */
+    };
+    const int header_count = sizeof(header)/sizeof(header[0]);
+
+    const char* lines[] = {
+        "Space: Display model info",
+        "A/Z: Decrease/Increase distance",
+        "+/-: Adjust projection scale (+/-10%)",
+        "K: Edit angles/distance (ENTER may auto-fit)",
+        "Arrow Left/Right: Change horizontal angle",
+        "Arrow Up/Down: Change vertical angle",
+        "W/X: Change screen rotation angle",
+        "C: Toggle color palette display",
+        "G: Cycle palettes",
+        "!: Toggle orientation shading",
+        "J: Toggle jittered rendering",
+        ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
+        ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
+        "1: Painter = FAST (simple sort only)",
+        "2: Painter = NORMAL (Fixed32/64)",
+        "3: Painter = GEO (geometry-only). Can be slow for large models",
+        "4: Painter = CORRECT (painter_correct)",
+        "5: Painter = CORRECTV2",
+        "O: Render scanline Z-Buffer (alternative to painter algorithm)",
+        "6: Both colors RANDOM mode",
+        "7: Choose fill color",
+        "8: Choose frame color",
+        "9: Reset colors, palette 0, and shading OFF",
+        "P: Toggle frame-only polygons",
+        "B: Toggle back-face culling",
+        "I: Toggle display of inconclusive pairs",
+        "E/e: Pan left", 
+        "R/r: Pan right",
+        "T/t: Pan up",
+        "Y/y: Pan down",
+        "0: Reset pan",
+        "D: Inspect faces BEFORE target",
+        "S: Inspect faces AFTER target",
+        "V: Show single face (navigate with arrows, show normals, space for details and other actions including hide/restore a face or all faces)",
+        "Q: Interactive face-pair inspector (space for details, then R/E/G for more actions)",
+        "M: Debug pair_plane_before",
+        "L: Label faces with IDs",
+        "F: Dump face data (3D, 2D, sort order) to file",
+        "N: Load new model",
+        "*: save SHGR screen as a PIC ($C1) not compressed file",
+        "H: Display this help message",
+        "ESC: Quit program"
+    };
+    int n = sizeof(lines)/sizeof(lines[0]);
+
+    const int max_lines = 20; // page height limit
+    int content_per_page = max_lines - header_count;
+    if (content_per_page <= 0) content_per_page = 1;
+
+    int pos = 0;
+    while (pos < n) {
+        // Print header
+        for (int h = 0; h < header_count; ++h) printf("%s\n", header[h]);
+        // Print a page of content
+        int end = pos + content_per_page;
+        for (int i = pos; i < end && i < n; ++i) printf("%s\n", lines[i]);
+
+        // Prompt for next action on every page.
+        printf("\nPress ESC to quit, any other key to continue...\n");
+        char key = getkeypress(); 
+
+        if (key == 27) return; // ESC quits
+
+        // Any other key advances page. If on final page, wrap to first page.
+        if (end >= n) {
+            pos = 0;
+        } else {
+            pos = end;
+        }
+
+        // clear a separating line between pages
+        DoText();
+        printf("\n");
+    }
+}
+
+void DoText() {
+        shroff();
+        putchar((char) 12); // Clear screen    
+}
+void setProDOSFileType(const char* filename, int fileType, long auxType) {
+    FileInfoRecGS pb;
+    GSString255 gsName;
+
+    gsName.length = strlen(filename);
+    strncpy((char*)gsName.text, filename, gsName.length);
+
+    pb.pCount = 5;              // verify against your GSOS.h - number of params for this call
+    pb.pathname = &gsName;
+    pb.access = 0xC3;           // standard full-access default, unchanged
+    pb.fileType = fileType;     // e.g. 0xC1
+    pb.auxType = auxType;       // e.g. 0x0000
+    pb.storageType = 0;         // 0 = leave unchanged (per GS/OS SetFileInfo semantics)
+    pb.optionList = 0;
+
+    SetFileInfoGS(&pb);
+}
+
+#define SHR_BASE        0xE12000UL
+#define SHR_SIZE        32768UL
+void saveSHRAsRawPic(const char *filename)
+{
+    FILE *out;
+    unsigned char *shr;
+    unsigned long i;
+
+    /*
+     * Adresse réelle de la mémoire SHR :
+     *
+     * $E1:2000 = $E12000
+     *
+     * Le cast en pointeur 32 bits permet à ORCA/C
+     * d'utiliser l'adressage long.
+     */
+    shr = (volatile unsigned char *)SHR_BASE;
+
+    out = fopen(filename, "wb");
+
+    if (out == NULL) {
+        printf("Error: unable to open %s for writing\n", filename);
+        return;
+    }
+
+    /*
+     * Copie brute des 32 Ko SHR.
+     *
+     * $E12000 -> $E19FFF
+     */
+    for (i = 0; i < SHR_SIZE; i++) {
+        fputc(shr[i], out);
+    }
+
+    fclose(out);
+
+    /*
+     * PIC, non compressé.
+     */
+    setProDOSFileType(filename, 0xC1, 0x0000);
+
+    printf("Saved %s\n", filename);
+}
+
+// --- Generic screenshot entry point, callable after ANY renderer ---
+void saveNextScreenshot(void) {
+    char fname[16];
+    int idx;
+    FILE* test;
+
+    for (idx = 0; idx < 1000; idx++) {
+        sprintf(fname, "screen%03d.PIC", idx);
+        test = fopen(fname, "rb");
+        if (test == NULL) {
+            break; // this index is free
+        }
+        fclose(test);
+    }
+
+    if (idx >= 1000) {
+        printf("Error: no available screen index (000-999 all used)\n");
+        return;
+    }
+
+    saveSHRAsRawPic(fname);
+}
+
 // Helper macro to swap face indices in the sorted_face_indices array
 // (We swap indices, not the faces themselves, to keep the buffer intact)
 #define SWAP_FACE(faces, i, j) \
@@ -9374,12 +9780,6 @@ static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename) {
         faces->sorted_face_indices[i] = faces->sorted_face_indices[j]; \
         faces->sorted_face_indices[j] = temp_idx; \
     } while (0)
-
-
-
-
-
-
 
 
 

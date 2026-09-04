@@ -37,6 +37,8 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 
 ## Limitations 
 However, it has many limitations, including: speed (requires a graphics accelerator or emulator), the number of vertices and faces, the number of vertices per face, very limited handling of intersecting faces, and handling of the case of cyclic overlap by scanline Z-buffer only.
+Example : ![charpente_shaded](Screenshots/cyclic_overlap.png)
+This image couldn't have been generated with painters as they are implemented here. But Z-Buffer scanline function (triggered py 'O' key) did it correctly.
 
 ### Quick start keys
 

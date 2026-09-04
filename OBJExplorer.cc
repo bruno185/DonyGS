@@ -247,7 +247,6 @@ segment "code22";
                 if (show_inconclusive && inconclusive_pairs_count > 0) {
                     frameInconclusivePairs(model);  
                 }
-                
                 // Wait for key press and get key code
 
         key = getkeypress();
@@ -695,6 +694,20 @@ segment "code22";
             case 117: // 'u'
                 // printf("Painter geo V1: toggle geometry-only painter mode for testing\n");
                 // painter_geoV1(model, model->faces.face_count);
+                startgraph(mode);
+                // Implement the desired behavior for the 'O' key here
+                int startTimeOld = GetTick();
+                renderModelScanlineZBuffer_old(model);
+                int endTimeOld = GetTick();
+                key = getkeypress();
+                if (key == '*') { saveNextScreenshot(); }
+
+                endgraph();
+                DoText();
+
+                // printf("endtime = %d\n", endTime);
+                printf("Z-Buffer scanline render time: %d ticks. Press a key to continue.\n", endTimeOld - startTimeOld);
+                keypress();
                 goto loopReDraw;
 
 
