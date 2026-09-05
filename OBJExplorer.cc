@@ -10,7 +10,7 @@
  *   Reads simplified OBJ files (vertices "v" and faces "f"), transforms them into observer space,
  *   projects to 2D screen coordinates and renders filled polygons.
  *
- * Highlights (2026):
+ * Highlights :
  *   - Target: Apple IIGS (ORCA/C, QuickDraw)
  *   - Painter modes:
  *       * FAST  : z_mean + bbox tests (very fast, less robust)
@@ -20,41 +20,24 @@
  *       * CORRECT : Advanced ordering correction with local face reordering
  *       * CORRECTV2 : Experimental local correction (painter_correctV2) for
  *                   pathological cases
- *   - Interactive debug helpers: `M` for `pair_plane_before` diagnostics, `Q`
- *     for interactive face-pair inspection, `D` / `S` for before/after inspection,
- *     and `I` for inconclusive pair display.
- *   - Observer-space back-face culling toggle (`B` key) that marks faces as
- *     non-displayable and restricts sorting to visible faces for correctness
- *     and speed when enabled.
- *   - Diagnostic helpers: inconclusive pair recording, `frameInconclusivePairs()`
- *     for visual debugging, and timing instrumentation to measure stages.
- *   - Performance: heavy Fixed32 optimizations, precomputed trig tables, buffer
- *     reuse to avoid allocations and selective sorting when culling is active.
- *
+ *   - Z-Buffer scanline rendering implémented
+
  * Responsibilities (per-frame):
  *   - Transform vertices (Fixed32) to observer-space (xo/yo/zo).
  *   - Project to integer screen coordinates (x2d/y2d).
  *   - Compute per-face metrics: z_min/z_max/z_mean, bbox, plane coefficients.
  *   - Dispatch to the selected painter to populate `sorted_face_indices`.
- *   - Provide debug overlays (frame inconclusive pairs) and logging.
+ *   - Provide tools to inspect and debug the rendering process, 
+ *     including visual overlays for inconclusive face pairs and timing instrumentation.
  *
- * Notes:
- *   - This file has evolved beyond the original Apple IIGS reference to include
- *     platform-specific frontends while preserving the algorithmic core.
- *   - Experimental: `painter_correctV2` and the in-memory face-splitting logic
- *     are work-in-progress and may be unstable on complex models; use with
- *     caution and enable only for debugging/analysis.
- *   - The code is optimized for interactive use; use the FAST painter for
- *     high frame-rate, or FIXED/CORRECT modes for correctness on tricky geometry.
- *     (FLOAT is archived in `chutier.txt`.)
  *
  * Author: Bruno
- * Date: 2026-01-23
+ * Date: programming started in january 2026
  * ============================================================================
  */
 
 // ==============================================================
-// THIS IS THE MAIN PROGRAM
+// MAIN PROGRAM
 // ==============================================================
 //
 #pragma memorymodel 1
@@ -63,12 +46,12 @@
 #include "engine.c"
 
 
-segment "code22";
+segment "main";
     int main() {
         Model3D* model;
         ObserverParams params;
         char filename[100];
-        char input[50];
+        // char input[50];
         int colorpalette = 0; // default color palette
         int last_process_time_start = 0;
         int last_process_time_end = 0;
@@ -219,7 +202,7 @@ segment "code22";
     loopReDraw:
         {
             int key = 0;
-            char input[50];
+            // char input[50];
 
             if (model->faces.face_count > 0) {
                 // Initialize QuickDraw
@@ -259,7 +242,6 @@ segment "code22";
         }
 
         DoText();           // Show text screen
-
         // Handle keyboard input with switch statement
         switch (key) {
             case 32:  // Space bar - display info and redraw
@@ -753,3 +735,4 @@ segment "code22";
         destroyModel3D(model);
         return 0;
     }
+

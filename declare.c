@@ -19,6 +19,8 @@
 #include <orca.h>       // ORCA specific functions (startgraph, etc.)
 #include <stdint.h>     // uint32_t, etc.
 #include <GSOS.h>
+#include <texttool.h>   // ORCA text mode functions (TextStartUp, WriteCString, etc.)
+#include <misctool.h>   // Apple IIGS miscellaneous tools (MTStartUp, etc.)
 
 segment "data";
 

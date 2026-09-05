@@ -2033,7 +2033,6 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
     return 0;
 }
 
-
 /**
  * PAINTER'S ALGORITHM - NEWELL / SANCHA (detailed)
  * =================================================
@@ -2742,7 +2741,6 @@ void painter_geoV2(Model3D* model, int face_count) {
     pair_cache_destroy(cache);
     printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
 }
-
 
 /* painter_correct
  * ----------------
@@ -5278,7 +5276,7 @@ void normalizeAutoFitDistanceTo150(Model3D* model) {
  * - Automatic string->Fixed32 conversion with atof() then FLOAT_TO_FIXED
  */
 void getObserverParams(ObserverParams* params, Model3D* model) {
-    char input[50];  // Buffer for user input
+    char userinput[50];  // Buffer for user input
     
     // Display section header
     printf("\nObserver parameters:\n");
@@ -5287,32 +5285,32 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
     
     // Input horizontal angle (rotation around Y)
     printf("Horizontal angle (degrees, default %d): ", params->angle_h);
-    if (fgets(input, sizeof(input), stdin) != NULL) {
+    if (fgets(userinput, sizeof(userinput), stdin) != NULL) {
         // Remove newline
-        input[strcspn(input, "\n")] = 0;
-        if (strlen(input) != 0) {
-            params->angle_h = atoi(input);  // Parse integer degrees from input
+        userinput[strcspn(userinput, "\n")] = 0;
+        if (strlen(userinput) != 0) {
+            params->angle_h = atoi(userinput);  // Parse integer degrees from input
         }
     }
     
     // Input vertical angle (rotation around X)  
     printf("Vertical angle (degrees, default %d): ", params->angle_v);
-    if (fgets(input, sizeof(input), stdin) != NULL) {
+    if (fgets(userinput, sizeof(userinput), stdin) != NULL) {
         // Remove newline
-        input[strcspn(input, "\n")] = 0;
-        if (strlen(input) != 0) {
-            params->angle_v = atoi(input);  // Parse integer degrees from input
+        userinput[strcspn(userinput, "\n")] = 0;
+        if (strlen(userinput) != 0) {
+            params->angle_v = atoi(userinput);  // Parse integer degrees from input
         }
     }
     
 
     // Input screen rotation angle (final 2D rotation)
     printf("Screen rotation angle (degrees, default %d): ", params->angle_w);
-    if (fgets(input, sizeof(input), stdin) != NULL) {
+    if (fgets(userinput, sizeof(userinput), stdin) != NULL) {
         // Remove newline
-        input[strcspn(input, "\n")] = 0;
-        if (strlen(input) != 0) {
-            params->angle_w = atoi(input);  // Parse integer degrees from input
+        userinput[strcspn(userinput, "\n")] = 0;
+        if (strlen(userinput) != 0) {
+            params->angle_w = atoi(userinput);  // Parse integer degrees from input
         }
     }
 
@@ -5321,10 +5319,10 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
     // or enter a numeric value to use that distance directly (no scaling).
     printf("Distance (ENTER = auto-scale, or enter a value): ");
 
-    if (fgets(input, sizeof(input), stdin) != NULL) {
+    if (fgets(userinput, sizeof(userinput), stdin) != NULL) {
         // Remove newline
-        input[strcspn(input, "\n")] = 0;
-        if (strlen(input) == 0) {
+        userinput[strcspn(userinput, "\n")] = 0;
+        if (strlen(userinput) == 0) {
             // User pressed ENTER: if we have auto-fit suggestions from load, apply them; otherwise use default distance
             if (model != NULL && model->auto_fit_ready) {
                 params->distance = model->auto_suggested_distance;
@@ -5340,7 +5338,7 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
             }
         } else {
             // User provided a distance value -> use it directly (no auto-scale)
-            params->distance = FLOAT_TO_FIXED(atof(input)); // String->Fixed32 conversion
+            params->distance = FLOAT_TO_FIXED(atof(userinput)); // String->Fixed32 conversion
         }
     } else {
         // fgets failed; default behavior: if we have a model, apply precomputed auto-fit suggestions, else fallback distance
@@ -5958,7 +5956,6 @@ void display_model_face_ids(Model3D* model, ObserverParams* params, const char* 
 }
 
 // --- Scanline Z-Buffer ---
-
 // Alternative renderer, triggered by a dedicated key (e.g. Z/z) in the main
 // viewer loop. Entirely additive: does not touch processModelFast,
 // calculateFaceDepths, or the existing painter's-algorithm pipeline. Consumes
@@ -6636,8 +6633,6 @@ void renderModelScanlineZBuffer(Model3D* model) {
         renderModelScanlineZBuffer_biased(model);
     }
 }
-
-
 
 
 
@@ -9772,15 +9767,12 @@ void saveNextScreenshot(void) {
     saveSHRAsRawPic(fname);
 }
 
-// Helper macro to swap face indices in the sorted_face_indices array
-// (We swap indices, not the faces themselves, to keep the buffer intact)
-#define SWAP_FACE(faces, i, j) \
-    do { \
-        int temp_idx = faces->sorted_face_indices[i]; \
-        faces->sorted_face_indices[i] = faces->sorted_face_indices[j]; \
-        faces->sorted_face_indices[j] = temp_idx; \
-    } while (0)
-
-
-
+// // Helper macro to swap face indices in the sorted_face_indices array
+// // (We swap indices, not the faces themselves, to keep the buffer intact)
+// #define SWAP_FACE(faces, i, j) \
+//     do { \
+//         int temp_idx = faces->sorted_face_indices[i]; \
+//         faces->sorted_face_indices[i] = faces->sorted_face_indices[j]; \
+//         faces->sorted_face_indices[j] = temp_idx; \
+//     } while (0)
 
