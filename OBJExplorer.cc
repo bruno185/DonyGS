@@ -191,13 +191,11 @@ segment "main";
 
     bigloop:
         // Process model with parameters - OPTIMIZED VERSION
-            // Process model with parameters - OPTIMIZED VERSION
         last_process_time_start = GetTick();
         printf("Processing model...\n");
         // in processModelFast : if Frame-only mode is active, skip face sorting and use simple painter
         processModelFast(model, &params, filename);
         last_process_time_end = GetTick();
-
 
     loopReDraw:
         {

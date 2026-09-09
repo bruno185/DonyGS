@@ -2598,8 +2598,8 @@ void painter_geoV2(Model3D* model, int face_count) {
     Fixed32* face_zmin = faces->z_min;   /* may be NULL */
     Fixed32* face_zmax = faces->z_max;
 
-    printf("Running painter_geoV2 with %d faces (cull_back_faces=%d)...\n",
-           face_count, cull_back_faces);
+    // printf("Running painter_geoV2 with %d faces (cull_back_faces=%d)...\n",
+    //        face_count, cull_back_faces);
 
     painter_newell_sancha_fast(model, face_count);
 
@@ -2611,10 +2611,10 @@ void painter_geoV2(Model3D* model, int face_count) {
         }
     }
 
-    if (visible_count < 2) {
-        printf("Total swaps: 0\n");
-        return;
-    }
+    // if (visible_count < 2) {
+    //     printf("Total swaps: 0\n");
+    //     return;
+    // }
 
     int swap_count = 0;
     int swapped;
@@ -2739,7 +2739,8 @@ void painter_geoV2(Model3D* model, int face_count) {
     }
 
     pair_cache_destroy(cache);
-    printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
+
+    // printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
 }
 
 /* painter_correct
@@ -6420,6 +6421,10 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
     }
 }
 
+/* Render a 3D model using a scanline Z-buffer algorithm with a small bias to reduce Z-fighting.
+Slower than the non-biased version (renderModelScanlineZBuffer_fast) due to the additional bias calculations.
+Called only when back-face culling is off.
+*/
 void renderModelScanlineZBuffer_biased(Model3D* model) {
     VertexArrays3D* vtx = &model->vertices;
     FaceArrays3D* faces = &model->faces;
@@ -6633,7 +6638,6 @@ void renderModelScanlineZBuffer(Model3D* model) {
         renderModelScanlineZBuffer_biased(model);
     }
 }
-
 
 
 segment "color";
@@ -7814,7 +7818,7 @@ int check_sort_repair(Model3D* model, int face_count) {
     }
 
     int repairs = 0;
-    const char* instructions = "\nWhen graphics is displayed  :\nESC=abort, RETURN=automatic mode (no graphics), N=skip, any other key = continue.\n\n";
+    const char* instructions = "\nWhen graphics is displayed  :\nESC: abort, RETURN: automatic mode (no graphics), N: skip, any other key: continue.\n\n";
     int automatic_mode = 0; /* 0=graphical inspect, 1=automatic (no graphics) */
 
     printf("%s", instructions);
