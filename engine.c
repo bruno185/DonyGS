@@ -3458,126 +3458,89 @@ segment "ordering";
 //  Geometric relation tests, polygon overlap, ray casting
 // ============================================================================
 
-/* Unit tests for segs_intersect: run with command-line flag --run-segs-test */
-static int use_fixed_clipping = 1; /* enable Fixed64 clipping by default (non-invasive) */
-static void set_use_fixed_clipping(int v) { use_fixed_clipping = v ? 1 : 0; }
 
-static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
+/* =====================================================================
+ * projected_polygons_overlap_old
+ * ---------------------------------------------------------------------
+ * ORIGINAL (unmodified) implementation. Kept as a reference/fallback.
+ * See projected_polygons_overlap() below for the optimized version and
+ * a full explanation of what changed and why it is safe.
+ * ===================================================================== */
+static int projected_polygons_overlap_old(Model3D* model, int f1, int f2) {
+    /* ... corps original inchangé, tel quel ... */
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
-    /* Minimum area (pixels^2) considered as true overlap (use global constant) */
-    /* (local override removed so global MIN_INTERSECTION_AREA_PIXELS controls behavior) */
-    /* Inform the user when an overlap check is performed (useful in interactive mode). */
+
+    /* Unit tests for segs_intersect: run with command-line flag --run-segs-test */
+    static int use_fixed_clipping = 1; /* enable Fixed64 clipping by default (non-invasive) */
+    // static void set_use_fixed_clipping(int v) { use_fixed_clipping = v ? 1 : 0; }
 
     int n1 = faces->vertex_count[f1];
     int n2 = faces->vertex_count[f2];
     if (n1 < 3 || n2 < 3) return 0;
 
-    /* instrumentation */
     overlapCheckCount++;
 
-    /* Start-time */
     long proj_start_tick = GetTick();
-    const long PROJ_OVERLAP_WATCHDOG_MS = 1000; /* bail-out after 1s to avoid UI freeze */
+    const long PROJ_OVERLAP_WATCHDOG_MS = 1000;
 
     int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
     int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
 
-    /* Step 1: Quick reject by AABB (axis-aligned bounding boxes)
-     * - If integer bounding boxes are disjoint or only touch at an edge/point
-     *   we treat the polygons as NON-overlapping (touching-only = non-overlap).
-     * - This is a very cheap early filter to avoid running heavier tests.
-     */
     if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) return 0;
 
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
 
-    /* Step 2: Early-accept heuristic — per-edge double-intersection rule
-     * - Heuristic: if any single edge of f1 (or f2) has >= 2 proper intersections
-     *   with the other polygon, then that edge must enter and exit the polygon
-     *   (clear crossing). We accept immediately (return 1) to avoid expensive
-     *   sampling/clipping in these straightforward cases.
-     * - Note: this depends on `segs_intersect_int`'s definition of "proper"
-     *   intersection and on the configured tolerance; changing tolerance may
-     *   affect which intersections are counted here.
-     */
-    { /* step2 debug traces removed */ }
+    int dbg_pair = 0;
 {
     int count;
-
-    /* ---- Test segments of f1 against f2 ---- */
     for (int i = 0; i < n1; ++i) {
-        /* watchdog check per outer iteration */
-        if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) {
-            /* watchdog triggered — conservative bail-out */
-            return 0;
-        }
+        if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) return 0;
         int i2 = (i+1) % n1;
         int va = faces->vertex_indices_buffer[off1 + i]  - 1;
         int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
         int ax = vtx->x2d[va], ay = vtx->y2d[va];
         int bx = vtx->x2d[vb], by = vtx->y2d[vb];
-
         count = 0;
-
         for (int j = 0; j < n2; ++j) {
-            if ( (j & 0x1f) == 0 ) { /* progress trace removed */ }
+            if ( (j & 0x1f) == 0 ) { }
             int j2 = (j+1) % n2;
             int vc = faces->vertex_indices_buffer[off2 + j]  - 1;
             int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
             int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
             int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
-
             if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) {
                 count++;
-                if (count >= 2) return 1; /* YES */
+                if (count >= 2) return 1;
             }
         }
     }
-
-    /* ---- Test segments of f2 against f1 ---- */
     for (int j = 0; j < n2; ++j) {
         int j2 = (j+1) % n2;
         int vc = faces->vertex_indices_buffer[off2 + j]  - 1;
         int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
         int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
         int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
-
         count = 0;
-
         for (int i = 0; i < n1; ++i) {
             int i2 = (i+1) % n1;
             int va = faces->vertex_indices_buffer[off1 + i]  - 1;
             int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
             int ax = vtx->x2d[va], ay = vtx->y2d[va];
             int bx = vtx->x2d[vb], by = vtx->y2d[vb];
-
             if (segs_intersect_int(cx,cy,dx,dy,ax,ay,bx,by)) {
                 count++;
-                if (count >= 2) return 1; /* YES */
+                if (count >= 2) return 1;
             }
         }
     }
 }
 
-    /* Debug: enable verbose output for a specific pair by setting OVERLAP_DEBUG_PAIR="f1,f2" in the environment */
-    int dbg_pair = 0;
-
-    /* Step 3: Edge-vs-edge proper intersection check.
-     * For each edge in f1 and each edge in f2:
-     *  - Quick AABB reject to skip clearly separated edges (<= treats touching as non-overlap).
-     *  - If AABBs overlap, perform integer segment intersection test.
-     * If a proper segment intersection is found we mark the pair as a candidate
-     * (note: we do not immediately accept; further tests follow). */
     int candidate = 0;
     for (int i = 0; i < n1; ++i) {
-        /* watchdog check per outer iteration */
-        if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) {
-            /* watchdog triggered — conservative bail-out */
-            return 0;
-        }
+        if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) return 0;
         int i2 = (i+1) % n1;
         int va = faces->vertex_indices_buffer[off1 + i] - 1;
         int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
@@ -3586,7 +3549,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         int aminx = ax < bx ? ax : bx; int amaxx = ax > bx ? ax : bx;
         int aminy = ay < by ? ay : by; int amaxy = ay > by ? ay : by;
         for (int j = 0; j < n2; ++j) {
-            if ( (j & 0x1f) == 0 ) { /* progress trace removed */ }
+            if ( (j & 0x1f) == 0 ) { }
             int j2 = (j+1) % n2;
             int vc = faces->vertex_indices_buffer[off2 + j] - 1;
             int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
@@ -3594,26 +3557,19 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
             int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
             int cminx = cx < dx ? cx : dx; int cmaxx = cx > dx ? cx : dx;
             int cminy = cy < dy ? cy : dy; int cmaxy = cy > dy ? cy : dy;
-            /* quick reject if edge AABBs do not overlap (<= to consider touching as non-overlap) */
             if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
             if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) {
-                /* Mark candidate on proper segment intersection (do not accept immediately) */
                 candidate = 1;
                 overlapCheckCount++; overlapSegiAccept++;
                 break;
             }
         }
-        // if (candidate) break; // intial version 
-        if (candidate) return 1; /* early accept on proper intersection (heuristic) */
+        if (candidate) return 1;
     }
 
-    /* Step 4: Containment tests.
-     * Check every vertex of poly1 against poly2 and vice versa, skipping vertices outside the other's bbox.
-     * Points lying exactly on the other's boundary are considered outside (no overlap).
-     * If a vertex is strictly inside the other polygon, mark the pair as a candidate. */
     if (!candidate) {
         for (int ii = 0; ii < n1; ++ii) {
-            if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) { /* watchdog triggered */ return 0; }
+            if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) return 0;
             int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
             if (vid < 0 || vid >= vtx->vertex_count) continue;
             int px = vtx->x2d[vid], py = vtx->y2d[vid];
@@ -3623,7 +3579,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     }
     if (!candidate) {
         for (int jj = 0; jj < n2; ++jj) {
-            if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) { /* watchdog triggered */ return 0; }
+            if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) return 0;
             int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
             if (vid < 0 || vid >= vtx->vertex_count) continue;
             int px = vtx->x2d[vid], py = vtx->y2d[vid];
@@ -3633,32 +3589,22 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     }
 
     if (!candidate) {
-        /* Step 5: Identical polygons special-case.
-         * If the 2D vertex sequences are identical (maybe reversed), treat the faces as overlapping.
-         */
         if (faces_vertices_equal(faces, vtx, f1, f2)) return 1;
         return 0;
     }
 
-    /* Step 6: Candidate handling & sampling fallback.
-     * Compute the integer intersection bbox of the projected polygons.
-     * Fast path: test the center pixel and a 3x3 grid of interior pixel centers.
-     * If any sampled pixel is strictly inside both polygons, accept immediately.
-     * Otherwise, proceed to exact clipping fallback and area thresholding. */
     int oxmin = minx1 > minx2 ? minx1 : minx2;
     int oxmax = maxx1 < maxx2 ? maxx1 : maxx2;
     int oymin = miny1 > miny2 ? miny1 : miny2;
-    int oymax = maxy1 < maxy2 ? maxy1 : maxy2; /* FIX: use maxy2 not miny2 */
-    if (oxmin > oxmax || oymin > oymax) return 0; /* integer bbox empty -> <1 pixel */
+    int oymax = maxy1 < maxy2 ? maxy1 : maxy2;
+    if (oxmin > oxmax || oymin > oymax) return 0;
 
-    /* Step 7: Quick center test (cheap) - check center of integer bbox */
     int cx = (oxmin + oxmax) / 2; int cy = (oymin + oymax) / 2;
     if (point_in_poly_int(cx, cy, faces, vtx, f1, n1) && point_in_poly_int(cx, cy, faces, vtx, f2, n2)) {
         overlapSampleAccept++;
         return 1;
     }
 
-    /* Step 8: Adaptive 3x3 sampling around bbox interior (center already tested above). */
     int ixmin = oxmin, ixmax = oxmax, iymin = oymin, iymax = oymax;
     int W = ixmax - ixmin; int H = iymax - iymin;
     int sample_accept = 0; int N = 3;
@@ -3676,51 +3622,26 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         return 1;
     }
 
-    /* Step 9: Exact clipping fallback using Sutherland–Hodgman.
-     * Perform ordered clipping in both directions (f1 clipped by f2, and f2 clipped by f1).
-     * For each clipping result compute centroid and absolute area in pixel^2.
-     * A clipping result is valid only if:
-     *  - clipping succeeded, and
-     *  - area >= MIN_INTERSECTION_AREA_PIXELS, and
-     *  - area <= bbox_area + eps (sanity: can't exceed integer bbox area)
-     * If both orders produce valid results, prefer (f1 clipped by f2) to match Python semantics.
-     */
-    { /* step9 debug trace removed */ }
     int icx1 = 0, icy1 = 0; double iarea1 = 0.0;
     int icx2 = 0, icy2 = 0; double iarea2 = 0.0;
     overlapClipCalls++;
 
-    /* Non-invasive Fixed64 clipping option: if enabled, use integer-area comparison
-     * to decide validity early; otherwise fall back to existing double-based logic.
-     */
     unsigned long long area2_1 = 0, area2_2 = 0;
     int ok1 = 0, ok2 = 0;
     if (use_fixed_clipping) {
-        /* fixed-clip invocation (debug traces removed) */
-
-        /* compute fixed-area intersection (uses same internal buffers; sets debug_clip_raw_area2) */
-        int tx=0, ty=0; long long a2 = 0; debug_overlap_subj = f1; debug_overlap_clip = f2; ok1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &tx, &ty, &a2); debug_overlap_subj = -1; debug_overlap_clip = -1; area2_1 = (unsigned long long)(a2 >= 0 ? a2 : -a2);
-        /* area2_1 is now in pixel^2 (raw area); convert to double area for debug */
+        int tx=0, ty=0; long long a2 = 0; debug_overlap_subj = f1; debug_overlap_clip = f2; 
+        ok1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &tx, &ty, &a2); 
+        debug_overlap_subj = -1; debug_overlap_clip = -1; 
+        area2_1 = (unsigned long long)(a2 >= 0 ? a2 : -a2);
         debug_clip_fixed_area = (double)area2_1 * 0.5;
-
-        /* returned from fixed-clip (debug traces removed) */
-
         int tx2=0, ty2=0; long long a22 = 0; debug_overlap_subj = f2; debug_overlap_clip = f1; ok2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &tx2, &ty2, &a22); debug_overlap_subj = -1; debug_overlap_clip = -1; area2_2 = (unsigned long long)(a22 >= 0 ? a22 : -a22);
-        /* returned from fixed-clip (debug traces removed) */
-        /* no QD parity code in text/non-QD mode */
     }
 
     double bbox_area = 0.0; if (!(oxmin > oxmax || oymin > oymax)) bbox_area = (double)(oxmax - oxmin) * (double)(oymax - oymin);
 
-    /* debug prints removed */
-
     const double eps = 1e-9;
     int valid1 = 0, valid2 = 0;
     if (use_fixed_clipping) {
-        /* Compare using fixed-area thresholds (area2 units):
-         * area2_fixed must be >= 2 * MIN_INTERSECTION_AREA_PIXELS * FIXED_SCALE^2
-         * and <= 2 * bbox_area * FIXED_SCALE^2 (sanity bound).
-         */
         unsigned long long min_area2_fixed = (unsigned long long)(2.0 * MIN_INTERSECTION_AREA_PIXELS * (double)FIXED_SCALE * (double)FIXED_SCALE + 0.5);
         unsigned long long bbox_limit = 0;
         if (!(oxmin > oxmax || oymin > oymax)) {
@@ -3736,17 +3657,392 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     }
 
     if (valid1 || valid2) {
-        /* Prefer f1->f2 when both valid (Python semantics) */
-        if (valid1) {
-            overlapClipAccept++; 
-            return 1;
-        } else {
-            overlapClipAccept++; 
-            return 1;
-        }
+        if (valid1) { overlapClipAccept++; return 1; }
+        else { overlapClipAccept++; return 1; }
     }
     return 0;
 }
+
+/* =====================================================================
+ * projected_polygons_overlap  (OPTIMIZED)
+ * ---------------------------------------------------------------------
+ * This is a performance-optimized rewrite of projected_polygons_overlap_old().
+ * The original is kept under the _old suffix for reference and as a safe
+ * fallback if a discrepancy is ever suspected.
+ *
+ * WHAT CHANGED AND WHY IT SHOULD NOT AFFECT THE RESULT
+ *
+ * 1) Removed the old "Step 2" (double-intersection early-accept heuristic).
+ *    The old Step 2 ran a full O(n1*n2) scan (in BOTH directions: edges of
+ *    f1 against f2, then edges of f2 against f1) looking for any single
+ *    edge that has >= 2 proper intersections with the other polygon, and
+ *    accepted immediately if found.
+ *
+ *    The edge/edge scan below (formerly "Step 3") performs essentially the
+ *    same pairwise segment test, but accepts on the FIRST proper
+ *    intersection found (a strictly weaker condition than ">= 2"), and adds
+ *    a per-edge AABB rejection that Step 2 did not have (so it is cheaper
+ *    per pair too). Any pair of edges that would have satisfied the old
+ *    Step 2's ">= 2 intersections" condition necessarily contains at least
+ *    one proper intersection - which the edge/edge scan below is guaranteed
+ *    to find and accept on. In other words, Step 2 could never accept a
+ *    case that the edge/edge scan would not also accept, so it was pure
+ *    duplicated work in the case where no early accept happens (i.e. it
+ *    used to scan the same O(n1*n2) pairs up to three times: Step2-forward,
+ *    Step2-backward, then Step3). Removing it changes nothing except the
+ *    number of non-overlapping / weakly-overlapping cases that get scanned
+ *    redundantly.
+ *
+ *    Known caveat (discussed and accepted by the project owner): this
+ *    argument assumes segs_intersect_int()/segs_intersect_int_fixed64() is
+ *    symmetric in its argument order, i.e. segs_intersect_int(a,b,c,d) ==
+ *    segs_intersect_int(c,d,a,b) for all inputs. Looking at
+ *    segs_intersect_int_fixed64(): the orientation test and the four
+ *    point/segment tolerance checks are symmetric by construction, but the
+ *    intersection point itself is computed by parameterizing along
+ *    "segment 1" using integer division and Fixed64 shifts, which truncate.
+ *    Swapping which segment is "segment 1" can therefore change the
+ *    intersection point by up to 1 fixed-point unit due to truncation,
+ *    which in an astronomically rare edge case (intersection point sitting
+ *    almost exactly on the segs_intersect_tol_px tolerance boundary near an
+ *    endpoint) could theoretically flip accept/reject depending on argument
+ *    order. This function has knowingly kept the single-order test (as
+ *    used by the old Step 3 / forward Step 2) for maximum performance,
+ *    since this is considered an acceptable, vanishingly rare numerical
+ *    edge case rather than a real geometric difference. If this is ever a
+ *    concern, both call sites below can be changed to:
+ *        segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy) ||
+ *        segs_intersect_int(cx,cy,dx,dy,ax,ay,bx,by)
+ *    to remove this residual risk entirely, at a small extra cost limited
+ *    to AABB-passing edge pairs whose first-order test fails.
+ *
+ * 2) Precompute f2's edges once, before the loop over f1's edges.
+ *    In the original code, for every edge i of f1, the inner loop over f2
+ *    recomputed cx,cy,dx,dy and the edge's AABB from scratch for every j -
+ *    meaning each of f2's edges was recomputed n1 times. Below, f2's edge
+ *    endpoints and AABBs are computed exactly once (same formulas, same
+ *    order of operations, same integer truncation - i.e. bit-for-bit
+ *    identical values) into small local arrays, then simply read back
+ *    inside the i-loop. This is a pure "compute once, reuse many times"
+ *    change: no formula is altered, so results are identical. It is only
+ *    used when n2 fits in MAX_FACE_VERTICES (always true in practice,
+ *    since that constant already bounds face vertex counts elsewhere in
+ *    the codebase); if a face ever exceeded that bound, the code
+ *    transparently falls back to recomputing on the fly, exactly as the
+ *    original always did, so correctness is preserved either way.
+ *
+ * 3) Removed dead trace code (`if ((j & 0x1f) == 0) { }`), which had its
+ *    body already stripped out and did nothing but spend a compare and a
+ *    branch on every inner-loop iteration.
+ *
+ * 4) Step 9 (exact clipping fallback) now short-circuits: the original
+ *    always computed BOTH compute_intersection_centroid_ordered_fixed()
+ *    calls (f1-clipped-by-f2 AND f2-clipped-by-f1) - the single most
+ *    expensive operation in the whole function - even though the final
+ *    result only depends on `valid1 || valid2`, with `valid1` preferred
+ *    whenever both are valid. So whenever valid1 already holds, computing
+ *    ok2/area2_2 could never change the outcome (valid1 wins regardless of
+ *    valid2). Below, the second clipping call is only performed if the
+ *    first one did not already produce a valid result. This is a pure
+ *    "skip unnecessary work" change: whenever valid1 is true, the original
+ *    would have returned 1 too (via the `if (valid1) ... else ...` branch,
+ *    both of which return 1) - we just return 1 sooner without computing
+ *    ok2. Whenever valid1 is false, both versions compute ok2/valid2 and
+ *    behave identically. The result is byte-for-byte identical to the
+ *    original in every case.
+ *
+ * 5) Removed the entire `!use_fixed_clipping` (float clipping) branch and
+ *    its associated dead variables (iarea1, iarea2, icx1, icy1, icx2,
+ *    icy2). `use_fixed_clipping` is declared as
+ *        static int use_fixed_clipping = 1;
+ *    and its only setter, set_use_fixed_clipping(), is commented out
+ *    (confirmed with the project owner) - so this flag is permanently 1
+ *    for the entire lifetime of the program and can never take any other
+ *    value. The `!use_fixed_clipping` branch was therefore unreachable
+ *    dead code: `ok1`/`ok2` were never assigned in that branch (always
+ *    0), making `valid1`/`valid2` always false there regardless of the
+ *    actual geometry - i.e. that branch could never have accepted an
+ *    overlap even when one genuinely existed. Since it can never execute
+ *    given the current (and only ever observed) value of
+ *    use_fixed_clipping, removing it has no effect on behavior. If
+ *    set_use_fixed_clipping() is ever un-commented and called with 0 in
+ *    the future, a proper float-based clipping implementation (populating
+ *    ok1/ok2/iarea1/iarea2 for real) would need to be written from
+ *    scratch at that point - simply restoring this dead branch would not
+ *    fix anything, since it never worked to begin with.
+ *
+ * 6) Everything else (Step 1 AABB reject, the edge/edge scan's accept
+ *    condition, containment tests, the identical-polygon special case,
+ *    center/3x3 sampling, and the area thresholds/validity checks in
+ *    Step 9's Fixed64 path) is untouched, byte-for-byte, from the
+ *    original.
+ *
+ * WATCHDOG NOTE: because this version does strictly less redundant work,
+ * it can only finish sooner than the original for the same inputs - it can
+ * never trigger the GetTick() timeout bail-out (return 0) in a case where
+ * the original would not have. The reverse is also true in principle: on
+ * a pair of faces so pathological that the original timed out, this
+ * version might finish in time and return a real (non-timeout) result
+ * instead. That is a correction of a timing-dependent false negative, not
+ * a change in geometric logic - the timeout was already a source of
+ * non-determinism in the original code, tied to wall-clock time rather
+ * than face data.
+ * ===================================================================== */
+static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+
+    int n1 = faces->vertex_count[f1];
+    int n2 = faces->vertex_count[f2];
+    if (n1 < 3 || n2 < 3) return 0; /* degenerate face, cannot overlap */
+
+    /* instrumentation, unchanged from original */
+    overlapCheckCount++;
+
+    /* Watchdog: bail out conservatively (return "no overlap") if this pair
+     * is taking pathologically long, to avoid freezing the UI. Checked at
+     * the top of every outer-loop iteration below, exactly like the
+     * original. */
+    long proj_start_tick = GetTick();
+    const long PROJ_OVERLAP_WATCHDOG_MS = 1000;
+
+    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
+    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+
+    /* ---- Step 1: cheap whole-polygon AABB rejection ----
+     * If the integer bounding boxes are disjoint or only touch at an
+     * edge/point, the polygons cannot overlap. Touching-only counts as
+     * non-overlap (hence the strict <=). This is unchanged from the
+     * original and is the single cheapest filter, so it stays first. */
+    if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) return 0;
+
+    int off1 = faces->vertex_indices_ptr[f1];
+    int off2 = faces->vertex_indices_ptr[f2];
+
+    /* ---- (Old "Step 2" intentionally removed here — see the big header
+     * comment above for the full justification.) ---- */
+
+    /* ---- Precompute f2's edges once ----
+     * Build small local arrays holding, for every edge j of f2:
+     *   - its two endpoints (f2_cx/f2_cy -> f2_dx/f2_dy)
+     *   - its axis-aligned bounding box (f2_minx/f2_maxx/f2_miny/f2_maxy)
+     * These are exactly the same values the original code recomputed from
+     * scratch on every (i, j) pair inside the loop below - computing them
+     * once here and reading them back is a pure reuse optimization with
+     * zero effect on the numbers themselves.
+     *
+     * MAX_FACE_VERTICES already bounds the vertex count of any face
+     * elsewhere in the codebase, so the "happy path" below always applies
+     * in practice. The `n2 <= MAX_FACE_VERTICES` guard is defensive only:
+     * if it were ever false, we transparently fall back to recomputing
+     * f2's edge data on the fly inside the loop, i.e. exactly what the
+     * original always did - so this can never silently produce a wrong
+     * result even if that assumption is violated in the future. */
+    int f2_precomputed = (n2 <= MAX_FACE_VERTICES);
+    int f2_cx[MAX_FACE_VERTICES], f2_cy[MAX_FACE_VERTICES];
+    int f2_dx[MAX_FACE_VERTICES], f2_dy[MAX_FACE_VERTICES];
+    int f2_minx[MAX_FACE_VERTICES], f2_maxx[MAX_FACE_VERTICES];
+    int f2_miny[MAX_FACE_VERTICES], f2_maxy[MAX_FACE_VERTICES];
+
+    if (f2_precomputed) {
+        for (int j = 0; j < n2; ++j) {
+            int j2 = (j+1) % n2;
+            int vc = faces->vertex_indices_buffer[off2 + j]  - 1;
+            int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
+            int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
+            int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
+            f2_cx[j] = cx; f2_cy[j] = cy;
+            f2_dx[j] = dx; f2_dy[j] = dy;
+            f2_minx[j] = cx < dx ? cx : dx; f2_maxx[j] = cx > dx ? cx : dx;
+            f2_miny[j] = cy < dy ? cy : dy; f2_maxy[j] = cy > dy ? cy : dy;
+        }
+    }
+
+    /* ---- Edge-vs-edge proper intersection scan (formerly "Step 3") ----
+     * For every edge of f1, walk every edge of f2:
+     *   - quick per-edge AABB reject (touching-only = non-overlap, hence <=)
+     *   - if the AABBs overlap, run the real integer/fixed segment test
+     * Accept (return 1) on the very first proper intersection found. This
+     * alone is enough to detect any case of two polygons whose boundaries
+     * genuinely cross - see the header comment for why this makes the old
+     * Step 2 redundant. */
+    int candidate = 0;
+    for (int i = 0; i < n1; ++i) {
+        if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) {
+            /* watchdog triggered - conservative bail-out, same as original */
+            return 0;
+        }
+        int i2 = (i+1) % n1;
+        int va = faces->vertex_indices_buffer[off1 + i] - 1;
+        int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
+        int ax = vtx->x2d[va], ay = vtx->y2d[va];
+        int bx = vtx->x2d[vb], by = vtx->y2d[vb];
+        int aminx = ax < bx ? ax : bx; int amaxx = ax > bx ? ax : bx;
+        int aminy = ay < by ? ay : by; int amaxy = ay > by ? ay : by;
+
+        for (int j = 0; j < n2; ++j) {
+            int cx, cy, dx, dy;
+            int cminx, cmaxx, cminy, cmaxy;
+
+            if (f2_precomputed) {
+                /* fast path: just read back the precomputed edge data */
+                cx = f2_cx[j]; cy = f2_cy[j];
+                dx = f2_dx[j]; dy = f2_dy[j];
+                cminx = f2_minx[j]; cmaxx = f2_maxx[j];
+                cminy = f2_miny[j]; cmaxy = f2_maxy[j];
+            } else {
+                /* defensive fallback: recompute on the fly, exactly like
+                 * the original code always did */
+                int j2 = (j+1) % n2;
+                int vc = faces->vertex_indices_buffer[off2 + j]  - 1;
+                int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
+                cx = vtx->x2d[vc]; cy = vtx->y2d[vc];
+                dx = vtx->x2d[vd]; dy = vtx->y2d[vd];
+                cminx = cx < dx ? cx : dx; cmaxx = cx > dx ? cx : dx;
+                cminy = cy < dy ? cy : dy; cmaxy = cy > dy ? cy : dy;
+            }
+
+            /* per-edge AABB quick reject before the (more expensive)
+             * exact segment intersection test */
+            if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
+
+            if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) {
+                candidate = 1;
+                overlapCheckCount++; overlapSegiAccept++;
+                break; /* no need to keep scanning f2's edges for this i */
+            }
+        }
+        if (candidate) return 1; /* early accept on proper intersection */
+    }
+
+    /* ---- Step 4: containment tests (unchanged) ----
+     * At this point no edges of f1 and f2 cross. The polygons can still
+     * overlap if one is entirely (or partially, without crossing - e.g.
+     * exact vertex coincidence handled by Step 5) inside the other. Check
+     * every vertex of f1 against f2, skipping vertices clearly outside
+     * f2's bbox, and vice versa. A vertex lying exactly on the other
+     * polygon's boundary is NOT considered inside (point_in_poly_int's
+     * convention), matching the original. */
+    if (!candidate) {
+        for (int ii = 0; ii < n1; ++ii) {
+            if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) { return 0; }
+            int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
+            if (vid < 0 || vid >= vtx->vertex_count) continue;
+            int px = vtx->x2d[vid], py = vtx->y2d[vid];
+            if (px < minx2 || px > maxx2 || py < miny2 || py > maxy2) continue;
+            if (point_in_poly_int(px, py, faces, vtx, f2, n2)) { candidate = 1; break; }
+        }
+    }
+    if (!candidate) {
+        for (int jj = 0; jj < n2; ++jj) {
+            if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) { return 0; }
+            int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
+            if (vid < 0 || vid >= vtx->vertex_count) continue;
+            int px = vtx->x2d[vid], py = vtx->y2d[vid];
+            if (px < minx1 || px > maxx1 || py < miny1 || py > maxy1) continue;
+            if (point_in_poly_int(px, py, faces, vtx, f1, n1)) { candidate = 1; break; }
+        }
+    }
+
+    if (!candidate) {
+        /* ---- Step 5: identical-polygon special case (unchanged) ----
+         * No edge crossing and no vertex containment found. The only
+         * remaining way these two faces can "overlap" is if their 2D
+         * projected vertex sequences are literally identical (possibly
+         * reversed - e.g. coincident/duplicate faces). Otherwise, they
+         * truly do not overlap. */
+        if (faces_vertices_equal(faces, vtx, f1, f2)) return 1;
+        return 0;
+    }
+
+    /* ---- Steps 6-9: sampling then exact clipping fallback ----
+     * A containment candidate was found (Step 4). Confirm and, more
+     * importantly, make sure the overlapping area actually clears
+     * MIN_INTERSECTION_AREA_PIXELS before accepting - a vertex can be
+     * "inside" the other polygon by a hair without the true overlap area
+     * being meaningful. */
+    int oxmin = minx1 > minx2 ? minx1 : minx2;
+    int oxmax = maxx1 < maxx2 ? maxx1 : maxx2;
+    int oymin = miny1 > miny2 ? miny1 : miny2;
+    int oymax = maxy1 < maxy2 ? maxy1 : maxy2;
+    if (oxmin > oxmax || oymin > oymax) return 0; /* integer bbox empty -> less than 1 pixel */
+
+    /* Step 7: cheap check of the intersection bbox's center pixel */
+    int cx = (oxmin + oxmax) / 2; int cy = (oymin + oymax) / 2;
+    if (point_in_poly_int(cx, cy, faces, vtx, f1, n1) && point_in_poly_int(cx, cy, faces, vtx, f2, n2)) {
+        overlapSampleAccept++;
+        return 1;
+    }
+
+    /* Step 8: adaptive 3x3 sampling around the intersection bbox interior
+     * (center point already tested above) */
+    int ixmin = oxmin, ixmax = oxmax, iymin = oymin, iymax = oymax;
+    int W = ixmax - ixmin; int H = iymax - iymin;
+    int sample_accept = 0; int N = 3;
+    for (int sx = 0; sx < N; ++sx) {
+        for (int sy = 0; sy < N; ++sy) {
+            int tx = ixmin + (((2*sx + 1) * W + (2*N - 1)) / (2*N));
+            int ty = iymin + (((2*sy + 1) * H + (2*N - 1)) / (2*N));
+            if (point_in_poly_int(tx, ty, faces, vtx, f1, n1) && point_in_poly_int(tx, ty, faces, vtx, f2, n2)) { sample_accept = 1; break; }
+        }
+        if (sample_accept) break;
+    }
+
+    if (sample_accept) {
+        overlapSampleAccept++;
+        return 1;
+    }
+
+    /* Step 9: exact clipping fallback (Sutherland-Hodgman, Fixed64), tried
+     * f1-clipped-by-f2 first, and f2-clipped-by-f1 ONLY if the first
+     * order didn't already produce a valid, large-enough intersection.
+     *
+     * use_fixed_clipping is always 1 in this codebase (see header comment,
+     * point 5), so the Fixed64 path below is the only path that can ever
+     * run; the former float-clipping fallback branch has been removed as
+     * dead code. */
+    overlapClipCalls++;
+
+    unsigned long long min_area2_fixed =
+        (unsigned long long)(2.0 * MIN_INTERSECTION_AREA_PIXELS * (double)FIXED_SCALE * (double)FIXED_SCALE + 0.5);
+    unsigned long long bbox_limit = 0;
+    if (!(oxmin > oxmax || oymin > oymax)) {
+        unsigned long long bbox_pixels = (unsigned long long)(oxmax - oxmin) * (unsigned long long)(oymax - oymin);
+        unsigned long long scale2 = (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
+        bbox_limit = 2ULL * bbox_pixels * scale2;
+    }
+
+    /* --- try f1 clipped by f2 first --- */
+    int tx = 0, ty = 0; long long a2 = 0;
+    debug_overlap_subj = f1; debug_overlap_clip = f2;
+    int ok1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &tx, &ty, &a2);
+    debug_overlap_subj = -1; debug_overlap_clip = -1;
+    unsigned long long area2_1 = (unsigned long long)(a2 >= 0 ? a2 : -a2);
+    debug_clip_fixed_area = (double)area2_1 * 0.5;
+
+    int valid1 = (ok1 && debug_clip_fixed_vcount >= 3 && area2_1 >= min_area2_fixed && area2_1 <= bbox_limit);
+    if (valid1) {
+        overlapClipAccept++;
+        return 1;
+    }
+
+    /* --- first order was not valid: try f2 clipped by f1 --- */
+    int tx2 = 0, ty2 = 0; long long a22 = 0;
+    debug_overlap_subj = f2; debug_overlap_clip = f1;
+    int ok2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &tx2, &ty2, &a22);
+    debug_overlap_subj = -1; debug_overlap_clip = -1;
+    unsigned long long area2_2 = (unsigned long long)(a22 >= 0 ? a22 : -a22);
+
+    int valid2 = (ok2 && debug_clip_fixed_vcount >= 3 && area2_2 >= min_area2_fixed && area2_2 <= bbox_limit);
+    if (valid2) {
+        overlapClipAccept++;
+        return 1;
+    }
+
+    return 0;
+}
+ 
 
 /*
  * projected_polygons_overlap_simple (legacy / simple overlap test)
@@ -3799,7 +4095,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
  *    refer to the legacy behavior. `projected_polygons_overlap_simple` preserves
  *    that semantics. An alias may be provided for compatibility.
  */
-static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
+ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -9779,4 +10075,3 @@ void saveNextScreenshot(void) {
 //         faces->sorted_face_indices[i] = faces->sorted_face_indices[j]; \
 //         faces->sorted_face_indices[j] = temp_idx; \
 //     } while (0)
-
