@@ -1,0 +1,61 @@
+a 
+290 b+ : 535 119 (pb >= 330)
+290 b- : 164 54 
+
+other03
+default b- : 368 323
+default b+ : 384 335
+
+crossSub
+default b- : 536 436 ok
+default b+ : 677 479 ok 
+
+GEO : (geometric_face_relation optimized)
+a 
+290 b- :  95 71 ok
+290 b+ : 168 113 ok
+
+other03
+default b- : 3454 3309
+default b+ : ???? 16051
+
+crossSub
+default b- : 1637 1573
+default b+ : 5048 4754
+
+monkey
+default b- : 691 669 ok
+default b+ : 815 788 ok 
+
+
+Simple inversé :
+Test de painter_correct()
+monkey
+default b- : 2552
+default b+ : 2552
+
+Test de painter_correctV2()
+monkey
+default b- : 2554
+default b+ : 3376
+
+simple normal :
+Test de painter_correct()
+monkey
+default b- : 1778
+default b+ : 1777
+
+Test de painter_correctV2()
+monkey
+default b- : 1754
+default b+ : 2399
+
+Candidats prioritaires à auditer (je n'ai pas encore leur code)
+
+En me basant uniquement sur la structure du graphe d'appel — fan-in élevé et position sur le chemin chaud du tri du peintre — voici l'ordre dans lequel je regarderais :
+
+geometric_face_relation() — appelée depuis painter_newell_sancha, painter_geoV2, geo_face_order, evaluate_pair_tests, pair_order_relation. C'est la fonction avec le plus grand nombre de points d'appel dans tout le graphe. Le moindre travail redondant à l'intérieur se répercute partout. Priorité n°1.
+pair_plane_before() / pair_plane_after() — testent le signe de tous les sommets de f2 par rapport au plan de f1, appelées dans le tri principal, painter_correct, et plusieurs outils de debug/inspection. Une boucle sur tous les sommets à chaque appel, sans early-exit visible dans le nom — à vérifier si un signe contraire trouvé tôt arrête la boucle plus vite, et si le plan de f1 est déjà mis en cache (plane_a/b/c/d calculés dans calculateFaceDepths) plutôt que recalculé.
+projected_polygons_overlap_simple() — le nom suggère une version allégée de la fonction qu'on vient d'auditer, utilisée par painter_correct. Vu le pattern qu'on a trouvé dans la version complète (double calcul, boucles recalculant les mêmes données), il y a de bonnes chances qu'elle partage des défauts similaires.
+compute_intersection_centroid_ordered_fixed_tryboth() — le nom laisse penser qu'elle essaie les deux ordres de clipping comme le fait manuellement l'étape 9 ; si c'est le cas, elle pourrait avoir exactement la même redondance que je viens de corriger, à vérifier si elle court-circuite bien dès le premier succès.
+ray_cast_hierarchical() / ray_cast_at() / ray_cast_distances() — fallback utilisé seulement par painter_geoV2 et les outils de diagnostic, donc probablement appelé moins souvent que les tests précédents ; priorité plus basse sauf si painter_geoV2 est le mode par défaut.

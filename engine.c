@@ -1992,11 +1992,77 @@ static int cmp_faces_by_zmean(const void* pa, const void* pb) {
 
 /* geometric relation: plane-based tests only (no bbox or depth).  Returns
    -1 if f1 is geometrically before f2, 1 if after, 0 if indeterminate. */
+/* =====================================================================
+ * geometric_face_relation  (OPTIMIZED)
+ * ---------------------------------------------------------------------
+ * Plane-based ordering test between two faces: returns -1 if f1 is
+ * geometrically before f2, 1 if after, 0 if indeterminate.
+ *
+ * WHAT CHANGED AND WHY IT SHOULD NOT AFFECT THE RESULT
+ *
+ * `epsilon` used to be recomputed on every single call via:
+ *     Fixed64 epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.001f));
+ * but its value depends only on `current_observer_distance`, a
+ * camera/observer parameter that is constant for the whole duration of a
+ * single painter sort pass (it only changes once per frame, computed
+ * earlier in processModelFast() via getObserverParams() /
+ * normalizeAutoFitDistanceTo150(), before any painter/ordering code runs -
+ * see call graph section 3 vs section 1).
+ *
+ * This function has a very high fan-in (called from painter_newell_sancha,
+ * painter_geoV2, evaluate_pair_tests, geo_face_order, pair_order_relation),
+ * so it can run thousands of times per frame. FIXED_MUL_64 is a 64-bit
+ * fixed-point multiply; on 65816 (no hardware multiplier) this is almost
+ * certainly a software multi-precision routine, i.e. one of the more
+ * expensive operations available - and it was being redone identically,
+ * every single call, for a value that had not changed since the previous
+ * call in the overwhelming majority of cases.
+ *
+ * The static cache below memoizes the last computed epsilon together with
+ * the observer distance it was computed from, plus an explicit validity
+ * flag (rather than a sentinel distance value) so the cache logic never
+ * has to assume anything about how Fixed64 represents negative numbers or
+ * what values current_observer_distance can plausibly take. On each call:
+ *   - if the cache is valid AND current_observer_distance is unchanged
+ *     since the cached value, we reuse the cached epsilon (same value the
+ *     original formula would have produced, just not recomputed);
+ *   - otherwise we recompute exactly as the original always did, and
+ *     refresh the cache (marking it valid).
+ * In both branches the epsilon value used is bit-for-bit identical to
+ * what the original, unconditional recomputation would have produced for
+ * that same current_observer_distance - so the result of this function is
+ * unchanged for every input. The only added cost is one flag check plus
+ * one Fixed64 comparison per call, negligible next to a software 64-bit
+ * multiply.
+ *
+ * The (Fixed64) casts on a1/b1/c1 inside the per-vertex loop were also
+ * removed - a1/b1/c1 are already declared Fixed64, so those casts were
+ * no-ops; purely cosmetic, no behavior change.
+ *
+ * Everything else (the obs sign test, the per-vertex side test with its
+ * epsilon tolerance, the all_same/all_opp bookkeeping, and the early-exit
+ * once neither hypothesis can still hold) is untouched, byte-for-byte,
+ * from the original.
+ * ===================================================================== */
 static int geometric_face_relation(Model3D* model, int f1, int f2) {
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
+    static Fixed64 cached_geo_epsilon = 0;
+    static Fixed64 cached_geo_epsilon_distance = 0;
+    static int cached_geo_epsilon_valid = 0; /* 0 until the first real computation */
 
-    Fixed64 epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.001f));
+    /* epsilon only depends on current_observer_distance, which is constant
+     * for an entire painter sort pass (one frame) - see header comment
+     * above for the full justification of this cache. */
+    Fixed64 epsilon;
+    if (cached_geo_epsilon_valid && current_observer_distance == cached_geo_epsilon_distance) {
+        epsilon = cached_geo_epsilon;
+    } else {
+        epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.001f));
+        cached_geo_epsilon = epsilon;
+        cached_geo_epsilon_distance = current_observer_distance;
+        cached_geo_epsilon_valid = 1;
+    }
 
     Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
             c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
@@ -2013,9 +2079,9 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
 
     for (int k = 0; k < n2; ++k) {
         int v = faces->vertex_indices_buffer[offset2 + k] - 1;
-        Fixed64 acc = (((Fixed64)a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT)
-                    + (((Fixed64)b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT)
-                    + (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT)
+        Fixed64 acc = ((a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT)
+                    + ((b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT)
+                    + ((c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT)
                     + d1;
 
         int side;
@@ -2032,7 +2098,6 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
     if (all_opp) return 1;
     return 0;
 }
-
 /**
  * PAINTER'S ALGORITHM - NEWELL / SANCHA (detailed)
  * =================================================
@@ -2064,6 +2129,7 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
  *  - Call `painter_newell_sancha(model, face_count)` (or a mode-specific variant) after
  *    `calculateFaceDepths()` / `processModelFast()` has computed observer-space coordinates.
  */
+
 
 /**
  * FAST PUBLISHABLE PASS (painter_newell_sancha_fast)
@@ -2109,6 +2175,7 @@ void painter_newell_sancha_fast(Model3D* model, int face_count) {
     qsort(faces->sorted_face_indices, visible_count, sizeof(int), cmp_faces_by_zmean);
     qsort_faces_ptr_for_cmp = NULL;
 }
+
 void painter_newell_sancha_old(Model3D* model, int face_count) {
     // ...existing code...
     FaceArrays3D* faces = &model->faces;
@@ -2540,9 +2607,6 @@ static PairCache* pair_cache_create(int capacity) {
     return c;
 }
 
-static void pair_cache_destroy(PairCache* c) {
-    if (c) { free(c->slots); free(c); }
-}
 
 static int pair_cache_slot(PairCache* c, int f1, int f2) {
     // Canonical key independent of order
@@ -2585,8 +2649,47 @@ static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation) {
     }
 }
 
+static void pair_cache_destroy(PairCache* c) {
+    if (c) { free(c->slots); free(c); }
+}
 
 // --- Painter variants ---
+
+/* PAIR_CACHE_MAX_BYTES : budget mémoire accepté pour le cache de paires
+ * (fixé par le propriétaire du projet à 128 Ko). */
+#define PAIR_CACHE_MAX_BYTES (128 * 1024)
+
+// ADDED: Utility functions for calculating the next power of 2 and the maximum cache capacity based on the memory budget.
+/* Plus petite puissance de 2 >= n. Utilisée pour garantir que la capacité
+ * du cache est toujours une puissance de 2, condition nécessaire pour
+ * remplacer le modulo (%) par un masque bit à bit (&) dans pair_cache_slot/
+ * find/insert sans changer aucun résultat. */
+static int pair_cache_next_pow2(int n) {
+    int p = 1;
+    while (p < n) p <<= 1;
+    return p;
+}
+
+/* Plus grande puissance de 2 <= n. Utilisée uniquement pour calculer le
+ * nombre maximal d'entrées tenant dans PAIR_CACHE_MAX_BYTES. */
+static int pair_cache_next_pow2_floor(int n) {
+    int p = 1;
+    while (p * 2 <= n) p <<= 1;
+    return p;
+}
+
+/* Nombre maximal d'entrées du cache tenant dans PAIR_CACHE_MAX_BYTES,
+ * arrondi à la puissance de 2 inférieure (pair_cache_create arrondit lui
+ * à la puissance de 2 SUPÉRIEURE en interne - ici on veut la borne haute
+ * côté appelant, donc on descend, pour ne jamais dépasser le budget une
+ * fois pair_cache_create() appliqué son propre arrondi). sizeof() est
+ * évalué par le compilateur : ce calcul reste correct quelle que soit la
+ * taille réelle de int et le padding de la structure sur cette
+ * plateforme. */
+static int pair_cache_max_capacity_for_budget(void) {
+    int max_entries = PAIR_CACHE_MAX_BYTES / (int)sizeof(PairCacheEntry);
+    return pair_cache_next_pow2_floor(max_entries);
+}
 
 void painter_geoV2(Model3D* model, int face_count) {
     FaceArrays3D* faces = &model->faces;
@@ -3410,6 +3513,14 @@ static int move_element_remove_and_insert_pos(int *arr, int n, int from, int ins
     return 1;
 }
 
+
+
+segment "ordering";
+// ============================================================================
+//  2. ORDERING TESTS & OVERLAP
+//  Geometric relation tests, polygon overlap, ray casting
+// ============================================================================
+
 /* projected_polygons_overlap
  * --------------------------
  *
@@ -3421,43 +3532,31 @@ static int move_element_remove_and_insert_pos(int *arr, int n, int from, int ins
  * Returns:
  *  - 1 if the projected polygons of f1 and f2 overlap
  *  - 0 if they do not overlap (including touching-only cases)
- 
-/*
- * projected_polygons_overlap(model, f1, f2)
- * -----------------------------------------
- * Determines whether the 2D projections of faces `f1` and `f2` overlap (simple contact = NO overlap).
- * The decision is made by a sequence of increasingly expensive tests to remain conservative and fast.
- *
- * Steps (in order):
- *  1) Fast AABB rejection: if the whole boxes are disjoint or only touching -> NO overlap.
- *  2) Early acceptance rule (heuristic): if an edge of one polygon has **≥ 2** proper intersections
- *     with the other polygon (entry + exit), accept immediately (certain overlap for that edge).
- *     This rule avoids expensive clipping in obvious cases. Note: the result depends on
- *     `segs_intersect_int` behaviour (and its internal tolerance), so tolerance can affect this test.
- *  3) Edge-to-edge check (proper intersection): for each edge pair, AABB quick-reject then
- *     full intersection test; a proper intersection marks the pair as a *candidate* (do not accept
- *     immediately but continue with sampling and clipping tests).
- *  4) Containment tests: check whether a vertex of one polygon is strictly inside the other
- *     (boundary points count as outside).
- *  5) Special case: identical polygons (same vertex sequence) are considered overlapping.
- *  6) Candidate handling and sampling: compute the full intersection bbox and try quick samples
- *     (center then 3×3 grid) for fast acceptance.
- *  7) If sampling fails, fall back to exact clipping (Sutherland–Hodgman) in both directions (f1→f2 and f2→f1).
- *  8) Clipping area validity test: accept only if area >= MIN_INTERSECTION_AREA_PIXELS and <= bbox area (+eps).
- *
- * When a clipping result is valid in both directions, prefer (f1 clipped by f2) to preserve Python semantics.
- * Debug hooks print clipping and centroid details when enabled.
  */
-
-
-
-
-segment "ordering";
-// ============================================================================
-//  2. ORDERING TESTS & OVERLAP
-//  Geometric relation tests, polygon overlap, ray casting
-// ============================================================================
-
+/*
+ projected_polygons_overlap(model, f1, f2)
+ -----------------------------------------
+ Determines whether the 2D projections of faces `f1` and `f2` overlap (simple contact = NO overlap).
+ The decision is made by a sequence of increasingly expensive tests to remain conservative and fast.
+ Steps (in order):
+  1) Fast AABB rejection: if the whole boxes are disjoint or only touching -> NO overlap.
+  2) Early acceptance rule (heuristic): if an edge of one polygon has **≥ 2*proper intersections
+     with the other polygon (entry + exit), accept immediately (certain overlap for that edge).
+     This rule avoids expensive clipping in obvious cases. Note: the result depends on
+     `segs_intersect_int` behaviour (and its internal tolerance), so tolerance can affect this test.
+  3) Edge-to-edge check (proper intersection): for each edge pair, AABB quick-reject then
+     full intersection test; a proper intersection marks the pair as a *candidate(do not accept
+     immediately but continue with sampling and clipping tests).
+  4) Containment tests: check whether a vertex of one polygon is strictly inside the other
+     (boundary points count as outside).
+  5) Special case: identical polygons (same vertex sequence) are considered overlapping.
+  6) Candidate handling and sampling: compute the full intersection bbox and try quick samples
+     (center then 3×3 grid) for fast acceptance.
+  7) If sampling fails, fall back to exact clipping (Sutherland–Hodgman) in both directions (f1→f2 and f2→f1).
+  8) Clipping area validity test: accept only if area >= MIN_INTERSECTION_AREA_PIXELS and <= bbox area (+eps).
+ When a clipping result is valid in both directions, prefer (f1 clipped by f2) to preserve Python semantics.
+ Debug hooks print clipping and centroid details when enabled. 
+ */
 
 /* =====================================================================
  * projected_polygons_overlap_old
@@ -4043,7 +4142,6 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     return 0;
 }
  
-
 /*
  * projected_polygons_overlap_simple (legacy / simple overlap test)
  * ---------------------------------------------------------------
@@ -4095,7 +4193,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
  *    refer to the legacy behavior. `projected_polygons_overlap_simple` preserves
  *    that semantics. An alias may be provided for compatibility.
  */
- static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
+static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -4137,14 +4235,11 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
         }
     }
 
-    // SUPPRESSION : Containment tests are disabled. 
-    //Risk: case where a face is completely contained in another may be missed (Z test will sort it)
-    /* Containment tests: only check if candidate point lies inside the other's bbox first
-     * (cheap) before doing the full ray-cast in point_in_poly_int. This skips expensive
-     * loops for points obviously outside the other polygon's bbox. */
-    // Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
-    // This avoids missing a containment when the polygon's first vertex lies on a shared
-    // boundary point (touching) which is treated as outside.
+    /* Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
+     * This avoids missing a containment when the polygon's first vertex lies on a shared
+     * boundary point (touching) which is treated as outside. Only checks the candidate
+     * point's bbox first (cheap) before the full ray-cast in point_in_poly_int, skipping
+     * expensive loops for points obviously outside the other polygon's bbox. */
     for (int ii = 0; ii < n1; ++ii) {
         int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
         if (vid < 0 || vid >= vtx->vertex_count) continue;
@@ -4163,6 +4258,7 @@ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
 
     return 0;
 }
+
 
 /* Plane-based pair relation used by `painter_correct` fast path:
  * - Only evaluates geometric plane tests (equivalent to tests 4..7)
@@ -4417,30 +4513,75 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
 /* Compute ray cast distances (tf) for faces f1 and f2 at screen coordinate (cx,cy).
  * Returns 1 and fills *out_tf1/*out_tf2 on success, 0 if denom near zero (coplanar/parallel) or invalid.
  */
+/* =====================================================================
+ * ray_cast_distances  (OPTIMIZED)
+ * ---------------------------------------------------------------------
+ * WHAT CHANGED AND WHY IT SHOULD NOT AFFECT THE RESULT
+ *
+ * 1) Removed Dz. It was always set to the literal 1.0f and only ever used
+ *    as a multiplicand (C1 * Dz, C2 * Dz). Multiplying any finite float
+ *    by exactly 1.0f is a guaranteed no-op under IEEE-754 (x * 1.0f == x,
+ *    bit-for-bit, with no rounding possible) - so C1 * Dz and C2 * Dz have
+ *    been replaced directly with C1 and C2. This is not an approximation;
+ *    it is an exact identity of the floating-point standard itself.
+ *
+ * 2) Reordered the work so f2's plane data is only touched, and denom2 is
+ *    only computed, after confirming f1's own denom1 test passes. The
+ *    original always computed both faces' A/B/C/D and both denom1/denom2
+ *    before checking `fabsf(denom1) < 1e-6f || fabsf(denom2) < 1e-6f` and
+ *    returning 0 on either failure. Since the function returns the exact
+ *    same value (0) regardless of which of the two denom checks fails,
+ *    checking denom1 immediately after computing it - before ever reading
+ *    f2's plane data - skips work that would have been discarded anyway
+ *    whenever f1 alone already disqualifies the pair. Whenever f1 passes,
+ *    f2's data is read and denom2 checked exactly as before, with an
+ *    identical outcome in every case.
+ *
+ * 3) D1/D2 are now converted from Fixed64 only once both denom checks
+ *    have passed, i.e. only when the function is actually going to
+ *    succeed and write to *out_tf1/*out_tf2. In the original, D1/D2 were
+ *    read unconditionally up front even though they are never used when
+ *    the function returns 0. This is again a pure "skip work whose result
+ *    would be discarded" change with no effect on any returned value.
+ *
+ * Everything else (parameter/bounds validation, Dx/Dy computation, the
+ * 1e-6f tolerance, and the final t = -D/denom formulas) is untouched,
+ * byte-for-byte, from the original.
+ * ===================================================================== */
 static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2) {
     if (!model || !out_tf1 || !out_tf2) return 0;
     FaceArrays3D* faces = &model->faces;
     if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
+
     float proj_scale = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
     float Dx = ((float)cx - (float)CENTRE_X) / proj_scale;
     float Dy = ((float)CENTRE_Y - (float)cy) / proj_scale;
-    float Dz = 1.0f;
+
+    /* --- test f1 first; bail out before touching f2's data if it already fails --- */
     float A1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
     float B1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
     float C1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
-    float D1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
+
+    float denom1 = A1 * Dx + B1 * Dy + C1; /* was "+ C1 * Dz" with Dz == 1.0f */
+    if (fabsf(denom1) < 1e-6f) return 0; /* coplanar or parallel */
+
+    /* --- f1 passed: now test f2 --- */
     float A2 = (float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
     float B2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
     float C2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
+
+    float denom2 = A2 * Dx + B2 * Dy + C2; /* was "+ C2 * Dz" with Dz == 1.0f */
+    if (fabsf(denom2) < 1e-6f) return 0; /* coplanar or parallel */
+
+    /* Both denoms are valid: only now convert D1/D2, since they are the
+     * only remaining values still needed to produce the output. */
+    float D1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
     float D2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
-    float denom1 = A1 * Dx + B1 * Dy + C1 * Dz;
-    float denom2 = A2 * Dx + B2 * Dy + C2 * Dz;
-    if (fabsf(denom1) < 1e-6f || fabsf(denom2) < 1e-6f) return 0; /* coplanar or parallel */
+
     *out_tf1 = -D1 / denom1;
     *out_tf2 = -D2 / denom2;
     return 1;
 }
-
 /* Ray cast at explicit screen coordinate (cx,cy) in projected 2D coords */
 static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
     float tf1 = 0.0f, tf2 = 0.0f;

@@ -60,8 +60,8 @@ segment "main";
 
     newmodel:
         {
-            const char* title = "3D OBJ file explorer (version 0.9)";
-            int title_len = sizeof("3D OBJ file explorer (version 0.9)") - 1;
+            const char* title = "3D OBJ file explorer (version 1.0)";
+            int title_len = sizeof("3D OBJ file explorer (version 1.0)") - 1;
             int total_width = 80;
             int border_len = title_len + 6;
             if (border_len > total_width) border_len = total_width;
