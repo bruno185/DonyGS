@@ -189,6 +189,8 @@ static inline int normalize_deg(int deg) {
 #define PAINTER_MODE_CORRECT    3
 #define PAINTER_MODE_GEO        5
 #define PAINTER_MODE_CORRECTV2  6
+#define PAINTER_MODE_GEOV3      7
+
 
 // Couleurs QuickDraw nommées
 #define COL_BLACK           0
@@ -520,6 +522,7 @@ void painter_newell_sancha(Model3D* model, int face_count);
 void painter_geoV2(Model3D* model, int face_count);
 static int painter_correct(Model3D* model, int face_count, int debug);   // ou non-static selon usage
 static int painter_correctV2(Model3D* model, int face_count, int debug);
+void painter_geoV2(Model3D* model, int face_count);
 
 // Helpers géométriques / ordre
 static int geometric_face_relation(Model3D* model, int f1, int f2);

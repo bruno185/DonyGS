@@ -59,3 +59,13 @@ pair_plane_before() / pair_plane_after() — testent le signe de tous les sommet
 projected_polygons_overlap_simple() — le nom suggère une version allégée de la fonction qu'on vient d'auditer, utilisée par painter_correct. Vu le pattern qu'on a trouvé dans la version complète (double calcul, boucles recalculant les mêmes données), il y a de bonnes chances qu'elle partage des défauts similaires.
 compute_intersection_centroid_ordered_fixed_tryboth() — le nom laisse penser qu'elle essaie les deux ordres de clipping comme le fait manuellement l'étape 9 ; si c'est le cas, elle pourrait avoir exactement la même redondance que je viens de corriger, à vérifier si elle court-circuite bien dès le premier succès.
 ray_cast_hierarchical() / ray_cast_at() / ray_cast_distances() — fallback utilisé seulement par painter_geoV2 et les outils de diagnostic, donc probablement appelé moins souvent que les tests précédents ; priorité plus basse sauf si painter_geoV2 est le mode par défaut.
+
+
+geoV2 en erreur : 
+300 / 30 / 0
+300 / 50 / 0 ==> cockpit masqué ! => ok avec DONY
+
+geoV3 en erreur :
+60 / 20 / 0
+50 / 20 / 0
+default position

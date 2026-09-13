@@ -1,4 +1,6 @@
 #include "declare.c"
+#include "dony.c"
+
 
 segment "model_loading";
 // ================================================================================
@@ -1972,6 +1974,9 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
         /* painter_correctV2: experimental face splitting version */
         painter_correctV2(model, model->faces.face_count, 0);
     } 
+    else if (painter_mode == PAINTER_MODE_GEOV3) {
+        painter_geoV3(model, model->faces.face_count);
+    }
     t_end = GetTick();
 
     skip_calc:;
@@ -2845,6 +2850,11 @@ void painter_geoV2(Model3D* model, int face_count) {
 
     // printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
 }
+
+
+
+
+
 
 /* painter_correct
  * ----------------
@@ -8843,7 +8853,7 @@ static void inspect_face_pair_ui(Model3D* model) {
         } else {
             printf("f%d do not overlap f%d", f1, f2);
         }
-        printf("\nArrows: nav. SPACE: text results, ESC: exit");
+        printf("\nArrows: nav. SPACE: details, ESC: exit");
 
 
         /* Wait for key (same inline read used elsewhere) */

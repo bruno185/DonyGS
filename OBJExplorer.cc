@@ -674,20 +674,26 @@ segment "main";
             case 117: // 'u'
                 // printf("Painter geo V1: toggle geometry-only painter mode for testing\n");
                 // painter_geoV1(model, model->faces.face_count);
-                startgraph(mode);
-                // Implement the desired behavior for the 'O' key here
-                int startTimeOld = GetTick();
-                renderModelScanlineZBuffer_old(model);
-                int endTimeOld = GetTick();
-                key = getkeypress();
-                if (key == '*') { saveNextScreenshot(); }
 
-                endgraph();
-                DoText();
+                painter_mode = PAINTER_MODE_GEOV3;
+                if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
+                // { 
+                //     startgraph(mode);
+                //     // Implement the desired behavior for the 'O' key here
+                //     int startTimeOld = GetTick();
+                //     renderModelScanlineZBuffer_old(model);
+                //     int endTimeOld = GetTick();
+                //     key = getkeypress();
+                //     if (key == '*') { saveNextScreenshot(); }
 
-                // printf("endtime = %d\n", endTime);
-                printf("Z-Buffer scanline render time: %d ticks. Press a key to continue.\n", endTimeOld - startTimeOld);
-                keypress();
+                //     endgraph();
+                //     DoText();
+
+                //     // printf("endtime = %d\n", endTime);
+                //     printf("Z-Buffer scanline render time: %d ticks. Press a key to continue.\n", endTimeOld - startTimeOld);
+                //     keypress();
+                // }
+
                 goto loopReDraw;
 
 
