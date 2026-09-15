@@ -2852,10 +2852,6 @@ void painter_geoV2(Model3D* model, int face_count) {
 }
 
 
-
-
-
-
 /* painter_correct
  * ----------------
  * Deterministically adjust `faces->sorted_face_indices` in-place using the
@@ -4602,7 +4598,256 @@ static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
 }
 
 /* Hierarchical ray-cast: prefer QD centroid, then SH centroid, then bbox center */
-static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
+/* ============================================================================
+ *  ray_cast_hierarchical — artificial x n zoom patch (self-contained)
+ * ----------------------------------------------------------------------------
+ *  PROBLEM BEING FIXED
+ *  --------------------
+ *  ray_cast_hierarchical() decides which of two overlapping faces is in
+ *  front by sampling a single screen-space point (a centroid) and casting
+ *  a ray through it. That centroid comes from vtx->x2d/y2d, which are
+ *  produced by compute2DFromObserver() and rounded to the nearest INTEGER
+ *  pixel (FIXED_ROUND_TO_INT).
+ *
+ *  For a pair of faces whose overlap polygon on screen is small (a few
+ *  pixels), that integer rounding is not negligible: it can shift the
+ *  sampled centroid enough to land on the wrong side of the true
+ *  intersection line between the two faces' planes, flipping the
+ *  front/back verdict. This is exactly why the same face pair can give a
+ *  different (and sometimes wrong) answer depending on the current
+ *  display zoom level: zooming happens to change the projection scale,
+ *  which happens to change how much this rounding error matters.
+ *
+ *  KEY INSIGHT
+ *  -----------
+ *  compute2DFromObserver() computes, for each vertex:
+ *      x2d = xo * scale / zo + CENTRE_X
+ *      y2d = CENTRE_Y - yo * scale / zo
+ *  where xo/yo/zo are the already-rotated observer-space coordinates and
+ *  do NOT depend on `scale`. So varying `scale` alone, at fixed xo/yo/zo,
+ *  is an EXACT uniform scaling of the projected 2D points around
+ *  (CENTRE_X, CENTRE_Y) — no perspective distortion is introduced. This
+ *  means we can locally re-run the same projection formula at a larger
+ *  scale, purely to reduce the *relative* size of the integer rounding
+ *  error for this one pair, without moving the camera or changing what
+ *  is displayed on screen.
+ *
+ *  STRATEGY
+ *  --------
+ *  Before running the actual test, we:
+ *    1) temporarily double the projection scale,
+ *    2) re-project ONLY the vertices belonging to f1 and f2 (not the
+ *       whole model — cheap, since a face has at most MAX_FACE_VERTICES
+ *       vertices),
+ *    3) recompute the cached 2D bounding boxes of f1 and f2 (some of the
+ *       downstream tests read faces->minx/maxx/miny/maxy directly instead
+ *       of recomputing them from vtx->x2d/y2d, so the cache must be kept
+ *       consistent with the patched coordinates),
+ *    4) run the existing, UNCHANGED decision logic,
+ *    5) restore everything exactly as it was (original vertex 2D coords,
+ *       original per-face bbox cache, original global scale).
+ *
+ *  LOCALITY
+ *  --------
+ *  This patch is fully self-contained in this file:
+ *    - the public function name and signature `ray_cast_hierarchical`
+ *      are unchanged, so every existing caller (painter_geoV2,
+ *      painter_geoV3, check_sort_repair, check_sort_repair_fast) keeps
+ *      working exactly as before, with no code changes on their side;
+ *    - the original body is kept verbatim, just renamed to
+ *      ray_cast_hierarchical_impl(), and is called from a new wrapper
+ *      that does the zoom patch/unpatch around it;
+ *    - no global state is left modified after the call returns: the
+ *      patch is applied and reverted within a single call to
+ *      ray_cast_hierarchical().
+ *
+ *  A SUBTLETY THIS CODE HANDLES ON PURPOSE
+ *  ----------------------------------------
+ *  f1 and f2 may share one or more vertices (common for adjacent faces).
+ *  If we patched f1's vertices and f2's vertices as two fully independent
+ *  loops, a shared vertex would be "saved" a second time (for f2) AFTER
+ *  it was already overwritten by f1's patch — corrupting the value used
+ *  for restoration. To avoid this, we first collect the UNIQUE set of
+ *  vertex indices touched by either face, save each one exactly once
+ *  BEFORE any modification, then patch each one exactly once.
+ *
+ *  KNOWN CAVEATS (left as-is by this patch, not fixed here)
+ *  ----------------------------------------------------------
+ *  - This patch runs UNCONDITIONALLY on every call, not only on
+ *    ambiguous pairs. It adds a small, bounded cost (reprojecting at
+ *    most 2 * MAX_FACE_VERTICES vertices and recomputing two bboxes)
+ *    even for pairs that were already unambiguous. If this cost ever
+ *    matters, an ambiguity check can be added later to skip the patch
+ *    for clear-cut pairs, without changing the patch mechanism itself.
+ *  - Step 1 of the original logic (QuickDraw region centroid path) still
+ *    calls compute_intersection_region_bbox(), which performs a real
+ *    QuickDraw PaintRgn() as a side effect. This patch does not remove
+ *    that side effect — it simply makes it happen with the doubled-scale
+ *    coordinates instead of the current display scale.
+ * ==========================================================================*/
+
+#define RCH_ZOOM_MAX_VERTS (2 * MAX_FACE_VERTICES)
+
+/* Holds everything needed to fully undo the temporary zoom patch for one
+ * face pair: the previous global projection scale, the previous 2D
+ * screen coordinates of every touched vertex, and the previous cached
+ * 2D bounding boxes of f1 and f2. */
+typedef struct {
+    Fixed32 saved_scale;                    /* previous s_global_proj_scale_fixed */
+    int idx[RCH_ZOOM_MAX_VERTS];            /* unique 0-based vertex indices touched */
+    int saved_x2d[RCH_ZOOM_MAX_VERTS];      /* their original x2d, in the same order as idx[] */
+    int saved_y2d[RCH_ZOOM_MAX_VERTS];      /* their original y2d, in the same order as idx[] */
+    int count;                              /* number of valid entries in idx/saved_x2d/saved_y2d */
+    int f1_minx, f1_maxx, f1_miny, f1_maxy; /* previous cached 2D bbox of f1 */
+    int f2_minx, f2_maxx, f2_miny, f2_maxy; /* previous cached 2D bbox of f2 */
+} RCHZoomPatch;
+
+/* Collect the set of UNIQUE 0-based vertex indices used by f1 and f2,
+ * converting from the OBJ-style 1-based indices stored in
+ * vertex_indices_buffer. A vertex shared by both faces appears only
+ * once in out_idx, which is what makes the save/patch/restore sequence
+ * safe even when f1 and f2 are adjacent (sharing an edge or a vertex).
+ * out_idx must have room for at least RCH_ZOOM_MAX_VERTS entries.
+ * Returns the number of unique indices written. */
+static int rch_gather_pair_vertex_indices(FaceArrays3D* faces, int f1, int f2, int* out_idx) {
+    int n = 0;
+
+    /* Walk f1's vertices */
+    int base1 = faces->vertex_indices_ptr[f1], vc1 = faces->vertex_count[f1];
+    for (int k = 0; k < vc1; ++k) {
+        int vidx = faces->vertex_indices_buffer[base1 + k] - 1; /* OBJ 1-based -> 0-based */
+        int dup = 0;
+        for (int m = 0; m < n; ++m) if (out_idx[m] == vidx) { dup = 1; break; }
+        if (!dup) out_idx[n++] = vidx;
+    }
+
+    /* Walk f2's vertices, skipping anything already collected from f1 */
+    int base2 = faces->vertex_indices_ptr[f2], vc2 = faces->vertex_count[f2];
+    for (int k = 0; k < vc2; ++k) {
+        int vidx = faces->vertex_indices_buffer[base2 + k] - 1;
+        int dup = 0;
+        for (int m = 0; m < n; ++m) if (out_idx[m] == vidx) { dup = 1; break; }
+        if (!dup) out_idx[n++] = vidx;
+    }
+
+    return n;
+}
+
+/* Recompute the cached 2D bounding box (faces->minx/maxx/miny/maxy) of a
+ * single face from its CURRENT vtx->x2d/y2d values. This must be called
+ * after patching a face's vertex coordinates, because some downstream
+ * tests (e.g. compute_bbox_intersection / compute_bbox_intersection_center,
+ * used as ray_cast_hierarchical's final fallback) read this cache
+ * directly instead of recomputing it from the vertex arrays. Without
+ * this step, the fallback path would silently use stale, pre-zoom
+ * bounding boxes while everything else uses the zoomed coordinates. */
+static void rch_recompute_face_bbox_cache(Model3D* model, int f) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    int base = faces->vertex_indices_ptr[f], vc = faces->vertex_count[f];
+
+    int v0 = faces->vertex_indices_buffer[base] - 1;
+    int mnx = vtx->x2d[v0], mxx = vtx->x2d[v0];
+    int mny = vtx->y2d[v0], mxy = vtx->y2d[v0];
+
+    for (int k = 1; k < vc; ++k) {
+        int vidx = faces->vertex_indices_buffer[base + k] - 1;
+        int x = vtx->x2d[vidx], y = vtx->y2d[vidx];
+        if (x < mnx) mnx = x; if (x > mxx) mxx = x;
+        if (y < mny) mny = y; if (y > mxy) mxy = y;
+    }
+
+    faces->minx[f] = mnx; faces->maxx[f] = mxx;
+    faces->miny[f] = mny; faces->maxy[f] = mxy;
+}
+
+/* Apply the temporary zoom: re-project every vertex touched by f1/f2 at
+ * `test_scale` instead of the current global projection scale, writing
+ * directly into the shared vtx->x2d/y2d arrays (which is what every
+ * downstream overlap/centroid/bbox function reads from). Everything
+ * needed to undo this is recorded into *p* BEFORE any value is
+ * overwritten. Also temporarily overwrites s_global_proj_scale_fixed,
+ * since ray_cast_distances() reads it directly to de-project the tested
+ * screen point back into a 3D ray. */
+static void rch_patch_pair_at_scale(Model3D* model, int f1, int f2, Fixed32 test_scale, RCHZoomPatch* p) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    const Fixed32 cx_f = INT_TO_FIXED(CENTRE_X);
+    const Fixed32 cy_f = INT_TO_FIXED(CENTRE_Y);
+
+    /* --- Save + swap the global projection scale --- */
+    p->saved_scale = s_global_proj_scale_fixed;
+    s_global_proj_scale_fixed = test_scale;
+
+    /* --- Save the current (pre-patch) per-face 2D bbox cache --- */
+    p->f1_minx = faces->minx[f1]; p->f1_maxx = faces->maxx[f1];
+    p->f1_miny = faces->miny[f1]; p->f1_maxy = faces->maxy[f1];
+    p->f2_minx = faces->minx[f2]; p->f2_maxx = faces->maxx[f2];
+    p->f2_miny = faces->miny[f2]; p->f2_maxy = faces->maxy[f2];
+
+    /* --- Determine which vertices will be touched (deduplicated) --- */
+    p->count = rch_gather_pair_vertex_indices(faces, f1, f2, p->idx);
+
+    /* --- Save the TRUE original 2D coords, before touching anything ---
+     * This must happen as its own pass, strictly before the patch pass
+     * below: doing save+patch in a single interleaved loop would, for a
+     * vertex shared between f1 and f2, end up "saving" an already-patched
+     * value instead of the original one. */
+    for (int i = 0; i < p->count; ++i) {
+        p->saved_x2d[i] = vtx->x2d[p->idx[i]];
+        p->saved_y2d[i] = vtx->y2d[p->idx[i]];
+    }
+
+    /* --- Re-project each unique vertex at test_scale ---
+     * Mirrors compute2DFromObserver()'s formula exactly, just with a
+     * different scale. xo/yo/zo (rotated observer-space coordinates)
+     * are untouched by this — only the projection scale changes. */
+    for (int i = 0; i < p->count; ++i) {
+        int vidx = p->idx[i];
+        Fixed32 inv_zo = FIXED_DIV_64(test_scale, vtx->zo[vidx]);
+        Fixed32 xt = FIXED_ADD(FIXED_MUL_64(vtx->xo[vidx], inv_zo), cx_f);
+        Fixed32 yt = FIXED_SUB(cy_f, FIXED_MUL_64(vtx->yo[vidx], inv_zo));
+        vtx->x2d[vidx] = FIXED_ROUND_TO_INT(xt);
+        vtx->y2d[vidx] = FIXED_ROUND_TO_INT(yt);
+    }
+
+    /* --- Keep the per-face bbox cache consistent with the patched coords --- */
+    rch_recompute_face_bbox_cache(model, f1);
+    rch_recompute_face_bbox_cache(model, f2);
+}
+
+/* Undo everything rch_patch_pair_at_scale() did: restore the original
+ * vtx->x2d/y2d for every touched vertex, restore the original per-face
+ * bbox cache for f1 and f2, and restore the original global projection
+ * scale. After this call, the model is left exactly as it was before
+ * the patch — no visible or hidden side effect remains. */
+static void rch_unpatch_pair(Model3D* model, RCHZoomPatch* p, int f1, int f2) {
+    VertexArrays3D* vtx = &model->vertices;
+    FaceArrays3D* faces = &model->faces;
+
+    for (int i = 0; i < p->count; ++i) {
+        vtx->x2d[p->idx[i]] = p->saved_x2d[i];
+        vtx->y2d[p->idx[i]] = p->saved_y2d[i];
+    }
+
+    faces->minx[f1] = p->f1_minx; faces->maxx[f1] = p->f1_maxx;
+    faces->miny[f1] = p->f1_miny; faces->maxy[f1] = p->f1_maxy;
+    faces->minx[f2] = p->f2_minx; faces->maxx[f2] = p->f2_maxx;
+    faces->miny[f2] = p->f2_miny; faces->maxy[f2] = p->f2_maxy;
+
+    s_global_proj_scale_fixed = p->saved_scale;
+}
+
+/* ----------------------------------------------------------------------
+ * Original decision logic, UNCHANGED, just renamed.
+ * This is exactly the previous body of ray_cast_hierarchical(): try the
+ * QuickDraw region centroid first, then the Sutherland-Hodgman centroid,
+ * then fall back to the bbox-intersection center. Whatever coordinates
+ * happen to be in vtx->x2d/y2d and faces->minx/maxx/... at the time this
+ * runs are what it will use — it has no knowledge of the zoom patch
+ * wrapped around it.
+ * ---------------------------------------------------------------------- */
+static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     int cx = 0, cy = 0; long long area2 = 0; int rc = 0; int fallback = 0;
 
@@ -4627,6 +4872,33 @@ static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
     return 0;
 }
 
+/* ----------------------------------------------------------------------
+ * New public entry point — SAME NAME, SAME SIGNATURE as before, so every
+ * existing caller (painter_geoV2, painter_geoV3, check_sort_repair,
+ * check_sort_repair_fast) keeps compiling and behaving the same way
+ * from their point of view. The only difference is what happens inside:
+ * the projection scale is temporarily doubled and the two faces'
+ * vertices are re-projected before the (unchanged) decision logic runs,
+ * then everything is restored before returning.
+ * ---------------------------------------------------------------------- */
+static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
+
+    RCHZoomPatch patch;
+
+    /* Systematic x n zoom, applied on every call (not conditioned on
+     * detecting ambiguity first — see "KNOWN CAVEATS" above). */
+    // Fixed32 test_scale = FIXED_MUL_64(s_global_proj_scale_fixed, FLOAT_TO_FIXED(10.0f));
+    // Fixed32 test_scale = s_global_proj_scale_fixed << 4;
+
+    rch_patch_pair_at_scale(model, f1, f2, test_scale, &patch);
+    int rc = ray_cast_hierarchical_impl(model, f1, f2);
+    rch_unpatch_pair(model, &patch, f1, f2);
+
+    return rc;
+}
 /* Compute center of intersection of two faces' projected axis-aligned bboxes.
  * Returns 1 and writes (*outx,*outy) on success, 0 if no intersection or invalid ids.
  */
