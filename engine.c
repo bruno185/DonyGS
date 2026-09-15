@@ -4890,7 +4890,7 @@ static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
 
     /* Systematic x n zoom, applied on every call (not conditioned on
      * detecting ambiguity first — see "KNOWN CAVEATS" above). */
-    // Fixed32 test_scale = FIXED_MUL_64(s_global_proj_scale_fixed, FLOAT_TO_FIXED(10.0f));
+    Fixed32 test_scale = FIXED_MUL_64(s_global_proj_scale_fixed, FLOAT_TO_FIXED(10.0f));
     // Fixed32 test_scale = s_global_proj_scale_fixed << 4;
 
     rch_patch_pair_at_scale(model, f1, f2, test_scale, &patch);
