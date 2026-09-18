@@ -8937,7 +8937,6 @@ static void inspect_face_pair_ui(Model3D* model) {
     if (scanf("%d", &f2) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
     { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
     if (f2 < 0 || f2 >= face_count) { printf("Invalid face id 2\n"); return; }
-    
 
     /* Interactive graphical loop */
     while (1) {
@@ -8951,7 +8950,6 @@ static void inspect_face_pair_ui(Model3D* model) {
         int old_frame = framePolyOnly;
 
         startgraph(mode);
-        
         framePolyOnly = 1; for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
         if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
         else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
@@ -9129,6 +9127,7 @@ static void inspect_face_pair_ui(Model3D* model) {
         }
         printf("\nArrows: nav. SPACE: details, ESC: exit");
 
+
         /* Wait for key (same inline read used elsewhere) */
         int key = getkeypress ();
 
@@ -9159,13 +9158,13 @@ static void inspect_face_pair_ui(Model3D* model) {
             framePolyOnly = old_frame;
             for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
             free(backup_flags);
-            
-            endgraph(); 
-            DoText();
+            endgraph(); DoText();
 
             /* Compact summary designed to fit 80x24 */
-            printf("\n=== Face pair: f%d vs f%d ===\n", f1, f2);
 
+            // Title for the face pair section
+            printf("                =========== Face pair: f%d vs f%d ===========               \n", f1, f2);
+            
             /* sorted list position */
             {
                 int pos1=-1,pos2=-1;
@@ -9195,8 +9194,8 @@ static void inspect_face_pair_ui(Model3D* model) {
                    geo_str,
                    (r.poly_overlap?"yes":"no"));
 
+            
             // printf("Ray offsets: bbox = %d ; sh = %d ; qd = %d\n", r.bbox_raycast,r.sh_raycast,r.qd_raycast);
-
             int bbox_face = (r.bbox_raycast == 1) ? f1 : (r.bbox_raycast == 2) ? f2 : -1;
             int sh_face   = (r.sh_raycast   == 1) ? f1 : (r.sh_raycast   == 2) ? f2 : -1;
             int qd_face   = (r.qd_raycast   == 1) ? f1 : (r.qd_raycast   == 2) ? f2 : -1;
@@ -9209,8 +9208,7 @@ static void inspect_face_pair_ui(Model3D* model) {
             if (qd_face >= 0) printf("f%d front", qd_face); else printf("?");
             printf("\n");
 
-            printf("\n"); /* blank line before detailed info */
-
+            printf("\n"); // blank line between faces
             /* face equations and Z stats on one line each */
             {
                 float a1=(float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
@@ -9222,7 +9220,7 @@ static void inspect_face_pair_ui(Model3D* model) {
                 printf("Zmin=%.2f ; Zmean=%.2f ; Zmax=%.2f\n",
                        FIXED_TO_FLOAT(faces->z_min[f1]),FIXED_TO_FLOAT(faces->z_mean[f1]),FIXED_TO_FLOAT(faces->z_max[f1]));
             }
-            printf("\n"); // blank line between faces
+            // printf("\n"); // blank line between faces
             {
                 float a2=(float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
                 float b2=(float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
