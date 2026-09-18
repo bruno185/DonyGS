@@ -9158,9 +9158,49 @@ static void inspect_face_pair_ui(Model3D* model) {
             framePolyOnly = old_frame;
             for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
             free(backup_flags);
-            endgraph(); DoText();
 
-            /* Compact summary designed to fit 80x24 */
+        /* Also compute the same raycast verdicts with an artificial x10 zoom,
+        * for later display in the text-mode summary (SPACE key).
+        * This MUST run here, while QuickDraw is still active (before endgraph()),
+        * otherwise the QD centroid path (use_qd=1) silently fails and always
+        * reports "undetermined" regardless of the zoom factor. */
+        static int zoom_bbox_raycast = 0, zoom_sh_raycast = 0, zoom_qd_raycast = 0;
+        {
+            /* Heap-allocated on purpose: both structures are large enough to risk
+            * stack exhaustion if declared as local variables on this 65816/ORCA-C
+            * target, and we don't need them to persist beyond this block, so a
+            * permanent static allocation would waste memory for no benefit. */
+            CompareFacesResult* r_zoom = (CompareFacesResult*)malloc(sizeof(CompareFacesResult));
+            RCHZoomPatch* patch = (RCHZoomPatch*)malloc(sizeof(RCHZoomPatch));
+
+            if (r_zoom && patch) {
+                memset(r_zoom, 0, sizeof(*r_zoom));
+
+                /* Temporarily re-project only f1/f2's vertices at a larger scale
+                * (see ray_cast_hierarchical's zoom patch for the full rationale),
+                * re-run the diagnostic, then fully restore the original state. */
+                Fixed32 test_scale = FIXED_MUL_64(s_global_proj_scale_fixed, FLOAT_TO_FIXED(10.0f));
+                rch_patch_pair_at_scale(model, f1, f2, test_scale, patch);
+                compare_faces_diagnostic(model, f1, f2, 1, r_zoom); /* use_qd=1: QuickDraw is active here */
+                rch_unpatch_pair(model, patch, f1, f2);
+
+                /* Keep only the three small integers we actually need later;
+                * the rest of CompareFacesResult (including its text buffers)
+                * is freed right away and never kept around. */
+                zoom_bbox_raycast = r_zoom->bbox_raycast;
+                zoom_sh_raycast   = r_zoom->sh_raycast;
+                zoom_qd_raycast   = r_zoom->qd_raycast;
+            } else {
+                /* Allocation failed: fall back to "undetermined" rather than crash. */
+                zoom_bbox_raycast = zoom_sh_raycast = zoom_qd_raycast = 0;
+            }
+            if (r_zoom) free(r_zoom);
+            if (patch) free(patch);
+        }
+
+            endgraph(); 
+            DoText();
+            // now in text mode
 
             // Title for the face pair section
             printf("                =========== Face pair: f%d vs f%d ===========               \n", f1, f2);
@@ -9207,6 +9247,23 @@ static void inspect_face_pair_ui(Model3D* model) {
             printf(" ; qd = ");
             if (qd_face >= 0) printf("f%d front", qd_face); else printf("?");
             printf("\n");
+
+            /* Second line: same verdicts, but computed earlier with the artificial
+            * x10 zoom (see the block added right after the main compare_faces_diagnostic
+            * call, while still in graphical mode). Only three small static ints were
+            * kept from that computation — nothing heavy is read here. */
+            int bbox_face_z = (zoom_bbox_raycast == 1) ? f1 : (zoom_bbox_raycast == 2) ? f2 : -1;
+            int sh_face_z   = (zoom_sh_raycast   == 1) ? f1 : (zoom_sh_raycast   == 2) ? f2 : -1;
+            int qd_face_z   = (zoom_qd_raycast   == 1) ? f1 : (zoom_qd_raycast   == 2) ? f2 : -1;
+
+            printf("Raycast result (zoom x10): bbox = ");
+            if (bbox_face_z >= 0) printf("f%d front", bbox_face_z); else printf("?");
+            printf(" ; sh = ");
+            if (sh_face_z >= 0) printf("f%d front", sh_face_z); else printf("?");
+            printf(" ; qd = ");
+            if (qd_face_z >= 0) printf("f%d front", qd_face_z); else printf("?");
+            printf("\n");
+
 
             printf("\n"); // blank line between faces
             /* face equations and Z stats on one line each */
@@ -9330,7 +9387,8 @@ static void inspect_face_pair_ui(Model3D* model) {
         framePolyOnly = old_frame;
         for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
         free(backup_flags);
-        endgraph(); DoText();
+        endgraph(); 
+        DoText();
     }
 }
 
