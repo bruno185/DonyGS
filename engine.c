@@ -8937,6 +8937,7 @@ static void inspect_face_pair_ui(Model3D* model) {
     if (scanf("%d", &f2) != 1) { int ch; while ((ch = getchar()) != '\n' && ch != EOF); printf("Input cancelled\n"); return; }
     { int ch; while ((ch = getchar()) != '\n' && ch != EOF); }
     if (f2 < 0 || f2 >= face_count) { printf("Invalid face id 2\n"); return; }
+    
 
     /* Interactive graphical loop */
     while (1) {
@@ -8950,6 +8951,7 @@ static void inspect_face_pair_ui(Model3D* model) {
         int old_frame = framePolyOnly;
 
         startgraph(mode);
+        
         framePolyOnly = 1; for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
         if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
         else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
@@ -9127,7 +9129,6 @@ static void inspect_face_pair_ui(Model3D* model) {
         }
         printf("\nArrows: nav. SPACE: details, ESC: exit");
 
-
         /* Wait for key (same inline read used elsewhere) */
         int key = getkeypress ();
 
@@ -9158,10 +9159,12 @@ static void inspect_face_pair_ui(Model3D* model) {
             framePolyOnly = old_frame;
             for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
             free(backup_flags);
-            endgraph(); DoText();
+            
+            endgraph(); 
+            DoText();
 
             /* Compact summary designed to fit 80x24 */
-            printf("\n=== Face pair: f%d vs f%d ===\n\n", f1, f2);
+            printf("\n=== Face pair: f%d vs f%d ===\n", f1, f2);
 
             /* sorted list position */
             {
@@ -9192,7 +9195,20 @@ static void inspect_face_pair_ui(Model3D* model) {
                    geo_str,
                    (r.poly_overlap?"yes":"no"));
 
-            printf("Ray offsets: bbox = %d ; sh = %d ; qd = %d\n", r.bbox_raycast,r.sh_raycast,r.qd_raycast);
+            // printf("Ray offsets: bbox = %d ; sh = %d ; qd = %d\n", r.bbox_raycast,r.sh_raycast,r.qd_raycast);
+
+            int bbox_face = (r.bbox_raycast == 1) ? f1 : (r.bbox_raycast == 2) ? f2 : -1;
+            int sh_face   = (r.sh_raycast   == 1) ? f1 : (r.sh_raycast   == 2) ? f2 : -1;
+            int qd_face   = (r.qd_raycast   == 1) ? f1 : (r.qd_raycast   == 2) ? f2 : -1;
+
+            printf("Raycast result: bbox = ");
+            if (bbox_face >= 0) printf("f%d front", bbox_face); else printf("?");
+            printf(" ; sh = ");
+            if (sh_face >= 0) printf("f%d front", sh_face); else printf("?");
+            printf(" ; qd = ");
+            if (qd_face >= 0) printf("f%d front", qd_face); else printf("?");
+            printf("\n");
+
             printf("\n"); /* blank line before detailed info */
 
             /* face equations and Z stats on one line each */
@@ -9273,7 +9289,7 @@ static void inspect_face_pair_ui(Model3D* model) {
 
 
             /* Press R/E to reorder the sorted list, any other key to return */
-            printf("\nPress : \n'R' to move the back face in front\n'E' to move the front face behind\n'G' for advanced geometric details using plane equations\nAny other key to return to graphical inspector...\n");
+            printf("\n'R' to move the back face in front\n'E' to move the front face behind\n'G' for advanced geometric details using plane equations\nAny other key to return to graphical inspector...\n");
             char cmd = getkeypress ();
 
             if (cmd == 'R' || cmd == 'r' || cmd == 'E' || cmd == 'e') {
