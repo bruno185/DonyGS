@@ -273,6 +273,7 @@ segment "main";
                 printf ("Processing time: %d ticks (1/60 sec.)\n", last_process_time_end - last_process_time_start);
                 printf("===================================\n");
                 printf("\n");
+                printf("Free memory = %lu bytes\n", FreeMem());
                 printf("Press any key to continue...\n");
                 keypress();
                 goto loopReDraw;
