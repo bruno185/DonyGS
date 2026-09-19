@@ -4682,7 +4682,7 @@ static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
  *  - Step 1 of the original logic (QuickDraw region centroid path) still
  *    calls compute_intersection_region_bbox(), which performs a real
  *    QuickDraw PaintRgn() as a side effect. This patch does not remove
- *    that side effect — it simply makes it happen with the doubled-scale
+ *    that side effect — it simply makes it happen with the scale x 10
  *    coordinates instead of the current display scale.
  * ==========================================================================*/
 
@@ -4877,7 +4877,7 @@ static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2) {
  * existing caller (painter_geoV2, painter_geoV3, check_sort_repair,
  * check_sort_repair_fast) keeps compiling and behaving the same way
  * from their point of view. The only difference is what happens inside:
- * the projection scale is temporarily doubled and the two faces'
+ * the projection scale is temporarily multiplied by 10 and the two faces'
  * vertices are re-projected before the (unchanged) decision logic runs,
  * then everything is restored before returning.
  * ---------------------------------------------------------------------- */

@@ -140,14 +140,19 @@
 <div class="line">│   │   │   │   ├── <span class="fn" data-desc="Calcule l&#x27;orientation (sens de rotation) de trois points (utilitaire 2D, long long).">orient_ll</span>()</div>
 <div class="line">│   │   │   │   └── <span class="fn" data-desc="Teste si un point se trouve sur un segment (utilitaire géométrique 2D, long long).">on_seg_ll</span>()</div>
 <div class="line">│   │   │   └── <span class="fn" data-desc="Compare les listes de sommets de deux faces pour détecter une égalité géométrique.">faces_vertices_equal</span>()</div>
-<div class="line">│   │   ├── <span class="fn" data-desc="Ray-cast multi-stratégie : essaie centroïde QD, centroïde SH, puis centre de bbox.">ray_cast_hierarchical</span>()</div>
-<div class="line">│   │   │   ├── <span class="fn" data-desc="Calcule le centroïde de l&#x27;intersection via régions QuickDraw (plus rapide, dépend de QD).">compute_intersection_centroid_ordered_qd_fixed</span>()</div>
-<div class="line">│   │   │   │   └── <span class="fn" data-desc="Retourne la bbox de la région d&#x27;intersection QuickDraw de deux faces.">compute_intersection_region_bbox</span>()</div>
-<div class="line">│   │   │   ├── <span class="fn" data-desc="Essaie les deux ordres de clipping (f1→f2 et f2→f1) pour obtenir un centroïde d&#x27;intersection fiable.">compute_intersection_centroid_ordered_fixed_tryboth</span>()</div>
-<div class="line">│   │   │   │   └── <span class="fn" data-desc="Calcule le centroïde de l&#x27;intersection de deux polygones projetés via clipping Sutherland-Hodgman (Fixed).">compute_intersection_centroid_ordered_fixed</span>()</div>
-<div class="line">│   │   │   ├── <span class="fn" data-desc="Variante qui retourne le centre de l&#x27;intersection des bbox 2D.">compute_bbox_intersection_center</span>()</div>
-<div class="line">│   │   │   ├── <span class="fn" data-desc="Lance un rayon à un pixel (x,y) et compare les profondeurs des deux faces.">ray_cast_at</span>()</div>
-<div class="line">│   │   │   └── <span class="fn" data-desc="Calcule les distances observateur → plans des deux faces en un point écran donné.">ray_cast_distances</span>()</div>
+<div class="line">│   │   ├── <span class="fn" data-desc="Ray-cast multi-stratégie avec zoom artificiel temporaire (x10) : patch le scale de projection de f1/f2, délègue à ray_cast_hierarchical_impl, puis restaure l&#x27;état original.">ray_cast_hierarchical</span>()</div>
+<div class="line">│   │   │   ├── <span class="fn" data-desc="Reprojette temporairement les sommets uniques de f1/f2 à un scale de projection donné et met à jour le cache de bbox 2D ; sauvegarde l&#x27;état original pour restauration.">rch_patch_pair_at_scale</span>()</div>
+<div class="line">│   │   │   │   ├── <span class="fn" data-desc="Collecte les indices de sommets uniques (0-based) utilisés par une paire de faces, en dédoublonnant les sommets partagés.">rch_gather_pair_vertex_indices</span>()</div>
+<div class="line">│   │   │   │   └── <span class="fn" data-desc="Recalcule le cache de bbox 2D (minx/maxx/miny/maxy) d&#x27;une face à partir de ses coordonnées 2D courantes.">rch_recompute_face_bbox_cache</span>()</div>
+<div class="line">│   │   │   ├── <span class="fn" data-desc="Corps original de ray_cast_hierarchical (inchangé) : essaie centroïde QD, centroïde SH, puis centre de bbox.">ray_cast_hierarchical_impl</span>()</div>
+<div class="line">│   │   │   │   ├── <span class="fn" data-desc="Calcule le centroïde de l&#x27;intersection via régions QuickDraw (plus rapide, dépend de QD).">compute_intersection_centroid_ordered_qd_fixed</span>()</div>
+<div class="line">│   │   │   │   │   └── <span class="fn" data-desc="Retourne la bbox de la région d&#x27;intersection QuickDraw de deux faces.">compute_intersection_region_bbox</span>()</div>
+<div class="line">│   │   │   │   ├── <span class="fn" data-desc="Essaie les deux ordres de clipping (f1→f2 et f2→f1) pour obtenir un centroïde d&#x27;intersection fiable.">compute_intersection_centroid_ordered_fixed_tryboth</span>()</div>
+<div class="line">│   │   │   │   │   └── <span class="fn" data-desc="Calcule le centroïde de l&#x27;intersection de deux polygones projetés via clipping Sutherland-Hodgman (Fixed).">compute_intersection_centroid_ordered_fixed</span>()</div>
+<div class="line">│   │   │   │   ├── <span class="fn" data-desc="Variante qui retourne le centre de l&#x27;intersection des bbox 2D.">compute_bbox_intersection_center</span>()</div>
+<div class="line">│   │   │   │   ├── <span class="fn" data-desc="Lance un rayon à un pixel (x,y) et compare les profondeurs des deux faces.">ray_cast_at</span>()</div>
+<div class="line">│   │   │   │   └── <span class="fn" data-desc="Calcule les distances observateur → plans des deux faces en un point écran donné.">ray_cast_distances</span>()</div>
+<div class="line">│   │   │   └── <span class="fn" data-desc="Restaure l&#x27;état original (coordonnées 2D, cache de bbox, scale de projection global) après un test effectué avec rch_patch_pair_at_scale.">rch_unpatch_pair</span>()</div>
 <div class="line">│   │   ├── <span class="fn" data-desc="Insère une relation d&#x27;ordre (f1 avant/après f2) dans le cache.">pair_cache_insert</span>()</div>
 <div class="line">│   │   │   └── <span class="fn" data-desc="Calcule le slot de hachage pour une paire de faces.">pair_cache_slot</span>()</div>
 <div class="line">│   │   └── <span class="fn" data-desc="Libère la mémoire du cache de paires.">pair_cache_destroy</span>()</div>
@@ -252,14 +257,19 @@
 <div class="line">│       │   │   ├── <span class="fn" data-desc="Calcule l&#x27;orientation (sens de rotation) de trois points (utilitaire 2D, long long).">orient_ll</span>()</div>
 <div class="line">│       │   │   └── <span class="fn" data-desc="Teste si un point se trouve sur un segment (utilitaire géométrique 2D, long long).">on_seg_ll</span>()</div>
 <div class="line">│       │   └── <span class="fn" data-desc="Compare les listes de sommets de deux faces pour détecter une égalité géométrique.">faces_vertices_equal</span>()</div>
-<div class="line">│       └── <span class="fn" data-desc="Ray-cast multi-stratégie : essaie centroïde QD, centroïde SH, puis centre de bbox.">ray_cast_hierarchical</span>()</div>
-<div class="line">│           ├── <span class="fn" data-desc="Calcule le centroïde de l&#x27;intersection via régions QuickDraw (plus rapide, dépend de QD).">compute_intersection_centroid_ordered_qd_fixed</span>()</div>
-<div class="line">│           │   └── <span class="fn" data-desc="Retourne la bbox de la région d&#x27;intersection QuickDraw de deux faces.">compute_intersection_region_bbox</span>()</div>
-<div class="line">│           ├── <span class="fn" data-desc="Essaie les deux ordres de clipping (f1→f2 et f2→f1) pour obtenir un centroïde d&#x27;intersection fiable.">compute_intersection_centroid_ordered_fixed_tryboth</span>()</div>
-<div class="line">│           │   └── <span class="fn" data-desc="Calcule le centroïde de l&#x27;intersection de deux polygones projetés via clipping Sutherland-Hodgman (Fixed).">compute_intersection_centroid_ordered_fixed</span>()</div>
-<div class="line">│           ├── <span class="fn" data-desc="Variante qui retourne le centre de l&#x27;intersection des bbox 2D.">compute_bbox_intersection_center</span>()</div>
-<div class="line">│           ├── <span class="fn" data-desc="Lance un rayon à un pixel (x,y) et compare les profondeurs des deux faces.">ray_cast_at</span>()</div>
-<div class="line">│           └── <span class="fn" data-desc="Calcule les distances observateur → plans des deux faces en un point écran donné.">ray_cast_distances</span>()</div>
+<div class="line">│       └── <span class="fn" data-desc="Ray-cast multi-stratégie avec zoom artificiel temporaire (x10) : patch le scale de projection de f1/f2, délègue à ray_cast_hierarchical_impl, puis restaure l&#x27;état original.">ray_cast_hierarchical</span>()</div>
+<div class="line">│           ├── <span class="fn" data-desc="Reprojette temporairement les sommets uniques de f1/f2 à un scale de projection donné et met à jour le cache de bbox 2D ; sauvegarde l&#x27;état original pour restauration.">rch_patch_pair_at_scale</span>()</div>
+<div class="line">│           │   ├── <span class="fn" data-desc="Collecte les indices de sommets uniques (0-based) utilisés par une paire de faces, en dédoublonnant les sommets partagés.">rch_gather_pair_vertex_indices</span>()</div>
+<div class="line">│           │   └── <span class="fn" data-desc="Recalcule le cache de bbox 2D (minx/maxx/miny/maxy) d&#x27;une face à partir de ses coordonnées 2D courantes.">rch_recompute_face_bbox_cache</span>()</div>
+<div class="line">│           ├── <span class="fn" data-desc="Corps original de ray_cast_hierarchical (inchangé) : essaie centroïde QD, centroïde SH, puis centre de bbox.">ray_cast_hierarchical_impl</span>()</div>
+<div class="line">│           │   ├── <span class="fn" data-desc="Calcule le centroïde de l&#x27;intersection via régions QuickDraw (plus rapide, dépend de QD).">compute_intersection_centroid_ordered_qd_fixed</span>()</div>
+<div class="line">│           │   │   └── <span class="fn" data-desc="Retourne la bbox de la région d&#x27;intersection QuickDraw de deux faces.">compute_intersection_region_bbox</span>()</div>
+<div class="line">│           │   ├── <span class="fn" data-desc="Essaie les deux ordres de clipping (f1→f2 et f2→f1) pour obtenir un centroïde d&#x27;intersection fiable.">compute_intersection_centroid_ordered_fixed_tryboth</span>()</div>
+<div class="line">│           │   │   └── <span class="fn" data-desc="Calcule le centroïde de l&#x27;intersection de deux polygones projetés via clipping Sutherland-Hodgman (Fixed).">compute_intersection_centroid_ordered_fixed</span>()</div>
+<div class="line">│           │   ├── <span class="fn" data-desc="Variante qui retourne le centre de l&#x27;intersection des bbox 2D.">compute_bbox_intersection_center</span>()</div>
+<div class="line">│           │   ├── <span class="fn" data-desc="Lance un rayon à un pixel (x,y) et compare les profondeurs des deux faces.">ray_cast_at</span>()</div>
+<div class="line">│           │   └── <span class="fn" data-desc="Calcule les distances observateur → plans des deux faces en un point écran donné.">ray_cast_distances</span>()</div>
+<div class="line">│           └── <span class="fn" data-desc="Restaure l&#x27;état original (coordonnées 2D, cache de bbox, scale de projection global) après un test effectué avec rch_patch_pair_at_scale.">rch_unpatch_pair</span>()</div>
 <div class="line">│</div>
 <div class="line">│  ─── Rendu / affichage ─────────────────────────────────────────────</div>
 <div class="line">│</div>
@@ -452,7 +462,7 @@
 <div class="line">│</div>
 <div class="line">├── <span class="fn" data-desc="Affiche l&#x27;aide clavier page par page (20 lignes max).">show_help_pager</span>()</div>
 <div class="line">│</div>
-<div class="line">├── <span class="fn" data-desc="Inspecteur interactif graphique : navigue entre paires de faces, lance tous les diagnostics, permet de réordonner.">inspect_face_pair_ui</span>()</div>
+<div class="line">├── <span class="fn" data-desc="Inspecteur interactif graphique : navigue entre paires de faces, lance tous les diagnostics (normal + zoom artificiel x10), permet de réordonner.">inspect_face_pair_ui</span>()</div>
 <div class="line">│   ├── <span class="fn" data-desc="Parcourt sorted_face_indices et dessine toutes les faces visibles (mode rempli).">drawPolygons</span>()</div>
 <div class="line">│   │   ├── <span class="fn" data-desc="Retourne la couleur de remplissage effective d&#x27;une face (utilisateur, random ou défaut).">getFaceFillColor</span>()</div>
 <div class="line">│   │   ├── <span class="fn" data-desc="Retourne la couleur de contour effective d&#x27;une face.">getFaceFrameColor</span>()</div>
@@ -490,6 +500,11 @@
 <div class="line">│   │   │   ├── <span class="fn" data-desc="Calcule les distances observateur → plans des deux faces en un point écran donné.">ray_cast_distances</span>()</div>
 <div class="line">│   │   │   └── <span class="fn" data-desc="Lance un rayon à un pixel (x,y) et compare les profondeurs des deux faces.">ray_cast_at</span>()</div>
 <div class="line">│   │   └── <span class="fn" data-desc="Écrit les résultats textuels d&#x27;un diagnostic de paire de faces dans un fichier fXvsfY.txt.">dump_compare_results_to_file</span>()</div>
+<div class="line">│   ├── <span class="fn" data-desc="Reprojette temporairement les sommets uniques de f1/f2 à un scale de projection donné (zoom x10 configurable) et met à jour le cache de bbox 2D ; sauvegarde l&#x27;état original pour restauration. Appelé pendant que QuickDraw est encore actif, avant endgraph().">rch_patch_pair_at_scale</span>()</div>
+<div class="line">│   │   ├── <span class="fn" data-desc="Collecte les indices de sommets uniques (0-based) utilisés par une paire de faces, en dédoublonnant les sommets partagés.">rch_gather_pair_vertex_indices</span>()</div>
+<div class="line">│   │   └── <span class="fn" data-desc="Recalcule le cache de bbox 2D (minx/maxx/miny/maxy) d&#x27;une face à partir de ses coordonnées 2D courantes.">rch_recompute_face_bbox_cache</span>()</div>
+<div class="line">│   ├── <span class="fn" data-desc="Exécute la batterie complète de tests (Z, bbox, overlap, géométrie 3D, centroïdes, raycast) sur une paire de faces — appelé une seconde fois ici avec les coordonnées zoomées ; seuls bbox_raycast/sh_raycast/qd_raycast sont conservés (3 static int), le reste est libéré immédiatement.">compare_faces_diagnostic</span>()          [second appel, coordonnées patchées]</div>
+<div class="line">│   ├── <span class="fn" data-desc="Restaure l&#x27;état original (coordonnées 2D, cache de bbox, scale de projection global) après un test effectué avec rch_patch_pair_at_scale.">rch_unpatch_pair</span>()</div>
 <div class="line">│   ├── <span class="fn" data-desc="Déplace un élément dans un tableau d&#x27;indices (retrait puis insertion à une nouvelle position).">move_element_remove_and_insert</span>()</div>
 <div class="line">│   └── <span class="fn" data-desc="Version diagnostique interactive des tests planaires (Tests #1 à #4 détaillés).">pair_plane_geometric_tests</span>()</div>
 <div class="line">│       ├── <span class="fn" data-desc="Teste si f2 est entièrement devant le plan de f1 par rapport à l&#x27;observateur.">pair_plane_before</span>()</div>
@@ -524,7 +539,7 @@
   </div>
   <div class="legend">
     <p>Astuce : survolez les noms en <code>vert</code> — description en police 16&nbsp;px.</p>
-    <p>124 fonctions documentées (dictionnaire + arbre).</p>
+    <p>129 fonctions documentées (dictionnaire + arbre).</p>
   </div>
   <div id="tooltip"></div>
 <script>
