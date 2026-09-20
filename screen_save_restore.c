@@ -1,30 +1,14 @@
 /* ============================================================
    screen_save_restore.c
-   Sauvegarde / restauration rapide de l'ecran SHR complet
-   (32000 octets) via MVN, pour eviter un rendu complet des
-   polygones sur les touches qui ne modifient pas le graphique.
-
-   Les deux operandes de banque de MVN sont des valeurs
-   IMMEDIATES figees a l'assemblage : impossible de les charger
-   depuis une variable au moment de l'execution. Solution
-   retenue : code auto-modifiant. L'adresse du buffer (obtenue
-   dynamiquement via NewHandle, adresse libre choisie par l'OS)
-   est inconnue a la compilation, donc on patche une seule fois,
-   au premier appel de chaque fonction, l'octet de banque
-   concerne directement dans l'instruction MVN compilee.
-
-   Seul l'octet de banque qu'on ne connait pas a l'avance doit
-   etre patche :
-     - saveScreen()    : banque destination (= banque du buffer)
-     - restoreScreen() : banque source      (= banque du buffer)
-   L'autre octet de banque (celle de l'ecran SHR, $E1, fixe et
-   connue a la compilation) reste tel quel dans le code assemble.
+    Quick backup/restore of the entire SHR screen
+   (32,768 bytes) via MVN, to avoid a full render of the
+   polygons on keys that do not modify the graphic.
    ============================================================ */
 
 #include <types.h>
 #include <memory.h>
 
-#define SCREEN_SIZE         32512L   /* bitmap SHR : 200 lignes x 160 octets */
+#define SCREEN_SIZE         32768   /* bitmap SHR : 200 lignes x 160 octets */
 #define SCREEN_SRC_BANK     0xE1
 #define SCREEN_SRC_OFFSET   0x2000   /* debut du bitmap SHR dans la banque $E1 */
 
@@ -40,10 +24,10 @@ static Byte   gRestorePatched = 0;   /* 1 des que restoreScreen() a patche son M
 int graph_changed = 1;
 
 /* ------------------------------------------------------------
-   A appeler UNE SEULE FOIS, au tout debut du programme.
-   Alloue le buffer de sauvegarde (32000 octets, verrouille pour
-   qu'il ne bouge pas en memoire) et note sa banque/offset reels.
-   Renvoie 1 en cas de succes, 0 en cas d'echec (memoire insuffisante).
+   Call this function ONLY ONCE, at the very beginning of the program.
+   Allocates the save buffer (32,768 bytes, locks it in place
+   so it doesn't move in memory) and records its actual bank and offset.
+   Returns 1 on success, 0 on failure (insufficient memory).
    ------------------------------------------------------------ */
 int initScreenSaveBuffer(void)
 {
@@ -61,9 +45,9 @@ int initScreenSaveBuffer(void)
 }
 
 /* ------------------------------------------------------------
-   Sauvegarde l'ecran SHR complet dans le buffer.
-   A appeler juste apres un rendu complet des polygones,
-   puis remettre graph_changed a 0.
+   Saves the entire SHR screen to the buffer.
+   Call this immediately after a full polygon render,
+   then reset `graph_changed` to 0.
    ------------------------------------------------------------ */
 void saveScreen(void)
 
@@ -94,9 +78,9 @@ void saveScreen(void)
 }
 
 /* ------------------------------------------------------------
-   Restaure l'ecran SHR complet depuis le buffer.
-   A appeler a la place d'un rendu complet quand graph_changed == 0
-   (ex: touche espace qui n'affecte pas le graphique 3D).
+        Restores the entire SHR screen from the buffer.
+        Call this instead of a full render when graph_changed == 0
+        (e.g., the spacebar, which does not affect the 3D graph).
    ------------------------------------------------------------ */
 void restoreScreen(void)
 {

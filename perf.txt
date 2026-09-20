@@ -69,3 +69,15 @@ geoV3 en erreur :
 60 / 20 / 0
 50 / 20 / 0
 default position
+
+
+geoV3 perf 
+a
+dafault b+ 211
+dafault b- 196
+
+other01
+dafault b+ 742
+dafault b- 842
+
+

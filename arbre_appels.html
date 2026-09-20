@@ -43,6 +43,8 @@
 <div class="line">│</div>
 <div class="line">│  ─── Chargement / initialisation ───────────────────────────────────</div>
 <div class="line">│</div>
+<div class="line">├── <span class="fn" data-desc="Alloue et verrouille le buffer de sauvegarde de l&#x27;écran SHR complet (32 Ko) utilisé par saveScreen/restoreScreen ; à appeler une seule fois au démarrage.">initScreenSaveBuffer</span>()</div>
+<div class="line">│</div>
 <div class="line">├── <span class="fn" data-desc="Alloue dynamiquement toute la structure Model3D (sommets, faces, plans, buffers). Retourne NULL en cas d&#x27;échec.">createModel3D</span>()</div>
 <div class="line">│</div>
 <div class="line">├── <span class="fn" data-desc="Initialise les tables de palettes QuickDraw utilisées par le programme.">initPalettes</span>()</div>
@@ -519,6 +521,12 @@
 <div class="line">│   │   └── <span class="fn" data-desc="Pose un pixel couleur aux coordonnées écran données (utilisé par le Z-buffer scanline).">drawPixel</span>()</div>
 <div class="line">│   └── <span class="fn" data-desc="Pose un pixel couleur aux coordonnées écran données (utilisé par le Z-buffer scanline).">drawPixel</span>()</div>
 <div class="line">│</div>
+<div class="line">│  ─── Sauvegarde / restauration écran (touches sans changement graphique) ───</div>
+<div class="line">│</div>
+<div class="line">├── <span class="fn" data-desc="Sauvegarde l&#x27;écran SHR complet dans le buffer alloué par initScreenSaveBuffer, via une instruction assembleur MVN patchée dynamiquement (banques calculées à l&#x27;exécution).">saveScreen</span>()</div>
+<div class="line">│</div>
+<div class="line">├── <span class="fn" data-desc="Restaure l&#x27;écran SHR complet depuis le buffer de sauvegarde, à la place d&#x27;un rendu complet, pour les touches qui ne modifient pas le graphique 3D.">restoreScreen</span>()</div>
+<div class="line">│</div>
 <div class="line">└── <span class="fn" data-desc="Bascule l&#x27;écran en mode texte et efface l&#x27;affichage.">DoText</span>()</div>
 <div class="line"></div>
 <div class="line">│  ─── Helpers / utilitaires (présents dans le code) ──────────────────</div>
@@ -539,7 +547,7 @@
   </div>
   <div class="legend">
     <p>Astuce : survolez les noms en <code>vert</code> — description en police 16&nbsp;px.</p>
-    <p>129 fonctions documentées (dictionnaire + arbre).</p>
+    <p>132 fonctions documentées (dictionnaire + arbre).</p>
   </div>
   <div id="tooltip"></div>
 <script>

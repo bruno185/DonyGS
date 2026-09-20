@@ -56,6 +56,7 @@
 | **getObserverParams** | Dialogue interactif pour saisir/modifier angles et distance de l'observateur. |
 | **hideFace** | Cache une face en sauvegardant son vertex_count et en le mettant à 0. |
 | **initPalettes** | Initialise les tables de palettes QuickDraw utilisées par le programme. |
+| **initScreenSaveBuffer** | Alloue et verrouille le buffer de sauvegarde de l'écran SHR complet (32 Ko) utilisé par saveScreen/restoreScreen ; à appeler une seule fois au démarrage. |
 | **inspect_face_pair_ui** | Inspecteur interactif graphique : navigue entre paires de faces, lance tous les diagnostics (verdict normal + verdict avec zoom artificiel x10 via rch_patch_pair_at_scale, affichés côte à côte en mode texte), permet de réordonner. |
 | **inspect_faces_after** | Inspecte les faces placées après une cible dans le tri alors qu'elles devraient être avant. |
 | **inspect_faces_before** | Inspecte les faces placées avant une cible dans le tri alors qu'elles devraient être après. |
@@ -115,9 +116,11 @@
 | **reorder_poly** | Réordonne les sommets d'un polygone en sens trigonométrique autour de son centroïde. |
 | **restoreAllFaces** | Restaure toutes les faces précédemment cachées. |
 | **restoreFace** | Restaure une face cachée à partir de son saved_vertex_count. |
+| **restoreScreen** | Restaure l'écran SHR complet depuis le buffer de sauvegarde, à la place d'un rendu complet, pour les touches qui ne modifient pas le graphique 3D. |
 | **reverseFaceVertexOrder** | Inverse l'ordre des sommets d'une face (change le sens de la normale). |
 | **run_raycast_test** | Wrapper : exécute un ray-cast en un point et retourne 1 (f1 devant), 2 (f2 devant) ou 0. |
 | **saveNextScreenshot** | Trouve un nom de fichier libre screenXXX.PIC et sauvegarde l'écran SHR. |
+| **saveScreen** | Sauvegarde l'écran SHR complet dans le buffer alloué par initScreenSaveBuffer, via une instruction assembleur MVN patchée dynamiquement (banques calculées à l'exécution). |
 | **saveSHRAsRawPic** | Écrit les 32 Ko de mémoire SHR dans un fichier PIC non compressé et fixe le type ProDOS. |
 | **screen2Black** | Efface l'écran graphique en noir. |
 | **segs_intersect_int** | Teste l'intersection de deux segments 2D (délègue à segs_intersect_int_fixed64). |

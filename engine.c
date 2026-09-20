@@ -7484,8 +7484,6 @@ static void computeOrientationShading(Model3D* model) {
 
 
 
-
-
 segment "inspection";
 // ============================================================================
 //  6. INSPECTION TOOLS & DEBUGGING
@@ -7500,7 +7498,6 @@ void debug_two_faces(Model3D* model, int f1, int f2) {
     endgraph();
     DoText();
 }
-
 
 /* inspect_faces_before
  * --------------------
@@ -10414,7 +10411,9 @@ static void show_help_pager(void) {
         "3: Painter = GEO (geometry-only). Can be slow for large models",
         "4: Painter = CORRECT (painter_correct)",
         "5: Painter = CORRECTV2",
+        "U: Painter = CORRECTV3",
         "O: Render scanline Z-Buffer (alternative to painter algorithm)",
+        "*: save SHGR screen as a PIC ($C1) not compressed file",
         "6: Both colors RANDOM mode",
         "7: Choose fill color",
         "8: Choose frame color",
@@ -10515,18 +10514,13 @@ void saveSHRAsRawPic(const char *filename)
         return;
     }
 
-    /*
-     * Copie brute des 32 Ko SHR.
-     *
-     * $E12000 -> $E19FFF
-     */
+    //  Copy  $E12000 -> $E19FFF
     for (i = 0; i < SHR_SIZE; i++) {
         fputc(shr[i], out);
     }
     fclose(out);
-    /*
-     * PIC, not compressed.
-     */
+
+    // PIC, not compressed
     setProDOSFileType(filename, 0xC1, 0x0000);
     printf("%s saved.\n", filename);
 }
