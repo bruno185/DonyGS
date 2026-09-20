@@ -10503,17 +10503,13 @@ void saveSHRAsRawPic(const char *filename)
     unsigned long i;
 
     /*
-     * Adresse réelle de la mémoire SHR :
-     *
+     * Actual SHR memory address:
      * $E1:2000 = $E12000
-     *
-     * Le cast en pointeur 32 bits permet à ORCA/C
-     * d'utiliser l'adressage long.
+     * The 32-bit pointer cast allows ORCA/C
+     * to use long addressing.
      */
     shr = (volatile unsigned char *)SHR_BASE;
-
     out = fopen(filename, "wb");
-
     if (out == NULL) {
         printf("Error: unable to open %s for writing\n", filename);
         return;
@@ -10527,15 +10523,12 @@ void saveSHRAsRawPic(const char *filename)
     for (i = 0; i < SHR_SIZE; i++) {
         fputc(shr[i], out);
     }
-
     fclose(out);
-
     /*
-     * PIC, non compressé.
+     * PIC, not compressed.
      */
     setProDOSFileType(filename, 0xC1, 0x0000);
-
-    printf("Saved %s\n", filename);
+    printf("%s saved.\n", filename);
 }
 
 // --- Generic screenshot entry point, callable after ANY renderer ---
@@ -10543,7 +10536,6 @@ void saveNextScreenshot(void) {
     char fname[16];
     int idx;
     FILE* test;
-
     for (idx = 0; idx < 1000; idx++) {
         sprintf(fname, "screen%03d.PIC", idx);
         test = fopen(fname, "rb");
@@ -10552,12 +10544,10 @@ void saveNextScreenshot(void) {
         }
         fclose(test);
     }
-
     if (idx >= 1000) {
         printf("Error: no available screen index (000-999 all used)\n");
         return;
     }
-
     saveSHRAsRawPic(fname);
 }
 

@@ -71,22 +71,22 @@ void saveScreen(void)
     asm {
         php
         phb
-        rep #0x10                 // X, Y en 16 bits (registre CPU)
-        sep #0x20                 // A en 8 bits (registre CPU), pour le patch d'un seul octet
+        rep #0x10                 // X, Y in 16-bit (CPU registers)
+        sep #0x20                 // A in 8-bit (CPU register), for patching a single byte
 
         lda gSaveBank
-        sta save_mvn+1             // patch l'octet "banque destination" (immediat) 
+        sta save_mvn+1             // patch the "destination bank" byte (immediate)
         lda #0xE1
-        sta save_mvn+2             // patch l'octet "banque source" (immediat) 
+        sta save_mvn+2             // patch the "source bank" byte (immediate)
 
-        rep #0x30                 // A repasse en 16 bits (registre CPU)
+        rep #0x30                 // A back to 16-bit (CPU register)
         ldx #0x2000                // = SCREEN_SRC_OFFSET
-        lda gSaveOffset            // valeur du buffer (pas son adresse : pas de #)
-        tay                        // Y <- valeur du buffer (contourne LDY var, qui pose probleme)
-        // lda #0x7CFF                // = SCREEN_SIZE-1 (32000-1 octets)
+        lda gSaveOffset            // value of the buffer (not its address: no #)
+        tay                        // Y <- buffer value (avoids LDY var, which causes problems)
+        // lda #0x7CFF                // = SCREEN_SIZE-1 (32000-1 bytes)
         lda #SCREEN_SIZE-1
     save_mvn:
-        mvn 0x00,0x00             // 0xE1 = SCREEN_SRC_BANK // 0x00 patche ci-dessus
+        mvn 0x00,0x00             // 0xE1 = SCREEN_SRC_BANK // 0x00 patched above
         plb
         plp
     }
@@ -100,25 +100,24 @@ void saveScreen(void)
    ------------------------------------------------------------ */
 void restoreScreen(void)
 {
-
     asm {
         php
         phb
-        rep #0x10                 // X, Y en 16 bits (registre CPU)
-        sep #0x20                 // A en 8 bits (registre CPU), pour le patch d'un seul octet
+        rep #0x10                 // X, Y in 16-bit (CPU registers)
+        sep #0x20                 // A in 8-bit (CPU register), for patching a single byte
         lda gSaveBank
-        sta restore_mvn+2          // patch l'octet "banque source" (immediat) -- test ordre inverse
+        sta restore_mvn+2          // patch the "source bank" byte (immediate) -- test reverse order
         lda #0xE1
-        sta restore_mvn+1          // patch l'octet "banque destination" (immediat) -- test ordre inverse
+        sta restore_mvn+1          // patch the "destination bank" byte (immediate) -- test reverse order
 
-        rep #0x30                 // A repasse en 16 bits (registre CPU)
-        lda gSaveOffset            // valeur du buffer (pas son adresse : pas de #)
-        tax                        // X <- valeur du buffer (contourne LDX var, qui pose probleme)
+        rep #0x30                 // A back to 16-bit (CPU register)
+        lda gSaveOffset            // value of the buffer (not its address: no #)
+        tax                        // X <- buffer value (avoids LDX var, which causes problems)
         ldy #0x2000                // = SCREEN_SRC_OFFSET
-        // lda #0x7CFF                // = SCREEN_SIZE-1 (32000-1 octets)
+        // lda #0x7CFF                // = SCREEN_SIZE-1 (32000-1 bytes)
         lda #SCREEN_SIZE-1
     restore_mvn:
-        mvn 0x00,0xE1             // 0x00 patche ci-dessus ; 0xE1 = SCREEN_SRC_BANK
+        mvn 0x00,0xE1             // 0x00 patched above; 0xE1 = SCREEN_SRC_BANK
 
         plb
         plp

@@ -57,7 +57,6 @@ segment "main";
         int last_process_time_end = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
-        // XXX
         // Initialize the screen save/restore buffer
         if (!initScreenSaveBuffer()) {
             printf("Error: Unable to initialize screen save buffer\n");
@@ -241,22 +240,28 @@ segment "main";
         getakey:
         key = getkeypress();
 
-        if (key == '*') {
-            saveNextScreenshot(); // we need to save image to file here, before closing QuickDraw (which alters the palette)
-        } else if (key == 'G' || key == 'g') {
-            palette = (palette + 1) % 16; // Cycle through available palettes
-            applyPalette(palette);
-            goto getakey;
+        // these are the key commands that are handled immediately without re-rendering the scene
+        switch (key) {
+            case '*': // Space key
+                MoveTo(3, 10);
+                saveNextScreenshot(); // save image to file here
+                goto getakey; // return to key press handling after saving screenshot, without re-rendering the scene
+            case 'G': // Cycle through palettes
+            case 'g':
+                palette = (palette + 1) % 16; // Cycle through available palettes
+                applyPalette(palette);
+                goto getakey; // return to key press handling after changing palette, without re-rendering the scene
+                break;
         }
 
 // XXX    
-        // This commands just need to swap between text and graphical view. 
+        // This commands just need to swap between text and graphical view (model or colors are unchanged)
         // So saving and restoring screen memory is more efficient than re-rendering the entire scene.
         if (key == ' ' || key == 'H' || key == 'h'|| key == 'F'|| key == 'f'|| key == 'M' 
             || key == 'm'|| key == 'O' || key == 'o') {
         saveScreen(); // Save the current screen memory before switching to text view
+        // see below what these keys do after saving the screen memory
         }
-
 
         endgraph();         // Close QuickDraw
         DoText();           // Show text screen
