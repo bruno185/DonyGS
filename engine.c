@@ -1,6 +1,6 @@
 #include "declare.c"
 #include "dony.c"
-
+#include "screen_save_restore.c"
 
 segment "model_loading";
 // ================================================================================
@@ -7404,7 +7404,6 @@ void applyPalette(int palette_num)
     for (int color_index = 0; color_index < 16; ++color_index) {
         color_table[color_index] = (Word)palettes[palette_num].color[color_index];
     }
-
     SetColorTable(0, color_table);
 }
 

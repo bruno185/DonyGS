@@ -57,6 +57,14 @@ segment "main";
         int last_process_time_end = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
+        // XXX
+        // Initialize the screen save/restore buffer
+        if (!initScreenSaveBuffer()) {
+            printf("Error: Unable to initialize screen save buffer\n");
+            keypress(); // wait for user input before exiting
+            destroyModel3D(model);
+            return 1;
+        }
 
     newmodel:
         {
@@ -229,17 +237,32 @@ segment "main";
                     frameInconclusivePairs(model);  
                 }
                 // Wait for key press and get key code
-
+        
+        getakey:
         key = getkeypress();
 
         if (key == '*') {
             saveNextScreenshot(); // we need to save image to file here, before closing QuickDraw (which alters the palette)
+        } else if (key == 'G' || key == 'g') {
+            palette = (palette + 1) % 16; // Cycle through available palettes
+            applyPalette(palette);
+            goto getakey;
         }
 
-        endgraph();        // Close QuickDraw
+// XXX    
+        // This commands just need to swap between text and graphical view. 
+        // So saving and restoring screen memory is more efficient than re-rendering the entire scene.
+        if (key == ' ' || key == 'H' || key == 'h'|| key == 'F'|| key == 'f'|| key == 'M' 
+            || key == 'm'|| key == 'O' || key == 'o') {
+        saveScreen(); // Save the current screen memory before switching to text view
         }
 
+
+        endgraph();         // Close QuickDraw
         DoText();           // Show text screen
+        }
+
+        
         // Handle keyboard input with switch statement
         switch (key) {
             case 32:  // Space bar - display info and redraw
@@ -276,7 +299,13 @@ segment "main";
                 printf("Free memory = %lu bytes\n", FreeMem());
                 printf("Press any key to continue...\n");
                 keypress();
-                goto loopReDraw;
+                // New approach: instead of re-rendering the entire scene, 
+                // we save the screen state before switching views and restore it afterward.
+                startgraph(mode);   // Reopen QuickDraw and SHGR screen
+                restoreScreen();    // Restore the previously saved screen memory
+                goto getakey; // return to key press handling
+                // This mush faster than re-rendering the entire scene with 
+                //goto loopReDraw;
 
             case 82:  // 'R' - pan right (was revert; revert disabled)
             case 114: // 'r'
@@ -297,8 +326,6 @@ segment "main";
                 // printf("Press any key to continue...\n");
                 // keypress();
                 goto loopReDraw;
-
-
 
             case 43:  // '+' - increase projection scale by 10% (applies to current scale)
             case 61:  // '=' also acts as '+' on some keyboards
@@ -413,9 +440,7 @@ segment "main";
 
             case 71:  // 'G' - cycle the active QuickDraw palette
             case 103:  // 'g'
-                palette++;
-                if (palette >= 16) palette = 0; // Wrap around if exceeds available palettes
-                goto loopReDraw;
+            // replaced by cycling the palette just after key press handling loop
 
             case 33:  // '!' - toggle orientation shading
                 shaded_by_orientation ^= 1;
@@ -460,7 +485,13 @@ segment "main";
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 // pair_plane_before_debug(model, 0, 0);
                 pair_plane_geometric_tests(model, -1, -1); // force type pair numbers
-                goto loopReDraw;
+			    // New approach: instead of re-rendering the entire scene, 
+                // we save the screen state before switching views and restore it afterward.
+                startgraph(mode);   // Reopen QuickDraw and SHGR screen
+                restoreScreen();    // Restore the previously saved screen memory
+                goto getakey; // return to key press handling
+                // This mush faster than re-rendering the entire scene with 
+                //goto loopReDraw;
 
 
             case 76: // 'L' - show model with face ID labels at polygon centers
@@ -638,7 +669,13 @@ segment "main";
                     printf("\nPress any key to continue...\n");
                     keypress();
                 }
-                goto loopReDraw;
+                // New approach: instead of re-rendering the entire scene, 
+                // we save the screen state before switching views and restore it afterward.
+                startgraph(mode);   // Reopen QuickDraw and SHGR screen
+                restoreScreen();    // Restore the previously saved screen memory
+                goto getakey; // return to key press handling
+                // This mush faster than re-rendering the entire scene with 
+                //goto loopReDraw;
 
             case 78:  // 'N' - load new model
             case 110: // 'n'
@@ -663,6 +700,13 @@ segment "main";
             case 72:  // 'H'
             case 104: // 'h'
                 show_help_pager();
+                // New approach: instead of re-rendering the entire scene, 
+                // we save the screen state before switching views and restore it afterward.
+                startgraph(mode);   // Reopen QuickDraw and SHGR screen
+                restoreScreen();    // Restore the previously saved screen memory
+                goto getakey; // return to key press handling
+                // This mush faster than re-rendering the entire scene with 
+                //goto loopReDraw;
                 goto loopReDraw;
 
             case 81: // 'Q' - interactive face-pair inspector (new)
@@ -679,34 +723,16 @@ segment "main";
 
                 painter_mode = PAINTER_MODE_GEOV3;
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
-                // { 
-                //     startgraph(mode);
-                //     // Implement the desired behavior for the 'O' key here
-                //     int startTimeOld = GetTick();
-                //     renderModelScanlineZBuffer_old(model);
-                //     int endTimeOld = GetTick();
-                //     key = getkeypress();
-                //     if (key == '*') { saveNextScreenshot(); }
-
-                //     endgraph();
-                //     DoText();
-
-                //     // printf("endtime = %d\n", endTime);
-                //     printf("Z-Buffer scanline render time: %d ticks. Press a key to continue.\n", endTimeOld - startTimeOld);
-                //     keypress();
-                // }
-
                 goto loopReDraw;
-
 
             case 27:  // ESC - quit
                 goto end;
-            
             
             // 'O' - some functionality for the 'O' key
             case 79:  // 'O'
             case 111: // 'o'
                 startgraph(mode);
+
                 // Implement the desired behavior for the 'O' key here
                 int startTime = GetTick();
                 renderModelScanlineZBuffer(model);
@@ -714,13 +740,17 @@ segment "main";
                 key = getkeypress();
                 if (key == '*') { saveNextScreenshot(); }
 
-                endgraph();
-                DoText();
+                // endgraph();
+                // DoText();
 
                 // printf("endtime = %d\n", endTime);
-                printf("Z-Buffer scanline render time: %d ticks. Press a key to continue.\n", endTime - startTime);
+                MoveTo(3, 10);
+                printf("Z-Buffer scanline render time: %d ticks.\nPress a key to continue.\n", endTime - startTime);
                 keypress();
-                goto loopReDraw;
+                restoreScreen();    // Restore the previously saved screen memory
+                goto getakey; // return to key press handling
+                // This mush faster than re-rendering the entire scene with 
+                //goto loopReDraw;
 
             default:  // All other keys - redraw
                 goto loopReDraw;
