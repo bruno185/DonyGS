@@ -511,14 +511,14 @@ segment "main";
                 inconclusive_pairs_count = 0; // clear inconclusive pairs in fast mode
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 50: // '2' - set NORMAL (Fixed32/64) painter
+            case 50: // '2' - set BUBBLE SORT (Fixed32/64) painter
                 painter_mode = PAINTER_MODE_BUBBLE_SORT;
-                printf("Painter mode: NORMAL (full tests, Fixed32/64)\n");
+                printf("Painter mode: BUBBLE SORT (full tests, Fixed32/64)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 61: // '=' - set NORMAL (Fixed32/64) painter
+            case 61: // '=' - set NEWELL SANCHA (Fixed32/64) painter
                 painter_mode = PAINTER_MODE_NEWELL_SANCHA;
-                printf("Painter mode: NORMAL (full tests, Fixed32/64)\n");
+                printf("Painter mode: NEWELL SANCHA (full tests, Fixed32/64)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
 
@@ -729,11 +729,10 @@ segment "main";
              // letter 'U'
             case 85:  // 'U' - toggle user-defined fill color mode (random if enabled)
             case 117: // 'u'
-                // printf("Painter geo V1: toggle geometry-only painter mode for testing\n");
-                // painter_geoV1(model, model->faces.face_count);
-
                 painter_mode = PAINTER_MODE_GEOV3;
-                if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
+                printf("Painter mode: GEO V3 (inspired by R. DONY's book)\n");
+                printf("WARNING: This mode can be significantly slower than others with large models.\n");
+                goto bigloop; 
                 goto loopReDraw;
 
             case 27:  // ESC - quit

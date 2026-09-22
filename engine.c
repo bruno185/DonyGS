@@ -1836,7 +1836,6 @@ segment "painter_core";
  *  - OPTIMISATION : pre calculate matrix coefficients and use direct table access 
  *   for trig functions to avoid function call overhead. 100% Fixed32 loop with no conversions for maximum speed.
  */
-
 void processModelFast(Model3D* model, ObserverParams* params, const char* filename) {
     int i;
 
@@ -2136,7 +2135,6 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
  *    `calculateFaceDepths()` / `processModelFast()` has computed observer-space coordinates.
  */
 
-
 /**
  * FAST PUBLISHABLE PASS (painter_newell_sancha_fast)
  * --------------------------------------------------
@@ -2182,6 +2180,45 @@ void painter_newell_sancha_fast(Model3D* model, int face_count) {
     qsort_faces_ptr_for_cmp = NULL;
 }
 
+/*
+ * painter_bubble_sort
+ * ====================
+ *
+ * Draw-order correction (depth sort) for the painter's algorithm,
+ * inspired by Newell, Newell & Sancha (1972), "A New Approach to the
+ * Shading of the Faces of Polyhedra" -- same battery of tests as the
+ * original (Z-interval separation, bounding-box overlap, projected
+ * polygon overlap, then relative position of the two faces' planes),
+ * but applied bubble-sort style: only ADJACENT pairs (sorted[i],
+ * sorted[i+1]) are ever tested and, when wrong, swapped in place. The
+ * loop repeats full passes until one goes by with no swap, exactly like
+ * a classic bubble sort. This is simpler and cheaper per comparison
+ * than testing every pair of positions, at the cost of needing more
+ * passes to propagate a correction across faces that are far apart in
+ * sorted[] (each swap only moves a face by one slot).
+ *
+ * TWO DELIBERATE SIMPLIFICATIONS compared to the original algorithm
+ * (same trade-offs as elsewhere in this codebase):
+ *
+ *   1. No face splitting. When neither direction of the plane test can
+ *      decide the order between two faces that genuinely intersect in
+ *      3D, the "proper" fix is to split one face along the other's
+ *      plane. This function does not do that: such a pair is simply
+ *      marked "inconclusive" and left in its current order.
+ *
+ *   2. No cycle detection. Circular ordering constraints (A before B,
+ *      B before C, C before A) are not explicitly detected or broken.
+ *      The bubble passes just keep swapping adjacent pairs until
+ *      stable; in the presence of a genuine cycle they may never fully
+ *      satisfy every constraint at once. This is an accepted trade-off
+ *      for this project, not an oversight.
+ *
+ * Unlike painter_newell_sanchaV2, this version uses plain malloc()/
+ * free() scoped to each call rather than persistent buffers, and has no
+ * Z-sweep pre-filtering: every adjacent pair is tested directly against
+ * Test 1 each pass. It trades some of that version's performance work
+ * for a much simpler, easier-to-reason-about control flow.
+ */
 void painter_bubble_sort_old(Model3D* model, int face_count) {
     // ...existing code...
     FaceArrays3D* faces = &model->faces;
@@ -2371,8 +2408,6 @@ void painter_bubble_sort_old(Model3D* model, int face_count) {
         free(ordered_pairs);
     }  
 }
-
-//  painter_newell_sancha
 void painter_bubble_sort(Model3D* model, int face_count)
 {
     // Early exit for trivial cases
@@ -3336,7 +3371,6 @@ void painter_geoV2(Model3D* model, int face_count) {
 
     // printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
 }
-
 
 /* painter_correct
  * ----------------
