@@ -81,3 +81,34 @@ dafault b+ 742
 dafault b- 842
 
 
+newell pair_order_relation :
+a 300 b+ : 152 154
+a 300 b- : 102 81
+a 290 b+ : 117 118
+a 290 b- : 53 54 
+a 310 b+ : 112 74
+a 310 b- : 53 57 
+
+other01 default b- : 135 137
+other01 default b+ : 140 142
+
+
+test 1 :
+geo : ok sauf 270 (b+)
+perf 300 b+ : 906
+
+test 2 :
+geo : ok sauf 270 (b+)
+perf 300 b+ : 913
+
+test 3 :
+geo : ok sauf 270 (b+)
+perf 300 b+ : 913
+
+test 4 :
+geo : ko
+perf 300 b+ : 153
+
+test 5 :
+geo : ko (idem test 5)
+perf 300 b+ : 151

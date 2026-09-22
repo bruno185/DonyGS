@@ -185,11 +185,12 @@ static inline int normalize_deg(int deg) {
 
 // Modes du peintre
 #define PAINTER_MODE_FAST       0
-#define PAINTER_MODE_FIXED      1
+#define PAINTER_MODE_BUBBLE_SORT      1
 #define PAINTER_MODE_CORRECT    3
 #define PAINTER_MODE_GEO        5
 #define PAINTER_MODE_CORRECTV2  6
 #define PAINTER_MODE_GEOV3      7
+#define PAINTER_MODE_NEWELL_SANCHA  8
 
 
 // Couleurs QuickDraw nommées
@@ -518,6 +519,7 @@ void calculateFaceDepths(Model3D *model, Face3D *faces, int face_count);
 
 // Painter
 void painter_newell_sancha_fast(Model3D* model, int face_count);
+void painter_bubble_sort(Model3D* model, int face_count);
 void painter_newell_sancha(Model3D* model, int face_count);
 void painter_geoV2(Model3D* model, int face_count);
 static int painter_correct(Model3D* model, int face_count, int debug);   // ou non-static selon usage

@@ -283,7 +283,8 @@ segment "main";
                 printf("    Screen Rotation Angle: %d deg\n", params.angle_w);
                 printf("    Projection scale: %.2f\n", FIXED_TO_FLOAT(s_global_proj_scale_fixed));
                 if (painter_mode == PAINTER_MODE_FAST) printf("    Painter mode: FAST (simple face sorting only)\n");
-                else if (painter_mode == PAINTER_MODE_FIXED) printf("    Painter mode: NORMAL (Fixed32/64)\n");
+                else if (painter_mode == PAINTER_MODE_BUBBLE_SORT) printf("    Painter mode: BUBBLE SORT (Fixed32/64)\n");
+                else if (painter_mode == PAINTER_MODE_NEWELL_SANCHA) printf("    Painter mode: NEWELL SANCHA (full tests, Fixed32/64)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECT) printf("    Painter mode: CORRECT (painter_correct)\n");
                 else if (painter_mode == PAINTER_MODE_GEO) printf("    Painter mode: GEO (geometry-only)\n");
                 else if (painter_mode == PAINTER_MODE_CORRECTV2) printf("    Painter mode: CORRECT V2 (painter_correctV2 with face splitting detection)\n");
@@ -333,7 +334,6 @@ segment "main";
                 goto loopReDraw;
 
             case 43:  // '+' - increase projection scale by 10% (applies to current scale)
-            case 61:  // '=' also acts as '+' on some keyboards
                 if (model != NULL) {
                     // '+' now adjusts projection scale by +10%
                     // Compute new scale = current scale * 1.1 (fixed-point multiplication)
@@ -512,9 +512,15 @@ segment "main";
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
             case 50: // '2' - set NORMAL (Fixed32/64) painter
-                painter_mode = PAINTER_MODE_FIXED;
+                painter_mode = PAINTER_MODE_BUBBLE_SORT;
                 printf("Painter mode: NORMAL (full tests, Fixed32/64)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
+
+            case 61: // '=' - set NORMAL (Fixed32/64) painter
+                painter_mode = PAINTER_MODE_NEWELL_SANCHA;
+                printf("Painter mode: NORMAL (full tests, Fixed32/64)\n");
+                if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
+
 
             case 51: // '3' - set GEO painter
                 painter_mode = PAINTER_MODE_GEO;

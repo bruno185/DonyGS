@@ -207,7 +207,7 @@ Model3D* createModel3D(void) {
         free(model);
         return NULL;
     }
-    // Allocate z_mean array (mean depth per face) - used by painter_newell_sancha
+    // Allocate z_mean array (mean depth per face) - used by painter_bubble_sort
     model->faces.z_mean = (Fixed32*)malloc(nf * sizeof(Fixed32));
     if (!model->faces.z_mean) {
         printf("Error: Unable to allocate memory for face z_mean array\n");
@@ -1959,11 +1959,12 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     // for (i = 0; i < model->faces.face_count; i++) {
     //     model->faces.sorted_face_indices[i] = i;
     // }
-    // painter_newell_sancha 
     t_start = GetTick();
     if (painter_mode == PAINTER_MODE_FAST) {
         painter_newell_sancha_fast(model, model->faces.face_count);
-    } else if (painter_mode == PAINTER_MODE_FIXED) {
+    } else if (painter_mode == PAINTER_MODE_BUBBLE_SORT) {
+        painter_bubble_sort(model, model->faces.face_count);
+    } else if (painter_mode == PAINTER_MODE_NEWELL_SANCHA) {
         painter_newell_sancha(model, model->faces.face_count);
     } else if (painter_mode == PAINTER_MODE_CORRECT) {
         /* painter_correct acts as a sorting mode: it will adjust faces->sorted_face_indices in-place */
@@ -1982,7 +1983,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     skip_calc:;
 }
 
-// Comparator support for qsort in painter_newell_sancha
+// Comparator support for qsort in painter_bubble_sort
 static int cmp_faces_by_zmean(const void* pa, const void* pb) {
     int a = *(const int*)pa;
     int b = *(const int*)pb;
@@ -2014,7 +2015,7 @@ static int cmp_faces_by_zmean(const void* pa, const void* pb) {
  * normalizeAutoFitDistanceTo150(), before any painter/ordering code runs -
  * see call graph section 3 vs section 1).
  *
- * This function has a very high fan-in (called from painter_newell_sancha,
+ * This function has a very high fan-in (called from painter_bubble_sort,
  * painter_geoV2, evaluate_pair_tests, geo_face_order, pair_order_relation),
  * so it can run thousands of times per frame. FIXED_MUL_64 is a 64-bit
  * fixed-point multiply; on 65816 (no hardware multiplier) this is almost
@@ -2131,7 +2132,7 @@ static int geometric_face_relation(Model3D* model, int f1, int f2) {
  *  - Use `frameInconclusivePairs()` in diagnostics to highlight such pairs in the rendered view.
  *
  * Usage:
- *  - Call `painter_newell_sancha(model, face_count)` (or a mode-specific variant) after
+ *  - Call `painter_bubble_sort(model, face_count)` (or a mode-specific variant) after
  *    `calculateFaceDepths()` / `processModelFast()` has computed observer-space coordinates.
  */
 
@@ -2181,7 +2182,7 @@ void painter_newell_sancha_fast(Model3D* model, int face_count) {
     qsort_faces_ptr_for_cmp = NULL;
 }
 
-void painter_newell_sancha_old(Model3D* model, int face_count) {
+void painter_bubble_sort_old(Model3D* model, int face_count) {
     // ...existing code...
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -2371,7 +2372,8 @@ void painter_newell_sancha_old(Model3D* model, int face_count) {
     }  
 }
 
-void painter_newell_sancha(Model3D* model, int face_count)
+//  painter_newell_sancha
+void painter_bubble_sort(Model3D* model, int face_count)
 {
     // Early exit for trivial cases
     if (face_count <= 1) {
@@ -2602,6 +2604,491 @@ void painter_newell_sancha(Model3D* model, int face_count)
     free(hash_table);
 }
 
+/*
+ * painter_newell_sanchaV2
+ * ========================
+ *
+ * Draw-order correction (depth sort) for the painter's algorithm,
+ * inspired by Newell, Newell & Sancha (1972), "A New Approach to the
+ * Shading of the Faces of Polyhedra" -- hence the name. The original
+ * Newell-Newell-Sancha idea is: start from an approximate depth (Z)
+ * sort, then apply a series of increasingly expensive tests (Z-interval
+ * overlap, bounding-box overlap, relative position of the faces'
+ * planes) to detect and fix cases where two faces end up in the wrong
+ * order despite the approximate sort.
+ *
+ * TWO DELIBERATE SIMPLIFICATIONS compared to the original algorithm:
+ *
+ *   1. No face splitting. When the original Newell-Newell-Sancha
+ *      algorithm cannot determine a valid order between two faces that
+ *      genuinely intersect in 3D (none of the tests can decide), the
+ *      "proper" fix is to split one of the two faces along the other's
+ *      plane, producing two sub-faces that CAN then be ordered without
+ *      ambiguity. This function does not do that: such a case is simply
+ *      marked "inconclusive" (see below) and left in its current order,
+ *      with no correction and no splitting.
+ *
+ *   2. No cycle detection. The original algorithm can, in rare
+ *      configurations, produce circular dependencies (A must come
+ *      before B, B before C, C before A) that require explicit
+ *      detection and cycle-breaking (typically via the face splitting
+ *      above). This function does not detect such cycles: it fixes
+ *      pairs locally on the fly (do_move below) and relies on the
+ *      do...while loop to converge to a stable state. In the presence
+ *      of a genuine cycle, this loop may never fully satisfy every
+ *      constraint at once -- this is an accepted trade-off for this
+ *      project (see the rest of the DonyGS/ObjExplorer pipeline), not
+ *      an oversight.
+ *
+ * Everything else in this function (Z sweep, cache of already-decided
+ * pairs, persistent buffers) is pure performance optimization around
+ * this same logic -- see the inline comments below for the details of
+ * each step.
+ */
+void painter_newell_sancha(Model3D* model, int face_count)
+{
+    // Trivial case: nothing to correct with 0 or 1 face.
+    if (face_count <= 1) {
+        painter_newell_sancha_fast(model, face_count);
+        return;
+    }
+
+    FaceArrays3D* faces = &model->faces;
+
+    // -------------------------------------------------
+    // 1. Initial fast sort + back-face culling
+    // -------------------------------------------------
+    // painter_newell_sancha_fast produces an APPROXIMATE depth order
+    // (typically by average or minimum Z per face) and places visible
+    // (non-culled) faces at the front of sorted[]. Everything below only
+    // CORRECTS the errors in that approximate order where they are
+    // visually significant -- it is not a second full sort.
+    painter_newell_sancha_fast(model, face_count);
+
+    // Recount how many faces are actually visible after culling:
+    // sorted[0 .. visible_count-1] is the working range, the rest of
+    // sorted[] (culled faces) is ignored by everything below.
+    int visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (int i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i]) {
+                ++visible_count;
+            }
+        }
+    }
+
+    // Nothing to correct with fewer than 2 visible faces.
+    if (visible_count < 2) return;
+
+    // sorted[] IS the final result: this function modifies it in place,
+    // via local permutations (see do_move below), until no correction
+    // is needed anymore.
+    int* sorted = faces->sorted_face_indices;
+
+    // -------------------------------------------------
+    // 2. Cache of already-decided pairs (hash table) + sweep buffers
+    // -------------------------------------------------
+    // All of these are PERSISTENT (static) working buffers, allocated
+    // once on the very first call and then reused (and grown via
+    // realloc if needed) on every subsequent call. Goal: avoid a
+    // malloc()/free() every frame, while staying on the heap (no large
+    // static array in BSS) so as not to compete with the model's
+    // NewHandle-based memory.
+
+    typedef struct {
+        int face1;      // of the two faces in the pair, the one that must be drawn first (farther)
+        int face2;      // the one that must be drawn second (closer)
+        int next;       // next link in the hash collision chain
+    } OrderedPair;
+
+    typedef struct {
+        int a;          // a candidate face pair per the Z sweep (see step 5)
+        int b;
+    } CandidatePair;
+
+    #define HASH_SIZE_V2        2048
+    #define HASH_MASK_V2        (HASH_SIZE_V2 - 1)
+    #define ORDERED_MAX_CAP_V2  4096
+
+    static int*          s_hash_table      = NULL; // hash table (fixed size, allocated once)
+    static OrderedPair*  s_ordered         = NULL; // entries for already-decided pairs (correct or inconclusive)
+    static int*          s_touched_buckets = NULL; // hash buckets touched during the current call (for a targeted reset at the end)
+    static InconclusivePair* s_inconclusive_pairs = NULL; // "inconclusive" pairs for this call (for diagnostics/inspection)
+
+    // --- Z-sweep scratch buffers, persistent + grow-on-demand -----------
+    static int*  s_pos              = NULL; // pos[face_id] = current slot of this face in sorted[]
+    static int   s_pos_capacity     = 0;    // sized on face_count (total faces in the model)
+    static int*  s_by_zmin          = NULL; // copy of visible faces, sorted by ascending z_min
+    static int   s_by_zmin_capacity = 0;    // sized on visible_count
+    static int*  s_active           = NULL; // list of faces "active" during the sweep (see step 5)
+    static int   s_active_capacity  = 0;    // sized on visible_count
+    static CandidatePair* s_candidates = NULL; // list of face pairs that overlap in Z
+    static int   s_candidates_capacity = 0;    // grows as needed (doubling)
+
+    // One-time allocation of the hash table (fixed size, never resized)
+    if (!s_hash_table) {
+        s_hash_table = (int*)malloc(HASH_SIZE_V2 * sizeof(int));
+        if (!s_hash_table) { painter_newell_sancha_fast(model, face_count); return; }
+        // -1 means "empty bucket": mandatory initial state before any use.
+        for (int i = 0; i < HASH_SIZE_V2; ++i) s_hash_table[i] = -1;
+    }
+    // One-time allocation of the decided-pairs array (fixed max capacity)
+    if (!s_ordered) {
+        s_ordered = (OrderedPair*)malloc(ORDERED_MAX_CAP_V2 * sizeof(OrderedPair));
+        if (!s_ordered) { painter_newell_sancha_fast(model, face_count); return; }
+    }
+    // One-time allocation of the list of buckets to reset at the end of the call
+    if (!s_touched_buckets) {
+        s_touched_buckets = (int*)malloc(ORDERED_MAX_CAP_V2 * sizeof(int));
+        if (!s_touched_buckets) { painter_newell_sancha_fast(model, face_count); return; }
+    }
+    // One-time allocation of the inconclusive-pairs diagnostic buffer.
+    // Best-effort: if this fails, inconclusive_pairs_capacity is set to 0
+    // below, exactly matching the original fallback behavior.
+    if (!s_inconclusive_pairs) {
+        s_inconclusive_pairs = (InconclusivePair*)malloc(ORDERED_MAX_CAP_V2 * sizeof(InconclusivePair));
+    }
+
+    // pos[] must be able to index any face id of the current model
+    // (0 .. face_count-1) -- grow it if the current model has more
+    // faces than previous calls anticipated.
+    if (s_pos_capacity < face_count) {
+        int newcap = face_count;
+        int* tmp = (int*)realloc(s_pos, newcap * sizeof(int));
+        if (!tmp) { painter_newell_sancha_fast(model, face_count); return; }
+        s_pos = tmp;
+        s_pos_capacity = newcap;
+    }
+    // by_zmin[] and active[] must each be able to hold up to
+    // visible_count faces.
+    if (s_by_zmin_capacity < visible_count) {
+        int* tmp = (int*)realloc(s_by_zmin, visible_count * sizeof(int));
+        if (!tmp) { painter_newell_sancha_fast(model, face_count); return; }
+        s_by_zmin = tmp;
+        s_by_zmin_capacity = visible_count;
+    }
+    if (s_active_capacity < visible_count) {
+        int* tmp = (int*)realloc(s_active, visible_count * sizeof(int));
+        if (!tmp) { painter_newell_sancha_fast(model, face_count); return; }
+        s_active = tmp;
+        s_active_capacity = visible_count;
+    }
+
+    int* hash_table   = s_hash_table;
+    OrderedPair* ordered = s_ordered;
+    int touched_count = 0; // number of buckets touched during THIS call (for the final targeted reset)
+
+    // Logical cache capacity for this call: bounded both by
+    // face_count*2 (never need more pairs than that in practice) and by
+    // the physically allocated capacity (ORDERED_MAX_CAP_V2).
+    int ordered_cap = face_count * 2;
+    if (ordered_cap > ORDERED_MAX_CAP_V2) ordered_cap = ORDERED_MAX_CAP_V2;
+    int ordered_count = 0; // number of entries actually used in ordered[] for this call
+
+    // The diagnostic buffer is shared through a global variable (used
+    // elsewhere, e.g. the debug inspector): point it at our persistent
+    // buffer and reset the counter on every call.
+    inconclusive_pairs = s_inconclusive_pairs;
+    inconclusive_pairs_capacity = s_inconclusive_pairs ? ordered_cap : 0;
+    inconclusive_pairs_count = 0;
+
+    // Local pointers to the faces' geometry arrays, to avoid
+    // dereferencing faces-> on every access inside the hot loops below.
+    Fixed32* z_min = faces->z_min;
+    Fixed32* z_max = faces->z_max;
+    int* minx = faces->minx;
+    int* maxx = faces->maxx;
+    int* miny = faces->miny;
+    int* maxy = faces->maxy;
+
+    #define PAIR_HASH_V2(a, b)  ((((unsigned)(a) * 73856093u) ^ ((unsigned)(b) * 19349663u)) & HASH_MASK_V2)
+
+    // -------------------------------------------------
+    // 3. Build the reverse index pos[]
+    // -------------------------------------------------
+    // pos[face] gives the CURRENT position of `face` in sorted[].
+    // Needed because the steps below reason by face id (coming from the
+    // Z sweep, step 5), not by position -- and sorted[] changes as
+    // corrections are applied (do_move, step 6), so pos[] must be kept
+    // up to date at all times (see the update inside do_move).
+    int* pos = s_pos;
+    for (int idx = 0; idx < visible_count; ++idx) {
+        pos[sorted[idx]] = idx;
+    }
+
+    // -------------------------------------------------
+    // 4. Sort visible faces by ascending z_min (shell sort)
+    // -------------------------------------------------
+    // Prerequisite for the step-5 sweep: faces must be visited in order
+    // of their minimum Z bound to detect [z_min, z_max] interval
+    // overlaps in a single pass. Shell sort is chosen on purpose instead
+    // of a recursive sort (quicksort): no recursion, hence no risk of
+    // stack overflow on 65816/ORCA-C -- and it behaves well on input
+    // that is already roughly sorted (which is the case here, since
+    // sorted[] already comes out of the step-1 fast sort).
+    int* by_zmin = s_by_zmin;
+    for (int idx = 0; idx < visible_count; ++idx) {
+        by_zmin[idx] = sorted[idx];
+    }
+    {
+        int gap = 1;
+        while (gap < visible_count / 3) gap = gap * 3 + 1; // Knuth-ish gap sequence
+        for (; gap > 0; gap /= 3) {
+            for (int idx = gap; idx < visible_count; ++idx) {
+                int tmp = by_zmin[idx];
+                Fixed32 tmp_zmin = z_min[tmp];
+                int k = idx;
+                while (k >= gap && z_min[by_zmin[k - gap]] > tmp_zmin) {
+                    by_zmin[k] = by_zmin[k - gap];
+                    k -= gap;
+                }
+                by_zmin[k] = tmp;
+            }
+        }
+    }
+
+    // -------------------------------------------------
+    // 5. Sweep: enumerate every face pair that overlaps in Z, exactly
+    //    once.
+    // -------------------------------------------------
+    // This is the equivalent of "Test 1" (depth separation) from the
+    // Newell-Newell-Sancha algorithm, but found in O(n log n + k)
+    // instead of testing all n*(n-1)/2 pairs one by one: we sweep F
+    // along the Z axis (ascending z_min order) while maintaining an
+    // "active" list of faces whose [z_min, z_max] interval hasn't ended
+    // yet. Any face still active when we reach F necessarily overlaps F
+    // in Z (since its z_max is still ahead of F's z_min). k = the number
+    // of pairs that actually overlap, typically a small fraction of the
+    // total on a typical scene.
+    int* active = s_active;
+    int active_count = 0;
+    int candidate_count = 0;
+
+    for (int idx = 0; idx < visible_count; ++idx) {
+        int F = by_zmin[idx];
+        Fixed32 f_zmin = z_min[F];
+
+        // Drop finished intervals from the active list (their z_max can
+        // no longer overlap a future z_min, since z_min only increases
+        // from here on).
+        int w = 0;
+        for (int a = 0; a < active_count; ++a) {
+            if (z_max[active[a]] > f_zmin) {
+                active[w++] = active[a];
+            }
+        }
+        active_count = w;
+
+        // Every face still active overlaps F in Z: record the candidate
+        // pair (it will be re-tested against the finer criteria --
+        // bbox, polygons, planes -- in step 6).
+        for (int a = 0; a < active_count; ++a) {
+            if (s_candidates_capacity <= candidate_count) {
+                // List full: double its capacity (realloc, never freed
+                // between calls -- see the note at the top of the file
+                // about persistent buffers).
+                int newcap = s_candidates_capacity > 0 ? s_candidates_capacity * 2 : 256;
+                CandidatePair* tmp = (CandidatePair*)realloc(s_candidates, newcap * sizeof(CandidatePair));
+                if (!tmp) {
+                    // Out of memory for the candidate list: fall back to
+                    // the plain fast sort for this call only (no fine
+                    // correction this time, but no crash either).
+                    painter_newell_sancha_fast(model, face_count);
+                    return;
+                }
+                s_candidates = tmp;
+                s_candidates_capacity = newcap;
+            }
+            s_candidates[candidate_count].a = active[a];
+            s_candidates[candidate_count].b = F;
+            ++candidate_count;
+        }
+
+        // F in turn becomes active for the faces that follow in the sweep.
+        active[active_count++] = F;
+    }
+
+    CandidatePair* candidates = s_candidates;
+
+    // -------------------------------------------------
+    // 6. Correction passes
+    // -------------------------------------------------
+    // For each candidate pair (from the Z sweep above), apply the same
+    // criteria as the original Newell-Newell-Sancha algorithm, from
+    // cheapest to most expensive: bounding-box overlap, actual overlap
+    // of the projected polygons, then the relative position of the two
+    // faces' planes. If the current order is wrong, move the offending
+    // face (do_move). Repeat as long as a full pass still produces at
+    // least one change (do...while) -- necessary because moving one
+    // face can reveal or resolve other violations elsewhere in
+    // sorted[].
+    //
+    // Reminder of the two simplifications assumed here (see the header
+    // comment at the top of the file): an "inconclusive" case (none of
+    // the tests can decide, typically two faces that genuinely
+    // intersect) is NOT resolved by face splitting -- it is simply left
+    // in its current order and marked so it won't be re-tested. Likewise,
+    // no explicit cycle detection is performed: if several pairs'
+    // constraints contradict each other, the loop below may converge to
+    // a state that doesn't satisfy every constraint at once -- this is
+    // an accepted trade-off for this project, not an oversight.
+    int changed;
+
+    do {
+        changed = 0;
+
+        for (int c = 0; c < candidate_count; ++c) {
+            int A = candidates[c].a;
+            int B = candidates[c].b;
+
+            // Determine which of the two is currently drawn first (P,
+            // position i) and which is drawn second (Q, position j) --
+            // this is a property of THEIR CURRENT POSITION in sorted[],
+            // which can change from one pass to the next as other
+            // pairs' moves (do_move) shift things around.
+            int i, j, P, Q;
+            if (pos[A] < pos[B]) { i = pos[A]; j = pos[B]; P = A; Q = B; }
+            else                 { i = pos[B]; j = pos[A]; P = B; Q = A; }
+
+            // -------------------------------------------------
+            // Has this pair already been decided (correct or
+            // inconclusive) in a previous pass? If so, no need to redo
+            // the geometric tests -- the verdict only depends on the
+            // two faces' geometry, not on their position.
+            // -------------------------------------------------
+            unsigned h = PAIR_HASH_V2(P, Q);
+            int idx2 = hash_table[h];
+            int already_known = 0;
+
+            while (idx2 >= 0) {
+                if ((ordered[idx2].face1 == P && ordered[idx2].face2 == Q) ||
+                    (ordered[idx2].face1 == Q && ordered[idx2].face2 == P)) {
+                    already_known = 1;
+                    break;
+                }
+                idx2 = ordered[idx2].next;
+            }
+            if (already_known) continue;
+
+            // Test 1 (Z separation) is already guaranteed by
+            // construction here: this pair comes from the step-5 sweep,
+            // which only enumerated pairs whose Z intervals overlap. No
+            // need to re-check it.
+
+            // Test 2 & 3: 2D bounding-box overlap (cheap rejection
+            // before the more expensive polygon test)
+            if (maxx[P] <= minx[Q] || maxx[Q] <= minx[P]) continue;
+            if (maxy[P] <= miny[Q] || maxy[Q] <= miny[P]) continue;
+
+            // Test 4: actual overlap of the polygons as projected on screen
+            if (!projected_polygons_overlap(model, P, Q)) continue;
+
+            // Tests 5 & 6: position of Q relative to P's plane.
+            // geo == -1: the current order (P before Q) is correct
+            // geo ==  1: must invert (Q must be drawn before P)
+            // geo ==  0: undetermined (see the "inconclusive" handling below)
+            int geo = geometric_face_relation(model, P, Q);
+
+            if (geo == -1) {
+                // Order confirmed correct: remember it so this pair is
+                // never tested again.
+                if (ordered_count < ordered_cap) {
+                    ordered[ordered_count].face1 = P;
+                    ordered[ordered_count].face2 = Q;
+                    ordered[ordered_count].next  = hash_table[h];
+                    hash_table[h] = ordered_count;
+                    s_touched_buckets[touched_count++] = h;
+                    ++ordered_count;
+                }
+                continue;
+            }
+
+            if (geo == 1) {
+                // Unambiguous verdict in the P->Q direction: must invert.
+                goto do_move;
+            }
+
+            // The P->Q test couldn't decide: try the opposite direction.
+            {
+                int geo2 = geometric_face_relation(model, Q, P);
+                if (geo2 == -1) {
+                    // The reverse order is required.
+                    goto do_move;
+                }
+            }
+
+            // -------------------------------------------------
+            // "Inconclusive" case: neither P->Q nor Q->P can decide
+            // (typically, the two faces genuinely intersect in 3D). As
+            // noted at the top of the file, this function does not
+            // split faces to resolve this case: the current order is
+            // simply left as-is, the pair is recorded for diagnostics
+            // (inconclusive_pairs, used by the debug inspector), and it
+            // is marked "already decided" so it won't be needlessly
+            // re-tested in later passes.
+            // -------------------------------------------------
+            if (inconclusive_pairs_count < inconclusive_pairs_capacity) {
+                inconclusive_pairs[inconclusive_pairs_count].face1 = P;
+                inconclusive_pairs[inconclusive_pairs_count].face2 = Q;
+                ++inconclusive_pairs_count;
+            }
+            if (ordered_count < ordered_cap) {
+                ordered[ordered_count].face1 = P;
+                ordered[ordered_count].face2 = Q;
+                ordered[ordered_count].next  = hash_table[h];
+                hash_table[h] = ordered_count;
+                s_touched_buckets[touched_count++] = h;
+                ++ordered_count;
+            }
+            continue;
+
+        do_move:
+            // Move Q (currently at position j) to just before P
+            // (position i): shift everything between i and j-1 one slot
+            // to the right, then place Q at position i. pos[] is kept in
+            // sync for every shifted slot so it always matches sorted[].
+            {
+                int tmp = sorted[j];
+                for (int k = j; k > i; --k) {
+                    sorted[k] = sorted[k - 1];
+                    pos[sorted[k]] = k;
+                }
+                sorted[i] = tmp;
+                pos[tmp] = i;
+            }
+
+            // A change happened: the do...while loop will need at least
+            // one more full pass to check that this move didn't break
+            // anything elsewhere.
+            changed = 1;
+
+            // Remember the now-correct reversed order (Q before P), so
+            // this pair is never tested again.
+            if (ordered_count < ordered_cap) {
+                unsigned h2 = PAIR_HASH_V2(Q, P);
+                ordered[ordered_count].face1 = Q;
+                ordered[ordered_count].face2 = P;
+                ordered[ordered_count].next  = hash_table[h2];
+                hash_table[h2] = ordered_count;
+                s_touched_buckets[touched_count++] = h2;
+                ++ordered_count;
+            }
+        }
+    } while (changed);
+
+    // -------------------------------------------------
+    // 7. Cleanup: only reset the hash-table buckets actually touched
+    //    during this call (instead of all HASH_SIZE_V2 entries), so the
+    //    table is fully back to -1 for the next call -- exactly as if
+    //    it had been entirely cleared, but at a cost proportional to the
+    //    number of pairs actually processed.
+    // -------------------------------------------------
+    for (int t = 0; t < touched_count; ++t) {
+        hash_table[s_touched_buckets[t]] = -1;
+    }
+}
+
 // --- Pair cache (used by painter_geoV2) ---
 static PairCache* pair_cache_create(int capacity) {
     PairCache* c = (PairCache*)malloc(sizeof(PairCache));
@@ -2611,7 +3098,6 @@ static PairCache* pair_cache_create(int capacity) {
     if (!c->slots) { free(c); return NULL; }
     return c;
 }
-
 
 static int pair_cache_slot(PairCache* c, int f1, int f2) {
     // Canonical key independent of order
@@ -3139,7 +3625,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
      *       No behavior is changed — this is strictly explanatory text.
      *
      * Summary of algorithmic steps (informative):
-     *  1) Seed an initial ordering using the full Newell-Sancha sort (`painter_newell_sancha`) (more thorough than the fast variant)
+     *  1) Seed an initial ordering using the full Newell-Sancha sort (`painter_bubble_sort`) (more thorough than the fast variant)
      *  2) Partition faces into BACK (plane_d <= 0) then FRONT (plane_d > 0)
      *     and run local corrective passes inside each partition (Pass 1 for backs,
      *     Pass 2 for fronts). These passes perform only local swaps and rely on
@@ -3165,13 +3651,13 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     int old_cull = cull_back_faces;
     cull_back_faces = 0;
 
-    /* Seed initial ordering using the full Newell-Sancha sort (`painter_newell_sancha`).
+    /* Seed initial ordering using the full Newell-Sancha sort (`painter_bubble_sort`).
      * Rationale: the full sort performs more extensive per-face computation (plane
      * conversions, bounding boxes and z_mean) which reduces inconclusive geometric
      * tests later during local corrections. This improves correctness at the cost
      * of increased CPU work compared to a lightweight 'fast' seed.
      */
-    // painter_newell_sancha(model, face_count);
+    // painter_bubble_sort(model, face_count);
     painter_newell_sancha_fast(model, face_count); 
     int moves = 0;
     int n = face_count;
@@ -3349,7 +3835,7 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
         for (int i = 0; i < n; ++i) snapshot[i] = faces->sorted_face_indices[i];
 
         /* Z-only sort (fast) */
-        // painter_newell_sancha(model, face_count);
+        // painter_bubble_sort(model, face_count);
         // faster, but ???
         painter_newell_sancha_fast(model, face_count);
 
@@ -3893,7 +4379,7 @@ static int projected_polygons_overlap_old(Model3D* model, int f1, int f2) {
  * non-determinism in the original code, tied to wall-clock time rather
  * than face data.
  * ===================================================================== */
-static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
+ static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -10400,6 +10886,8 @@ static void show_help_pager(void) {
         "Arrow Left/Right: Change horizontal angle",
         "Arrow Up/Down: Change vertical angle",
         "W/X: Change screen rotation angle",
+        "N: Load new model",
+        "*: save SHGR screen as a PIC ($C1) not compressed file",
         "C: Toggle color palette display",
         "G: Cycle palettes",
         "!: Toggle orientation shading",
@@ -10407,13 +10895,13 @@ static void show_help_pager(void) {
         ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
         ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
         "1: Painter = FAST (simple sort only)",
-        "2: Painter = NORMAL (Fixed32/64)",
-        "3: Painter = GEO (geometry-only). Can be slow for large models",
+        "2: Painter = BUBBLE SORT (Fixed32/64)",
+        "=: Painter = NEWELL SANCHA (full tests, Fixed32/64)",
+        "3: Painter = GEOV2 (geometry-only). Can be slow for large models",
         "4: Painter = CORRECT (painter_correct)",
         "5: Painter = CORRECTV2",
-        "U: Painter = CORRECTV3",
+        "U: Painter = GEOV3. Can be slow for large models",
         "O: Render scanline Z-Buffer (alternative to painter algorithm)",
-        "*: save SHGR screen as a PIC ($C1) not compressed file",
         "6: Both colors RANDOM mode",
         "7: Choose fill color",
         "8: Choose frame color",
@@ -10433,8 +10921,6 @@ static void show_help_pager(void) {
         "M: Debug pair_plane_before",
         "L: Label faces with IDs",
         "F: Dump face data (3D, 2D, sort order) to file",
-        "N: Load new model",
-        "*: save SHGR screen as a PIC ($C1) not compressed file",
         "H: Display this help message",
         "ESC: Quit program"
     };

@@ -1,5 +1,5 @@
 /* =====================================================================
- * Optimized helpers for painter_geoV3
+ * Optimized helpers for painter_geoV3 
  * ---------------------------------------------------------------------
  * - Precomputed per-face epsilon (avoids sqrt + double in the hot loop)
  * - Lightweight plane-side test
