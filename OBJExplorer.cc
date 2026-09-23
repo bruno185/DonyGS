@@ -222,6 +222,7 @@ segment "main";
                 // Apply the selected palette and draw the 3D object
                 applyPalette(palette);
 
+                draw:
                 if (jitter) drawPolygons_jitter(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count); 
                 // draw model, according to current faces sorted list.
                 else drawPolygons(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count);
@@ -252,6 +253,26 @@ segment "main";
                 applyPalette(palette);
                 goto getakey; // return to key press handling after changing palette, without re-rendering the scene
                 break;
+            
+            case '>':
+                // saveScreen(); // save image to file here
+                screen2Black();
+                int c;
+                if (user_fill_color < 0) c = COL_FILL_DEFAULT; // Ensure a valid initial color index
+                else 
+                c = user_fill_color;
+                // int colorChooser(int isFrameChooser, int initialPalette, int initialSelection)
+                c = colorChooser(0, palette, c);
+                if (c >= 0) user_fill_color = c;
+                if (c == 16) {generate_random_colors(model->faces.face_count);}
+                // XXX
+                screen2Black();
+                // MoveTo(3, 10); // Move the cursor to a known position after color selection
+                // printf("Selected fill color: %d\n", user_fill_color);
+                // keypress(); // Wait for a key press after displaying the selected fill color
+                // restoreScreen(); // restore the screen after color selection
+                goto draw;
+
         }
 
 // XXX    
@@ -295,10 +316,10 @@ segment "main";
                 if (shaded_by_orientation) printf("    Shading mode: orientation-based\n");
                 if (user_fill_color == 16) printf("    Fill color: Random\n");
                 else if (user_fill_color >= 0) printf("    Fill color: %d\n", user_fill_color);
-                else printf("    Fill color: Default (COL_FILL_DEFAULT /*14*/)\n");
+                else printf("    Fill color: Default (COL_FILL_DEFAULT (#14))\n");
                 if (user_frame_color == 16) printf("    Frame color: Random\n");
                 else if (user_frame_color >= 0) printf("    Frame color: %d\n", user_frame_color);
-                else printf("    Frame color: Default (COL_FRAME /*7*/)\n");
+                else printf("    Frame color: Default (COL_FRAME (#7))\n");
                 printf ("Processing time: %d ticks (1/60 sec.)\n", last_process_time_end - last_process_time_start);
                 printf("===================================\n");
                 printf("\n");

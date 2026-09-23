@@ -213,6 +213,9 @@ static inline int normalize_deg(int deg) {
 #define COL_LIGHT_GREY     14
 #define COL_WHITE          15
 
+#define COLOR_RANDOM       16
+#define COLOR_SAME_AS_FILL 17
+
 #define SCREEN_WIDTH 320
 #define SCREEN_HEIGHT 200
 #define MAX_SPAN_INTERSECTIONS 16   // generous for concave faces (e.g. a star)

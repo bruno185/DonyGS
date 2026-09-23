@@ -1,6 +1,8 @@
 #include "declare.c"
 #include "dony.c"
 #include "screen_save_restore.c"
+#include "color.c"
+
 
 segment "model_loading";
 // ================================================================================
@@ -11064,12 +11066,3 @@ void saveNextScreenshot(void) {
     }
     saveSHRAsRawPic(fname);
 }
-
-// // Helper macro to swap face indices in the sorted_face_indices array
-// // (We swap indices, not the faces themselves, to keep the buffer intact)
-// #define SWAP_FACE(faces, i, j) \
-//     do { \
-//         int temp_idx = faces->sorted_face_indices[i]; \
-//         faces->sorted_face_indices[i] = faces->sorted_face_indices[j]; \
-//         faces->sorted_face_indices[j] = temp_idx; \
-//     } while (0)
