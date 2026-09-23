@@ -261,18 +261,22 @@ segment "main";
                 if (user_fill_color < 0) c = COL_FILL_DEFAULT; // Ensure a valid initial color index
                 else 
                 c = user_fill_color;
-                // int colorChooser(int isFrameChooser, int initialPalette, int initialSelection)
-                c = colorChooser(0, palette, c);
+                c = colorChooser(0, &palette, c);
                 if (c >= 0) user_fill_color = c;
                 if (c == 16) {generate_random_colors(model->faces.face_count);}
                 // XXX
                 screen2Black();
-                // MoveTo(3, 10); // Move the cursor to a known position after color selection
-                // printf("Selected fill color: %d\n", user_fill_color);
-                // keypress(); // Wait for a key press after displaying the selected fill color
-                // restoreScreen(); // restore the screen after color selection
                 goto draw;
 
+            case '<':
+                screen2Black();
+                c = user_frame_color;
+                if (c < 0) c = COL_FRAME; // Ensure a valid initial color index
+                c = colorChooser(1, &palette, c);
+                if (c >= 0) user_frame_color = c;
+                if (c == 16) {generate_random_colors(model->faces.face_count);}
+                screen2Black();
+                goto draw;
         }
 
 // XXX    

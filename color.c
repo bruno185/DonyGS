@@ -8,19 +8,14 @@
 #define SQUARE_SIZE      26
 #define SQUARE_GAP       4
 
-#define LABEL_GAP        2    /* espace entre bas du carré et le texte du numéro */
-#define LABEL_TEXT_H     8    /* hauteur approx. d'une ligne de texte (police système) */
+#define LABEL_GAP        2
+#define LABEL_TEXT_H     8
 #define ROW_PITCH        (SQUARE_SIZE + LABEL_GAP + LABEL_TEXT_H + SQUARE_GAP)
 
 #define GRID_ORIGIN_Y    22
-#define SPECIAL_GAP      40   /* écart entre les cases "Random" et "Same as fill", plus large
-                                  que SQUARE_GAP pour laisser de la place à leurs libellés */
+#define SPECIAL_GAP      40
 
-#define CHAR_WIDTH       8    /* largeur d'un caractère, utilisée pour centrer le texte --
-                                  ajuste si ta police graphique n'est pas de 8px de large */
-
-/* NB: COLOR_RANDOM et COLOR_SAME_AS_FILL sont définis par toi (16 et 17) et servent
-   maintenant à la fois de valeur de retour ET d'index de case dans la grille */
+#define CHAR_WIDTH       8
 
 #define UI_BLACK          0
 #define UI_WHITE          15
@@ -35,8 +30,6 @@ typedef struct {
     int x1, y1, x2, y2;
 } ChooserRect;
 
-/* Calcule le rectangle écran d'une case (0-15 = grille, COLOR_RANDOM/COLOR_SAME_AS_FILL
-   = ligne spéciale en dessous) */
 static void getSquareRect(int index, int isFrameChooser, ChooserRect *r)
 {
     int gridWidth = GRID_COLS * SQUARE_SIZE + (GRID_COLS - 1) * SQUARE_GAP;
@@ -60,7 +53,6 @@ static void getSquareRect(int index, int isFrameChooser, ChooserRect *r)
     r->y2 = r->y1 + SQUARE_SIZE;
 }
 
-/* Dessine le carré rempli de sa couleur (ou noir pour random/same-as-fill) */
 static void drawSquare(int index, int isFrameChooser)
 {
     ChooserRect r;
@@ -79,9 +71,6 @@ static void drawSquare(int index, int isFrameChooser)
     FrameRect(&qdRect);
 }
 
-/* Ajout : écrit le numéro (0-15) ou le libellé (Random / Same as fill) sous la case.
-   N'a besoin d'être appelé qu'une fois à l'initialisation : un changement de palette
-   ne repeint que l'intérieur des carrés (drawSquare), jamais cette zone en dessous. */
 static void drawSquareLabel(int index, int isFrameChooser)
 {
     ChooserRect r;
@@ -99,13 +88,10 @@ static void drawSquareLabel(int index, int isFrameChooser)
     }
 
     textWidth = strlen(buf) * CHAR_WIDTH;
-    /* centré sous le carré -- pour "Same as fill", le texte est plus large que le
-       carré et débordera symétriquement de part et d'autre, ce qui est voulu ici */
     MoveTo(r.x1 + (SQUARE_SIZE - textWidth) / 2, r.y2 + LABEL_GAP + LABEL_TEXT_H);
     printf("%s", buf);
 }
 
-/* Bordure de sélection : blanche quand active, noire (= fond) quand effacée */
 static void drawSelectionBorder(int index, int isFrameChooser, int erase)
 {
     ChooserRect r;
@@ -120,7 +106,6 @@ static void drawSelectionBorder(int index, int isFrameChooser, int erase)
     SetPenSize(1, 1);
 }
 
-/* Titre "Palette: x" centré en haut de l'écran */
 static void drawPaletteNumber(int palette)
 {
     char buf[24];
@@ -133,45 +118,34 @@ static void drawPaletteNumber(int palette)
     printf("%s", buf);
 }
 
-/* Ajout : instructions centrées en bas de l'écran, écrites une seule fois */
+/* Instructions mises à jour : Up/Down = palette, Left/Right = color */
 static void drawInstructions(void)
 {
-    char *line1 = "P key: palette   Arrow keys: color";
-    char *line2 = "Any key: accept";
+    char *line1 = "Up/Down: change palette";
+    char *line2 = "Left/Right: change color   Any key: confirm";
     int w1 = strlen(line1) * CHAR_WIDTH;
     int w2 = strlen(line2) * CHAR_WIDTH;
 
+#define LINE2_X_OFFSET 12   /* compense le débordement gauche du au texte plus large que l'écran */
+
     MoveTo((SCREEN_WIDTH - w1) / 2, SCREEN_HEIGHT - 28);
     printf("%s", line1);
-    MoveTo((SCREEN_WIDTH - w2) / 2, SCREEN_HEIGHT - 16);
+    MoveTo((SCREEN_WIDTH - w2) / 2 + LINE2_X_OFFSET, SCREEN_HEIGHT - 16);
     printf("%s", line2);
 }
 
-/*
- * colorChooser
- * isFrameChooser : 0 = chooser de fill (17 cases : 0-15 + Random)
- *                  1 = chooser de frame (18 cases : 0-15 + Random + Same as fill)
- * initialPalette    : palette SHGR de départ (0-15)
- * initialSelection  : case initialement sélectionnée (0-15, COLOR_RANDOM ou
- *                      COLOR_SAME_AS_FILL)
- *
- * Retour : 0-15 = index de couleur choisi, ou COLOR_RANDOM / COLOR_SAME_AS_FILL.
- * N'importe quelle touche autre que P/p et les flèches valide immédiatement
- * la sélection courante (plus de touche d'annulation distincte).
- */
-int colorChooser(int isFrameChooser, int initialPalette, int initialSelection)
+int colorChooser(int isFrameChooser, int *palette, int initialSelection)
 {
-    int palette   = initialPalette;
     int selection = initialSelection;
     int total     = isFrameChooser ? 18 : 17;
     int i, key, running = 1;
 
-    applyPalette(palette);
+    applyPalette(*palette);
 
-    drawPaletteNumber(palette);
+    drawPaletteNumber(*palette);
     for (i = 0; i < total; i++) {
         drawSquare(i, isFrameChooser);
-        drawSquareLabel(i, isFrameChooser);   /* numéro / libellé, une seule fois */
+        drawSquareLabel(i, isFrameChooser);
     }
     drawInstructions();
     drawSelectionBorder(selection, isFrameChooser, 0);
@@ -183,31 +157,34 @@ int colorChooser(int isFrameChooser, int initialPalette, int initialSelection)
 
             case 'P':
             case 'p':
-                palette = (palette + 1) % 16;
-                applyPalette(palette);
-                drawPaletteNumber(palette);
+                /* ne fait plus rien, désormais géré par Up/Down */
+                break;
+
+            case KEY_UP:
+            case KEY_DOWN:
+                *palette = (*palette + 1) % 16;
+                applyPalette(*palette);
+                drawPaletteNumber(*palette);
                 for (i = 0; i < 16; i++) {
-                    drawSquare(i, isFrameChooser);   /* seules les couleurs changent */
+                    drawSquare(i, isFrameChooser);
                 }
                 drawSelectionBorder(selection, isFrameChooser, 0);
                 break;
 
             case KEY_RIGHT:
-            case KEY_DOWN:
                 drawSelectionBorder(selection, isFrameChooser, 1);
                 selection = (selection + 1) % total;
                 drawSelectionBorder(selection, isFrameChooser, 0);
                 break;
 
             case KEY_LEFT:
-            case KEY_UP:
                 drawSelectionBorder(selection, isFrameChooser, 1);
                 selection = (selection - 1 + total) % total;
                 drawSelectionBorder(selection, isFrameChooser, 0);
                 break;
 
             default:
-                running = 0;   /* n'importe quelle autre touche valide */
+                running = 0;
                 break;
         }
     }
