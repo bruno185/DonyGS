@@ -13,6 +13,7 @@
 | **cleanup_list** | Supprime les indices consécutifs en double dans une liste de sommets de polygone (y compris le wrap-around). |
 | **clip_face_plane** | Clippe le polygone d'une face contre un demi-espace défini par un plan ; produit une nouvelle liste de sommets. |
 | **cmp_faces_by_zmean** | Comparateur pour qsort : ordonne les faces par z_mean décroissant (tie-break sur l'index). |
+| **colorChooser** | Sélecteur de couleur interactif plein écran (SHGR) pour choisir la couleur de fill ou de frame : flèches haut/bas pour changer de palette, flèches gauche/droite pour changer de couleur, n'importe quelle autre touche pour valider. Appelée depuis `main`. |
 | **compare_faces_diagnostic** | Exécute la batterie complète de tests (Z, bbox, overlap, géométrie 3D, centroïdes, raycast) sur une paire de faces. |
 | **compute2DFromObserver** | Recalcule uniquement les coordonnées écran 2D à partir de l'espace observateur (sans re-trier). |
 | **compute_bbox_intersection** | Calcule le rectangle d'intersection des bbox 2D de deux faces. Retourne 0 si pas de chevauchement. |
@@ -32,11 +33,17 @@
 | **display_model_face_ids** | Affiche le modèle en fil de fer avec les numéros de faces au centre de chaque polygone. |
 | **DoColor** | Affiche la palette de couleurs courante à l'écran (outil de debug visuel). |
 | **DoText** | Bascule l'écran en mode texte et efface l'affichage. |
+| **drawBlackSquareMarker** | Dessine une bordure blanche fixe (en retrait) sur les carrés du color chooser toujours noirs (couleur 0, Random, Same as fill), pour les rendre visibles sur le fond noir de l'écran. |
 | **drawFace** | Dessine une face unique (remplie ou filaire) avec la couleur demandée. |
 | **drawFaceIndex** | Affiche le numéro d'index d'une face à proximité de son centroïde projeté. |
+| **drawInstructions** | Affiche en bas de l'écran du color chooser les instructions clavier (changement de palette, de couleur, validation). |
+| **drawPaletteNumber** | Affiche en haut de l'écran du color chooser le type de couleur en cours d'édition (fill/frame) et le numéro de palette courante, centré via `CStringWidth`. |
 | **drawPixel** | Pose un pixel couleur aux coordonnées écran données (utilisé par le Z-buffer scanline). |
 | **drawPolygons** | Parcourt sorted_face_indices et dessine toutes les faces visibles (mode rempli). |
 | **drawPolygons_jitter** | Variante de drawPolygons avec jitter anti-aliasing léger. |
+| **drawSelectionBorder** | Dessine ou efface la bordure blanche de sélection (2 px) autour du carré actuellement sélectionné dans le color chooser. |
+| **drawSquare** | Dessine un carré du color chooser rempli de sa couleur (index 0-15) ou en noir pour les cases spéciales (Random, Same as fill), avec un contour noir. |
+| **drawSquareLabel** | Affiche sous un carré du color chooser son numéro (0-15) ou son libellé (Random / Same as fill), centré via `CStringWidth`. |
 | **dump_compare_results_to_file** | Écrit les résultats textuels d'un diagnostic de paire de faces dans un fichier fXvsfY.txt. |
 | **dumpFace2DCoordinates** | Exporte les coordonnées 2D projetées de chaque face dans un fichier texte. |
 | **dumpFaceEquationsCSV** | Exporte les équations de plan, profondeurs et indices de sommets de toutes les faces en CSV. |
@@ -54,6 +61,7 @@
 | **getFaceFillColor** | Retourne la couleur de remplissage effective d'une face (utilisateur, random ou défaut). |
 | **getFaceFrameColor** | Retourne la couleur de contour effective d'une face. |
 | **getObserverParams** | Dialogue interactif pour saisir/modifier angles et distance de l'observateur. |
+| **getSquareRect** | Calcule le rectangle écran d'un carré du color chooser : couleur 0-15 dans la grille, ou case spéciale Random / Same as fill sur la ligne du dessous. |
 | **hideFace** | Cache une face en sauvegardant son vertex_count et en le mettant à 0. |
 | **initPalettes** | Initialise les tables de palettes QuickDraw utilisées par le programme. |
 | **initScreenSaveBuffer** | Alloue et verrouille le buffer de sauvegarde de l'écran SHR complet (32 Ko) utilisé par saveScreen/restoreScreen ; à appeler une seule fois au démarrage. |

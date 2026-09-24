@@ -456,6 +456,20 @@
 <div class="line">│   ├── <span class="fn" data-desc="Dessine une face unique (remplie ou filaire) avec la couleur demandée.">drawFace</span>()</div>
 <div class="line">│   └── <span class="fn" data-desc="Affiche le numéro d&#x27;index d&#x27;une face à proximité de son centroïde projeté.">drawFaceIndex</span>()</div>
 <div class="line">│</div>
+<div class="line">├── <span class="fn" data-desc="Sélecteur de couleur interactif plein écran (SHGR) pour choisir la couleur de fill ou de frame : flèches haut/bas pour changer de palette, flèches gauche/droite pour changer de couleur, n&#x27;importe quelle autre touche pour valider. Appelée depuis main.">colorChooser</span>()</div>
+<div class="line">│   ├── <span class="fn" data-desc="Charge et active une palette QuickDraw parmi celles initialisées.">applyPalette</span>()</div>
+<div class="line">│   │   └── <span class="fn" data-desc="Définit une entrée RGB dans une palette QuickDraw.">SetColor</span>()</div>
+<div class="line">│   ├── <span class="fn" data-desc="Affiche en haut de l&#x27;écran du color chooser le type de couleur en cours d&#x27;édition (fill/frame) et le numéro de palette courante, centré via CStringWidth.">drawPaletteNumber</span>()</div>
+<div class="line">│   ├── <span class="fn" data-desc="Dessine un carré du color chooser rempli de sa couleur (index 0-15) ou en noir pour les cases spéciales (Random, Same as fill), avec un contour noir.">drawSquare</span>()</div>
+<div class="line">│   │   └── <span class="fn" data-desc="Calcule le rectangle écran d&#x27;un carré du color chooser : couleur 0-15 dans la grille, ou case spéciale Random / Same as fill sur la ligne du dessous.">getSquareRect</span>()</div>
+<div class="line">│   ├── <span class="fn" data-desc="Dessine une bordure blanche fixe (en retrait) sur les carrés du color chooser toujours noirs (couleur 0, Random, Same as fill), pour les rendre visibles sur le fond noir de l&#x27;écran.">drawBlackSquareMarker</span>()</div>
+<div class="line">│   │   └── <span class="fn" data-desc="Calcule le rectangle écran d&#x27;un carré du color chooser : couleur 0-15 dans la grille, ou case spéciale Random / Same as fill sur la ligne du dessous.">getSquareRect</span>()</div>
+<div class="line">│   ├── <span class="fn" data-desc="Affiche sous un carré du color chooser son numéro (0-15) ou son libellé (Random / Same as fill), centré via CStringWidth.">drawSquareLabel</span>()</div>
+<div class="line">│   │   └── <span class="fn" data-desc="Calcule le rectangle écran d&#x27;un carré du color chooser : couleur 0-15 dans la grille, ou case spéciale Random / Same as fill sur la ligne du dessous.">getSquareRect</span>()</div>
+<div class="line">│   ├── <span class="fn" data-desc="Affiche en bas de l&#x27;écran du color chooser les instructions clavier (changement de palette, de couleur, validation).">drawInstructions</span>()</div>
+<div class="line">│   └── <span class="fn" data-desc="Dessine ou efface la bordure blanche de sélection (2 px) autour du carré actuellement sélectionné dans le color chooser.">drawSelectionBorder</span>()</div>
+<div class="line">│       └── <span class="fn" data-desc="Calcule le rectangle écran d&#x27;un carré du color chooser : couleur 0-15 dans la grille, ou case spéciale Random / Same as fill sur la ligne du dessous.">getSquareRect</span>()</div>
+<div class="line">│</div>
 <div class="line">├── <span class="fn" data-desc="Attribue des couleurs aléatoires à toutes les faces (mode fill/frame random).">generate_random_colors</span>()</div>
 <div class="line">│</div>
 <div class="line">├── <span class="fn" data-desc="Exporte les équations de plan, profondeurs et indices de sommets de toutes les faces en CSV.">dumpFaceEquationsCSV</span>()</div>
@@ -547,7 +561,7 @@
   </div>
   <div class="legend">
     <p>Astuce : survolez les noms en <code>vert</code> — description en police 16&nbsp;px.</p>
-    <p>132 fonctions documentées (dictionnaire + arbre).</p>
+    <p>140 fonctions documentées (dictionnaire + arbre).</p>
   </div>
   <div id="tooltip"></div>
 <script>
