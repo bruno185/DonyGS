@@ -5138,3 +5138,91 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
     pair_cache_destroy(cache);
     printf("Total swaps: %d (passes: %d)\n", swap_count, pass);
 }
+
+
+
+/            case 56: // '7' - choose fill color
+                {
+                    printf("\n=== Fill color selection ===\n");
+                    printf("Available colors:\n");
+                    printf(" 0 : black\n");
+                    printf(" 1 : grey\n");
+                    printf(" 2 : brown\n");
+                    printf(" 3 : purple\n");
+                    printf(" 4 : blue\n");
+                    printf(" 5 : green\n");
+                    printf(" 6 : orange\n");
+                    printf(" 7 : red\n");
+                    printf(" 8 : rose\n");
+                    printf(" 9 : yellow\n");
+                    printf("10 : light green\n");
+                    printf("11 : aqua\n");
+                    printf("12 : pale purple\n");
+                    printf("13 : light blue\n");
+                    printf("14 : light gray\n");
+                    printf("15 : white\n");
+                    printf("16 : random\n\n");
+                    printf("Enter fill color: ");
+                    int c = -1;
+                    if (scanf("%d", &c) == 1) {
+                        if (c >= -1 && c <= 16) {
+                            user_fill_color = c;
+                            if (c == 16) {
+                                if (model != NULL) {
+                                    generate_random_colors(model->faces.face_count);
+                                }
+                                printf("Fill color set to RANDOM (new colors generated)\n");
+                            }
+                            else if (c >= 0) printf("Fill color set to %d\n", c);
+                            else printf("Fill color reset to DEFAULT (14)\n");
+                        } else {
+                            printf("Invalid color (must be -1 to 16)\n");
+                        }
+                    }
+                    int ch; while ((ch = getchar()) != '\n' && ch != EOF);
+                    goto loopReDraw;
+                }
+
+            case 56: // '8' - choose frame color
+                {
+                    printf("\n=== Frame color selection ===\n");
+                    printf("Available colors:\n");
+                    printf(" 0 : black\n");
+                    printf(" 1 : grey\n");
+                    printf(" 2 : brown\n");
+                    printf(" 3 : purple\n");
+                    printf(" 4 : blue\n");
+                    printf(" 5 : green\n");
+                    printf(" 6 : orange\n");
+                    printf(" 7 : red\n");
+                    printf(" 8 : rose\n");
+                    printf(" 9 : yellow\n");
+                    printf("10 : light green\n");
+                    printf("11 : aqua\n");
+                    printf("12 : pale purple\n");
+                    printf("13 : light blue\n");
+                    printf("14 : light gray\n");
+                    printf("15 : white\n");
+                    printf("16 : random\n");
+                    printf("17 : same as fill\n\n");
+                    printf("Enter frame color: ");
+                    int c = -1;
+                    if (scanf("%d", &c) == 1) {
+                        if (c >= -1 && c <= 17) {
+                            user_frame_color = c;
+                            if (c == 16) {
+                                if (model != NULL) {
+                                    generate_random_colors(model->faces.face_count);
+                                }
+                                printf("Frame color set to RANDOM (new colors generated)\n");
+                            }
+                            else if (c == 17) printf("Frame color set to SAME AS FILL\n");
+                            else if (c >= 0) printf("Frame color set to %d\n", c);
+                            else printf("Frame color reset to DEFAULT (7)\n");
+                        } else {
+                            printf("Invalid color (must be -1 to 17)\n");
+                        }
+                    }
+                    int ch; while ((ch = getchar()) != '\n' && ch != EOF);
+                    goto loopReDraw;
+                }

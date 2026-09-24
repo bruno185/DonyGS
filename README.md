@@ -20,13 +20,14 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 
 1. **Load a model**: Run the program and enter the path to a simplified OBJ file when prompted. After entering the file path, press `Enter` five times in a row to accept the default values for distance, horizontal angle, vertical angle, screen rotation, and any additional prompts. Those defaults can still be changed later through the application controls.
 2. **Now you see the 3D object centred on the screen**
-3. **Use the controls**: Navigate the scene with the keyboard and switch rendering modes using keys `1` through `5`.
+3. **Use the controls**: Navigate the scene with the keyboard and switch rendering modes using keys `1` through `7`.
 4. **Change the color palette**: Press `G` to cycle through the available color palettes.
-5. **Enable orientation shading**: Press `!` to toggle orientation-based shading on and off.
-6. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `V` (in that detail screen) to reverse the vertex winding of the selected face and update its front/back classification, `H`/`R`/`A` to hide, restore, or restore all faces, and `N` (in the main face viewer) to toggle display of the face's normal.
-7. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the farther face in front of the nearer face or `E` to move the nearer face behind the farther face in the sorted face list.
-6. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
-7. **Repair ordering**: Press `;` to run the face order repair helper, and press `.` to run `check_sort_repair_fast` for a QuickDraw-centroid-based minimal repair.
+5. **Choose colors**: Press `>` to choose the fill color and `<` to choose the frame color, from an on-screen color chooser.
+6. **Enable orientation shading**: Press `!` to toggle orientation-based shading on and off.
+7. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `V` (in that detail screen) to reverse the vertex winding of the selected face and update its front/back classification, `H`/`R`/`A` to hide, restore, or restore all faces, and `N` (in the main face viewer) to toggle display of the face's normal.
+8. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the farther face in front of the nearer face or `E` to move the nearer face behind the farther face in the sorted face list.
+9. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
+10. **Repair ordering**: Press `;` to run the face order repair helper, and press `.` to run `check_sort_repair_fast` for a QuickDraw-centroid-based minimal repair.
 
 ### Why use this explorer/viewer?
 
@@ -44,31 +45,37 @@ This image couldn't have been generated with painters as they are implemented he
 
 - `H`: show full help screens
 - `1`: FAST mode
-- `2`: NORMAL mode
-- `3`: GEO mode
-- `4`: CORRECT mode
-- `5`: CORRECT V2 mode
+- `2`: BUBBLE SORT mode
+- `3`: NEWELL SANCHA mode
+- `4`: GEO mode
+- `5`: GEO V3 mode
+- `6`: CORRECT mode
+- `7`: CORRECT V2 mode
 - `O`: experimental scanline Z-buffer mode (prototype, slow)
-- `6`: random colors
-- `7`: choose face colors
-- `6`: choose border colors (including "same as fill color" = no border)
+- `8`: random colors (quick mode, sets both fill and frame to random)
+- `>`: choose fill color (interactive color chooser)
+- `<`: choose frame color, including "same as fill color" = no separate border (interactive color chooser)
 - `9`: reset colors to defaults, restore palette 0, and disable orientation shading
 - `B`: toggle back-face culling
+- `P`: toggle wireframe (frame-only) rendering
 - `C`: toggle palette display overlay
 - `G`: cycle through available color palettes
 - `!`: toggle orientation-based shading
 - `V`: inspect a face, arrow to navigate, 'space' for options (record face data in a file, revert vertex order)
 - `Q`: inspect a face pair and navigate between pairs
 - `;`: repair face order
+- `.`: repair face order (fast, QuickDraw-centroid-based)
 
 ### Key Features
 
-- **Multiple Painter Algorithms**: Five distinct rendering modes optimized for different use cases (FLOAT is archived)
+- **Multiple Painter Algorithms**: Seven distinct rendering modes optimized for different use cases (FLOAT is archived)
   - **FAST**: Simple Z-mean sorting with bounding box tests (highest performance)
-  - **NORMAL**: Full Newell-Sancha algorithm with Fixed32/64 arithmetic (robust)
+  - **BUBBLE SORT**: Full pairwise-comparison sort using a bubble-sort ordering pass (Fixed32/64 arithmetic)
+  - **NEWELL SANCHA**: Full Newell-Sancha algorithm with Fixed32/64 arithmetic (robust)
   - **GEO**: Geometry-only heuristic painter mode; plane/ordering tests without the full local correction pipeline
-  - **CORRECT**: Advanced ordering correction with local face reordering
-  - **CORRECT V2**: Experimental local correction (painter_correctV2) 
+  - **GEO V3**: Geometry-only mode inspired by R. Dony's book, without face-splitting handling; can be slow on large models
+  - **CORRECT**: Advanced ordering correction with local face reordering (homebrew implementation)
+  - **CORRECT V2**: Experimental local correction, homebrew implementation V2 (`painter_correctV2`)
   
 - **3D Manipulation**: Interactive camera controls with adjustable distance, rotation angles, and 2D panning
 - **Advanced Culling**: Observer-space back-face culling to eliminate hidden polygons
@@ -94,7 +101,12 @@ This image couldn't have been generated with painters as they are implemented he
 - Best for high frame rates on simple geometry
 - Limitations: May produce artifacts on complex overlapping polygons
 
-#### NORMAL Mode (Key: `2`) — NEWELL_SANCHA
+#### BUBBLE SORT Mode (Key: `2`)
+- Full pairwise-comparison sort of the face list using a bubble-sort ordering pass
+- Fixed32 (16.16) / Fixed64 (32.32) arithmetic
+- More thorough than FAST, but without the full geometric test battery of NEWELL SANCHA
+
+#### NEWELL SANCHA Mode (Key: `3`)
 - Based on Newell-Sancha (V1) pairwise comparison algorithm (implemented as `painter_newell_sancha`)
 - Comprehensive geometric tests per face pair:
   1. **Test 1**: Z-extents overlap check (cheap rejection)
@@ -109,21 +121,26 @@ This image couldn't have been generated with painters as they are implemented he
 - Fixed32 (16.16) and Fixed64 (32.32) arithmetic throughout
 - Most robust for complex geometry
 
-#### GEO Mode (Key: `3`) — ⚠️ CAN BE VERY SLOW oN LARGE MODELS
+#### GEO Mode (Key: `4`) — ⚠️ CAN BE VERY SLOW oN LARGE MODELS
 - Geometry-only painter mode that uses plane-based ordering heuristics
 - Uses `painter_geoV2` with ray-casting for depth ordering
 - **WARNING**: This mode is significantly slower than other painters for large models due to intensive geometric calculations
 - Recommended ONLY for small models or diagnostic purposes
 - Not suitable for interactive work on larger meshes
 
-#### CORRECT Mode (Key: `4`)
-- Extends NORMAL mode with local face reordering after separating faces into FRONT and BACK groups
+#### GEO V3 Mode (Key: `5`) — ⚠️ CAN BE VERY SLOW ON LARGE MODELS
+- Geometry-only mode inspired by R. Dony's book (`painter_geoV3`), without face-splitting handling
+- Shares the same performance caveats as GEO mode on large models
+- Recommended ONLY for small models or diagnostic purposes
+
+#### CORRECT Mode (Key: `6`)
+- Extends NEWELL SANCHA mode with local face reordering after separating faces into FRONT and BACK groups, homebrew implementation
 - Attempts to resolve ordering conflicts through strategic swaps between those groups
 - Best for geometries with many inconclusive pairs
 - Slower
 
-#### CORRECT V2 Mode (Key: `5`)
-- Experimental variant: `painter_correctV2`
+#### CORRECT V2 Mode (Key: `7`)
+- Experimental variant, homebrew implementation: `painter_correctV2`
 - Separates faces into FRONT and BACK groups before applying local corrections
 - Improves robustness of face sorting when culling is OFF
 - Locally corrects cases where a BACK face appears in front and overlaps a FRONT face (need to be improved)
@@ -169,7 +186,7 @@ Face orientation is determined in observer space, after the model has been trans
 - The sign of `d` depends on the face normal direction relative to the camera, not just the original OBJ winding order.
 - Reversing the vertex order of a face flips its normal and therefore changes whether it is classified as front or back.
 
-In the application, the `showFace` inspector (commande 'V') reports this directly using `faces->plane_d[target_face]`:
+In the application, the `showFace` inspector (command `V`) reports this directly using `faces->plane_d[target_face]`:
 - `plane_d > 0` => `FRONT`
 - `plane_d <= 0` => `BACK`
 
@@ -232,33 +249,41 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `J` | Toggle Jitter | Toggle stylized rendering that applies a random per-vertex 2D offset (0..10 px) |
 | `P` | Wireframe Mode | Toggle between filled and frame-only polygons |
 | `B` | Back-Face Culling | Enable/disable observer-space culling |
+| `G` | Cycle Palette | Cycle through the 16 available SHR color palettes |
+| `!` | Orientation Shading | Toggle orientation-based flat shading on/off |
 
 
 #### Rendering Modes
-| Key | Mode        | Algorithm/Description |
-|-----|-------------|----------------------|
-| `1` | FAST        | Simple Z-mean sorting (fastest) |
-| `2` | NORMAL      | Full Newell-Sancha with Fixed32/64 |
-| `3` | GEO | Geometry-only mode with plane-based ordering heuristics |
-| `4` | CORRECT     | Advanced ordering correction |
-| `5` | CORRECT V2  | Experimental local correction (painter_correctV2) |
-| `O` | Z-BUFFER    | Experimental scanline Z-buffer renderer (prototype, slow) |
+| Key | Mode          | Algorithm/Description |
+|-----|---------------|----------------------|
+| `1` | FAST          | Simple Z-mean sorting (fastest) |
+| `2` | BUBBLE SORT   | Full pairwise-comparison sort using a bubble-sort ordering pass |
+| `3` | NEWELL SANCHA | Full Newell-Sancha with Fixed32/64 |
+| `4` | GEO           | Geometry-only mode with plane-based ordering heuristics |
+| `5` | GEO V3        | Geometry-only mode inspired by R. Dony's book, without face splitting |
+| `6` | CORRECT       | Advanced ordering correction (homebrew implementation) |
+| `7` | CORRECT V2    | Experimental local correction, homebrew implementation V2 (`painter_correctV2`) |
+| `O` | Z-BUFFER      | Experimental scanline Z-buffer renderer (prototype, slow) |
 
 #### Color Management
 | Key | Action | Description |
 |-----|--------|-------------|
-| `6` | Random Colors | Set both fill and frame colors to random mode (new colors on each press) |
-| `7` | Choose Fill Color | Select interior color (0-15) or random mode (16) |
-| `8` | Choose Frame Color | Select outline color (0-15) or random mode (16) |
-| `9` | Reset Colors | Restore default colors (fill=white/14, frame=red/7) |
+| `8` | Random Colors (quick) | Set both fill and frame colors to random mode immediately (new colors on each press) |
+| `>` | Choose Fill Color | Opens the interactive color chooser to select the interior color (0-15) or random mode |
+| `<` | Choose Frame Color | Opens the interactive color chooser to select the outline color (0-15), random mode, or "same as fill" (no separate border) |
+| `9` | Reset Colors | Restore default colors (fill=light gray/14, frame=red/7), reset palette to 0, and disable orientation shading |
 
-**Color Palette (0-15):**
-- 0: black, 1: grey, 2: brown, 3: purple, 4: blue, 5: green
-- 6: orange, 7: red, 8: rose, 9: yellow, 10: light green, 11: aqua
-- 12: pale purple, 13: light blue, 14: light gray, 15: white
-- 16: random (generates unique colors per face)
+**Interactive Color Chooser (`>` / `<` keys):**
 
-![Color Selection](Screenshots/color_selection.png)
+Pressing `>` or `<` opens an on-screen color picker over a black background:
+- Displays the 16 colors of the current SHR palette as numbered squares (0-15), plus a "Random" square and, for the frame chooser only, a "Same as fill" square.
+- `Up` / `Down` arrows cycle through the 16 available color palettes; the picker updates instantly to show the new palette's colors.
+- `Left` / `Right` arrows move the selection between color squares (highlighted with a white border).
+- Any other key confirms the current selection and closes the picker.
+
+
+![Color Selection](Screenshots/fill.png)
+![Color Selection](Screenshots/frame.png)
 ![Random Colors](Screenshots/random_colors.png)
 
 #### Diagnostic Tools
@@ -330,11 +355,11 @@ Saves the current SHR display to disk as an uncompressed native picture file, re
 1. **Load Model** with `N` key
 2. **Position Camera** using arrow keys and `A`/`Z`
 3. **Customize Colors** (optional):
-   - Press `6` for random colors
-   - Press `7` to choose a specific fill color
-   - Press `8` to choose a specific frame color
+   - Press `8` for random colors (quick)
+   - Press `>` to choose a specific fill color
+   - Press `<` to choose a specific frame color
    - Press `9` to reset to defaults
-4. **Select Rendering Mode** (`1`-`5`) based on geometry complexity
+4. **Select Rendering Mode** (`1`-`7`) based on geometry complexity
 5. **Enable Inspection** with `I` to see inconclusive pairs
 6. **Investigate Artifacts**:
    - Press `V` to view individual faces
@@ -377,21 +402,27 @@ Useful for examining individual face geometry and understanding the sorting orde
 
 ---
 
-### Récapitulatif : touches → fonctions C appelées 🔧
+### Summary: Keys → C Functions Called 🔧
 
-Ci‑dessous un tableau récapitulatif des touches les plus utiles et des **fonctions C** qu'elles invoquent (directement ou via flags / modes). Cela aide à relier le comportement interactif aux points d'entrée du code lorsque vous faites du debug :
+Below is a summary table of the most useful keys and the **C functions** they invoke (directly or via flags/modes). This helps map interactive behavior to code entry points when debugging:
 
-| Touche | Action (concis) | Fonctions C impliquées (point d'entrée) |
-|--------|-----------------|-----------------------------------------|
-| `1`..`5` | Changer le mode de painter | modifie `painter_mode` → appelle ensuite `painter_newell_sancha_fast`, `painter_newell_sancha`, `painter_geo`, `painter_correct`, `painter_correctV2` selon le mode |
-| `O` | Rendu Z-buffer scanline (expérimental) | `renderModelScanlineZBuffer` |
-| `V` | Inspecter une face | `showFace` — sous-menu `Space` : `V` (reverse vertex order), `H`/`R`/`A` (hide/restore/restoreAll), `F` (export) |
-| `*` | Sauvegarder l'écran | `saveNextScreenshot` → `saveSHRAsRawPic` (format $C1/$0000, nom auto-incrémenté `screenNNN.PIC`) |
-| `A` / `Z` | Ajuster la distance caméra | modifie `params.distance` et recharge le rendu |
-| `E` / `R` / `T` / `Y` | Panoramique 2D | modifie `pan_dx` / `pan_dy` et redessine |
+| Key | Action (short) | C functions involved (entry point) |
+|-----|-----------------|-----------------------------------------|
+| `1`..`7` | Change painter mode | sets `painter_mode` → subsequently calls `painter_newell_sancha_fastV2` (FAST), a bubble-sort based ordering pass (BUBBLE SORT — exact function name not yet confirmed), `painter_newell_sancha` (NEWELL SANCHA), `painter_geo`/`painter_geoV2` (GEO), `painter_geoV3` (GEO V3), `painter_correct` (CORRECT), or `painter_correctV2` (CORRECT V2) depending on the mode |
+| `O` | Scanline Z-buffer render (experimental) | `renderModelScanlineZBuffer` |
+| `>` | Choose fill color | `colorChooser(0, &palette, ...)` — sets `user_fill_color`; also triggers `generate_random_colors` if random is chosen |
+| `<` | Choose frame color | `colorChooser(1, &palette, ...)` — sets `user_frame_color`; also triggers `generate_random_colors` if random is chosen |
+| `8` | Random colors (quick, both fill and frame) | sets `user_fill_color`/`user_frame_color` to random mode + `generate_random_colors` |
+| `9` | Reset colors, palette, shading | resets `user_fill_color`/`user_frame_color`, `palette`, `shaded_by_orientation` |
+| `G` | Cycle color palette | increments `palette` (mod 16) + `applyPalette` |
+| `!` | Toggle orientation shading | `shaded_by_orientation` toggle + `computeOrientationShading` |
+| `V` | Inspect a face | `showFace` — submenu `Space`: `V` (reverse vertex order), `H`/`R`/`A` (hide/restore/restoreAll), `F` (export) |
+| `*` | Save screen | `saveNextScreenshot` → `saveSHRAsRawPic` ($C1/$0000 format, auto-incremented name `screenNNN.PIC`) |
+| `A` / `Z` | Adjust camera distance | modifies `params.distance` and reloads the render |
+| `E` / `R` / `T` / `Y` | 2D panning | modifies `pan_dx` / `pan_dy` and redraws |
 | `B` | Toggle back-face culling | `cull_back_faces` + reprocess model |
 | `P` | Wireframe mode | `framePolyOnly` + redraw / reprocess |
-| `C` | Color palette | `colorpalette` toggle |
+| `C` | Color palette overlay | `colorpalette` toggle |
 | `J` | Render jitter | `jitter` toggle |
 | `K` | Edit angles/distance | `getObserverParams` |
 | `D` / `S` | Inspect faces before / after | `inspect_faces_before` / `inspect_faces_after` |
@@ -404,8 +435,6 @@ Ci‑dessous un tableau récapitulatif des touches les plus utiles et des **fonc
 > Note: Some commands invoke multiple utilities (e.g., `F` writes `Faces3D.csv`, `Faces2D.txt`, and `FacesOrder.txt`). To investigate specific behavior, start by using the corresponding key in the interface, then consult the output files (`Faces3D.csv`, `Faces2D.txt`, `FacesOrder.txt`, `Face<ID>.txt`) to reproduce/automate tests.
 
 ---
-
-Si tu veux, j'ajoute des liens (anchors) dans le README qui pointent vers les définitions de ces fonctions dans le code (façon 
 
 ## File Format
 
@@ -483,7 +512,7 @@ This copies the compiled binary to a bootable disk image for use with emulators 
 - **Polygon Splitting**: Basic in‑memory splitting on load (faces cut by intersecting planes) now implemented to eliminate simple interpenetrations
 - **Transparency**: Not supported; all polygons are opaque
 - **Lighting**: No shading model; faces use flat colors from palette
-- **Large Models**: Performance degrades significantly above ~500 faces in NORMAL mode
+- **Large Models**: Performance degrades significantly above ~500 faces in NEWELL SANCHA mode
 - **Memory Constraints**: Maximum model size limited by available Apple IIGS RAM
 
 ## Future Enhancements

@@ -541,113 +541,44 @@ segment "main";
                 printf("Painter mode: BUBBLE SORT (full tests, Fixed32/64)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 61: // '=' - set NEWELL SANCHA (Fixed32/64) painter
+            case 51: // '3' - set NEWELL SANCHA (Fixed32/64) painter
                 painter_mode = PAINTER_MODE_NEWELL_SANCHA;
                 printf("Painter mode: NEWELL SANCHA (full tests, Fixed32/64)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-
-            case 51: // '3' - set GEO painter
+            case 52: // '4' - set GEO painter
                 painter_mode = PAINTER_MODE_GEO;
                 printf("Painter mode: GEO (geometry-only)\n");
                 printf("WARNING: This mode can be significantly slower than others with large models.\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
+            
+            case 53: // '5' - set GEO V3 painter
+                painter_mode = PAINTER_MODE_GEOV3;
+                printf("Painter mode: GEO V3 (inspired by R. DONY's book)\n");
+                printf("WARNING: This mode can be significantly slower than others with large models.\n");
+                goto bigloop; 
+                goto loopReDraw;
 
-            case 52: // '4' - set CORRECT painter (runs painter_correct)
+            case 54: // '6' - set CORRECT painter (runs painter_correct)
                 painter_mode = PAINTER_MODE_CORRECT;
                 printf("Painter mode: CORRECT (painter_correct)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 53: // '5' - set CORRECTV2 painter (runs painter_correctV2 with face splitting detection)
+            case 55: // '7' - set CORRECTV2 painter (runs painter_correctV2 with face splitting detection)
                 painter_mode = PAINTER_MODE_CORRECTV2;
                 printf("Painter mode: CORRECT V2 (painter_correctV2)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 55: // '7' - choose fill color
-                {
-                    printf("\n=== Fill color selection ===\n");
-                    printf("Available colors:\n");
-                    printf(" 0 : black\n");
-                    printf(" 1 : grey\n");
-                    printf(" 2 : brown\n");
-                    printf(" 3 : purple\n");
-                    printf(" 4 : blue\n");
-                    printf(" 5 : green\n");
-                    printf(" 6 : orange\n");
-                    printf(" 7 : red\n");
-                    printf(" 8 : rose\n");
-                    printf(" 9 : yellow\n");
-                    printf("10 : light green\n");
-                    printf("11 : aqua\n");
-                    printf("12 : pale purple\n");
-                    printf("13 : light blue\n");
-                    printf("14 : light gray\n");
-                    printf("15 : white\n");
-                    printf("16 : random\n\n");
-                    printf("Enter fill color: ");
-                    int c = -1;
-                    if (scanf("%d", &c) == 1) {
-                        if (c >= -1 && c <= 16) {
-                            user_fill_color = c;
-                            if (c == 16) {
-                                if (model != NULL) {
-                                    generate_random_colors(model->faces.face_count);
-                                }
-                                printf("Fill color set to RANDOM (new colors generated)\n");
-                            }
-                            else if (c >= 0) printf("Fill color set to %d\n", c);
-                            else printf("Fill color reset to DEFAULT (14)\n");
-                        } else {
-                            printf("Invalid color (must be -1 to 16)\n");
-                        }
-                    }
-                    int ch; while ((ch = getchar()) != '\n' && ch != EOF);
-                    goto loopReDraw;
-                }
 
-            case 56: // '8' - choose frame color
-                {
-                    printf("\n=== Frame color selection ===\n");
-                    printf("Available colors:\n");
-                    printf(" 0 : black\n");
-                    printf(" 1 : grey\n");
-                    printf(" 2 : brown\n");
-                    printf(" 3 : purple\n");
-                    printf(" 4 : blue\n");
-                    printf(" 5 : green\n");
-                    printf(" 6 : orange\n");
-                    printf(" 7 : red\n");
-                    printf(" 8 : rose\n");
-                    printf(" 9 : yellow\n");
-                    printf("10 : light green\n");
-                    printf("11 : aqua\n");
-                    printf("12 : pale purple\n");
-                    printf("13 : light blue\n");
-                    printf("14 : light gray\n");
-                    printf("15 : white\n");
-                    printf("16 : random\n");
-                    printf("17 : same as fill\n\n");
-                    printf("Enter frame color: ");
-                    int c = -1;
-                    if (scanf("%d", &c) == 1) {
-                        if (c >= -1 && c <= 17) {
-                            user_frame_color = c;
-                            if (c == 16) {
-                                if (model != NULL) {
-                                    generate_random_colors(model->faces.face_count);
-                                }
-                                printf("Frame color set to RANDOM (new colors generated)\n");
-                            }
-                            else if (c == 17) printf("Frame color set to SAME AS FILL\n");
-                            else if (c >= 0) printf("Frame color set to %d\n", c);
-                            else printf("Frame color reset to DEFAULT (7)\n");
-                        } else {
-                            printf("Invalid color (must be -1 to 17)\n");
-                        }
-                    }
-                    int ch; while ((ch = getchar()) != '\n' && ch != EOF);
-                    goto loopReDraw;
+            case 56: // '8' - quick random mode for both colors
+                user_fill_color = 16;
+                user_frame_color = 16;
+                if (model != NULL) {
+                    generate_random_colors(model->faces.face_count);
                 }
+                printf("Colors set to RANDOM mode (new colors generated)\n");
+                goto loopReDraw;
+
 
             case 57: // '9' - reset colors to default
                 user_fill_color = -1;
@@ -657,14 +588,7 @@ segment "main";
                 printf("Colors reset to defaults, palette reset to 0, shading OFF\n");
                 goto loopReDraw;
 
-            case 54: // '6' - quick random mode for both colors
-                user_fill_color = 16;
-                user_frame_color = 16;
-                if (model != NULL) {
-                    generate_random_colors(model->faces.face_count);
-                }
-                printf("Colors set to RANDOM mode (new colors generated)\n");
-                goto loopReDraw;
+
 
             case 80:  // 'P' - toggle frame-only polygon rendering
             case 112: // 'p'
@@ -751,14 +675,7 @@ segment "main";
                 inspect_face_pair_ui(model);
                 goto loopReDraw;
 
-             // letter 'U'
-            case 85:  // 'U' - toggle user-defined fill color mode (random if enabled)
-            case 117: // 'u'
-                painter_mode = PAINTER_MODE_GEOV3;
-                printf("Painter mode: GEO V3 (inspired by R. DONY's book)\n");
-                printf("WARNING: This mode can be significantly slower than others with large models.\n");
-                goto bigloop; 
-                goto loopReDraw;
+
 
             case 27:  // ESC - quit
                 goto end;

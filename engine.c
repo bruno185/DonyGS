@@ -10931,17 +10931,17 @@ static void show_help_pager(void) {
         ";: Run check_sort_repair (verify+minimal fix, ESC to abort, RETURN auto next)",
         ".: Run check_sort_repair_fast (faster QD centroid minimal repair)",
         "1: Painter = FAST (simple sort only)",
-        "2: Painter = BUBBLE SORT (Fixed32/64)",
-        "=: Painter = NEWELL SANCHA (full tests, Fixed32/64)",
-        "3: Painter = GEOV2 (geometry-only). Can be slow for large models",
-        "4: Painter = CORRECT (painter_correct)",
-        "5: Painter = CORRECTV2",
-        "U: Painter = GEOV3. Can be slow for large models",
+        "2: Painter = BUBBLE SORT",
+        "3: Painter = NEWELL SANCHA (but no face splitting, nor cyclic overlap handling)",
+        "4: Painter = GEO (geometry-only). Can be slow for large models",
+        "5: Painter = GEOV3 (inspired by R. Dony's book). Can be slow for large models",
+        "6: Painter = CORRECT (homebrew implementation)",
+        "7: Painter = CORRECTV2 (homebrew implementation V2)",
         "O: Render scanline Z-Buffer (alternative to painter algorithm)",
-        "6: Both colors RANDOM mode",
-        "7: Choose fill color",
-        "8: Choose frame color",
+        "8: Both colors RANDOM mode (quick)",
         "9: Reset colors, palette 0, and shading OFF",
+        ">: Choose fill color",
+        "<: Choose frame color",
         "P: Toggle frame-only polygons",
         "B: Toggle back-face culling",
         "I: Toggle display of inconclusive pairs",
@@ -10992,7 +10992,6 @@ static void show_help_pager(void) {
         printf("\n");
     }
 }
-
 void DoText() {
         shroff();
         putchar((char) 12); // Clear screen    
