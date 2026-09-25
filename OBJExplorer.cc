@@ -57,6 +57,8 @@ segment "main";
         int last_process_time_end = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
+        int  oa; // Open-Apple key status
+
         // Initialize the screen save/restore buffer
         if (!initScreenSaveBuffer()) {
             printf("Error: Unable to initialize screen save buffer\n");
@@ -238,8 +240,15 @@ segment "main";
                 }
                 // Wait for key press and get key code
         
-        getakey:
-        key = getkeypress();
+        
+        int r;
+
+
+        getakey: 
+
+        r = getkeypress_openA(); // Get a key press and the Open-Apple status
+        key   = r & 0x00FF;
+        oa = (r >> 8) & 1;   // 1 if Open-Apple was pressed
 
         // these are the key commands that are handled immediately without re-rendering the scene
         switch (key) {
@@ -414,29 +423,53 @@ segment "main";
                 goto bigloop;
 
             case 21:  // Right arrow - increase horizontal angle
-                params.angle_h = normalize_deg(params.angle_h + 10);
+                if (oa == 0) {
+                    params.angle_h = normalize_deg(params.angle_h + 10);
+                } else {
+                    params.angle_h = normalize_deg(params.angle_h + 1);
+                }
                 goto bigloop;
 
             case 8:   // Left arrow - decrease horizontal angle
-                params.angle_h = normalize_deg(params.angle_h - 10);
+                if (oa == 0) {
+                    params.angle_h = normalize_deg(params.angle_h - 10);
+                } else {
+                    params.angle_h = normalize_deg(params.angle_h - 1);
+                }
                 goto bigloop;
 
             case 10:  // Down arrow - decrease vertical angle
-                params.angle_v = normalize_deg(params.angle_v - 10);
+                if (oa == 0) {
+                    params.angle_v = normalize_deg(params.angle_v - 10);
+                } else {
+                    params.angle_v = normalize_deg(params.angle_v - 1);
+                }
                 goto bigloop;
 
             case 11:  // Up arrow - increase vertical angle
-                params.angle_v = normalize_deg(params.angle_v + 10);
+                if (oa == 0) {
+                    params.angle_v = normalize_deg(params.angle_v + 10);
+                } else {
+                    params.angle_v = normalize_deg(params.angle_v + 1);
+                }
                 goto bigloop;
 
             case 87:  // 'W' - increase screen rotation angle
             case 119: // 'w'
-                params.angle_w = normalize_deg(params.angle_w + 10);
+                if (oa == 0) {
+                    params.angle_w = normalize_deg(params.angle_w + 10);
+                } else {
+                    params.angle_w = normalize_deg(params.angle_w + 1);
+                }
                 goto bigloop;
 
             case 88:  // 'X' - decrease screen rotation angle
             case 120: // 'x'
-                params.angle_w = normalize_deg(params.angle_w - 10);
+                if (oa == 0) {
+                    params.angle_w = normalize_deg(params.angle_w - 10);
+                } else {
+                    params.angle_w = normalize_deg(params.angle_w - 1);
+                }
                 goto bigloop;
 
             /* 2D panning: E=left, R=right (R replaced revert), T=up, Y=down (and lowercase) */

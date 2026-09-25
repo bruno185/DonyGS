@@ -21,6 +21,36 @@ loop:
         rtl
         }
 
+
+
+
+#define KBD       0xC000   /* Registre clavier (donnée + strobe) */
+#define KBDSTRB   0xC010   /* Reset du strobe clavier */
+#define OASK      0xC061   /* État du bouton Open-Apple */
+
+asm int getkeypress_openA()
+        {
+        sep   #0x20         // Passe A en 8 bits pour taper le hardware
+loop:
+        lda   >KBD          // Lit le registre clavier
+        bit   #0x80         // Teste le bit "touche pressée" sans détruire A
+        beq   loop          // Boucle tant qu'aucune touche n'est pressée
+        sta   >KBDSTRB      // Acquitte le strobe clavier
+        and   #0x7F         // Ne garde que le code caractère (7 bits)
+        pha                 // Sauve le caractère sur la pile (push 8 bits)
+
+        lda   >OASK         // Lit l'état d'Open-Apple
+        asl   a             // Le bit 7 (pressé) part dans le carry
+        lda   #0x00
+        rol   a             // A = 1 si Open-Apple est pressée, sinon 0
+        xba                 // Place le flag dans B (octet haut de C)
+
+        pla                 // Récupère le caractère dans A (octet bas)
+        rep   #0x20         // Passe A en 16 bits : C = B:A = (flag<<8) | char
+        rtl
+        }
+
+
 // To use with an emulator
 // With Crossrunner, you can set a breakpoint to break when 
 // register A has the value 0xAAAA and register X has the value 0xBBBB.
