@@ -104,6 +104,14 @@ segment "main";
         // Initialize palettes and palette table storage
         initPalettes();
 
+        int zresult =ZBuffer_Init();
+        // printf("ZBuffer_Init result: %d\n", zresult);
+        // printf ("zbuf_row[0] = %p\n", zbuf_row[0]);
+        // printf ("zbuf_row[199] = %p\n", zbuf_row[199]);
+        // keypress(); // wait for user input after initializing Z-buffer
+        
+    
+
         // Ask for filename (loop until a non-empty filename is entered and the model loads)
         while (1) {
             printf("Enter the filename to read (ENTER to exit): ");
@@ -208,49 +216,44 @@ segment "main";
 
     loopReDraw:
         {
-            int key = 0;
-            // char input[50];
+        int key = 0;
+        int r = 0;
 
-            if (model->faces.face_count > 0) {
-                // Initialize QuickDraw
-                startgraph(mode);
+        if (model->faces.face_count > 0) {
+            // Initialize QuickDraw
+            startgraph(mode);
 
-                // Load the system palette into palettes[0] on first startup
-                if (!palette0_loaded) {
-                    palettes[0] = ReadPalette(0);
-                    palette0_loaded = 1;
-                }
+            // Load the system palette into palettes[0] on first startup
+            if (!palette0_loaded) {
+                palettes[0] = ReadPalette(0);
+                palette0_loaded = 1;
+            }
 
-                // Apply the selected palette and draw the 3D object
-                applyPalette(palette);
+            // Apply the selected palette and draw the 3D object
+            applyPalette(palette);
 
-                draw:
-                if (jitter) drawPolygons_jitter(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count); 
-                // draw model, according to current faces sorted list.
-                else drawPolygons(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count);
-                
-                // display available colors
-                if (colorpalette == 1) { 
-                    DoColor(); 
-                }
+            draw:
+            if (jitter) drawPolygons_jitter(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count); 
+            // draw model, according to current faces sorted list.
+            else drawPolygons(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count);
+            
+            // display available colors
+            if (colorpalette == 1) { 
+                DoColor(); 
+            }
 
-                // If there are inconclusive pairs and display is enabled, underline them on screen
-                if (show_inconclusive && inconclusive_pairs_count > 0) {
-                    frameInconclusivePairs(model);  
-                }
-                // Wait for key press and get key code
-        
-        
-        int r;
-
+            // If there are inconclusive pairs and display is enabled, underline them on screen
+            if (show_inconclusive && inconclusive_pairs_count > 0) {
+                frameInconclusivePairs(model);  
+            }
+            // Wait for key press and get key code
 
         getakey: 
-
         r = getkeypress_openA(); // Get a key press and the Open-Apple status
         key   = r & 0x00FF;
         oa = (r >> 8) & 1;   // 1 if Open-Apple was pressed
 
-        // these are the key commands that are handled immediately without re-rendering the scene
+        // these are the commands that are handled immediately without re-rendering the scene
         switch (key) {
             case '*': // Space key
                 MoveTo(3, 10);
@@ -286,13 +289,16 @@ segment "main";
                 if (c == 16) {generate_random_colors(model->faces.face_count);}
                 screen2Black();
                 goto draw;
+            
+            // default:  // All other keys - redraw
+            //     goto loopReDraw;
         }
 
 // XXX    
         // This commands just need to swap between text and graphical view (model or colors are unchanged)
         // So saving and restoring screen memory is more efficient than re-rendering the entire scene.
         if (key == ' ' || key == 'H' || key == 'h'|| key == 'F'|| key == 'f'|| key == 'M' 
-            || key == 'm'|| key == 'O' || key == 'o') {
+            || key == 'm'|| key == 'O' || key == 'o' || key == 'U' || key == 'u') {
         saveScreen(); // Save the current screen memory before switching to text view
         // see below what these keys do after saving the screen memory
         }
@@ -734,9 +740,27 @@ segment "main";
                 keypress();
                 restoreScreen();    // Restore the previously saved screen memory
                 goto getakey; // return to key press handling
-                // This mush faster than re-rendering the entire scene with 
-                //goto loopReDraw;
 
+
+            case 'U': // Some action for 'U' key
+            case 'u': 
+                startgraph(mode);
+                // Implement the desired behavior for the 'O' key here
+                startTime = GetTick();
+                renderModelFullscreenZBuffer(model);
+                endTime = GetTick();
+                key = getkeypress();
+                if (key == '*') { saveNextScreenshot(); }
+
+                MoveTo(3, 10);
+                printf("Z-Buffer fullscreen render time: %d ticks.\nPress a key to continue.\n", endTime - startTime);
+                keypress();
+                restoreScreen();    // Restore the previously saved screen memory
+                goto getakey; // return to key press handling
+                
+
+
+                
             default:  // All other keys - redraw
                 goto loopReDraw;
             
@@ -754,6 +778,7 @@ segment "main";
             globalPolyHandle = NULL;
         }
         destroyModel3D(model);
+        ZBuffer_Shutdown();
         return 0;
     }
 

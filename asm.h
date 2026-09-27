@@ -22,31 +22,29 @@ loop:
         }
 
 
-
-
-#define KBD       0xC000   /* Registre clavier (donnée + strobe) */
-#define KBDSTRB   0xC010   /* Reset du strobe clavier */
-#define OASK      0xC061   /* État du bouton Open-Apple */
+#define KBD       0xC000   /* Keyboard register (data + strobe) */
+#define KBDSTRB   0xC010   /* Reset keyboard strobe */
+#define OASK      0xC061   /* Open-Apple button state */
 
 asm int getkeypress_openA()
         {
-        sep   #0x20         // Passe A en 8 bits pour taper le hardware
+        sep   #0x20         // Switch A to 8 bits to access hardware registers
 loop:
-        lda   >KBD          // Lit le registre clavier
-        bit   #0x80         // Teste le bit "touche pressée" sans détruire A
-        beq   loop          // Boucle tant qu'aucune touche n'est pressée
-        sta   >KBDSTRB      // Acquitte le strobe clavier
-        and   #0x7F         // Ne garde que le code caractère (7 bits)
-        pha                 // Sauve le caractère sur la pile (push 8 bits)
+        lda   >KBD          // Read the keyboard register
+        bit   #0x80         // Test the "key pressed" bit without destroying A
+        beq   loop          // Loop until a key is pressed
+        sta   >KBDSTRB      // Acknowledge the keyboard strobe
+        and   #0x7F         // Keep only the character code (7 bits)
+        pha                 // Save the character on the stack (8-bit push)
 
-        lda   >OASK         // Lit l'état d'Open-Apple
-        asl   a             // Le bit 7 (pressé) part dans le carry
+        lda   >OASK         // Read the Open-Apple state
+        asl   a             // The pressed bit (bit 7) goes into the carry
         lda   #0x00
-        rol   a             // A = 1 si Open-Apple est pressée, sinon 0
-        xba                 // Place le flag dans B (octet haut de C)
+        rol   a             // A = 1 if Open-Apple is pressed, 0 otherwise
+        xba                 // Move the flag into B (high byte of C)
 
-        pla                 // Récupère le caractère dans A (octet bas)
-        rep   #0x20         // Passe A en 16 bits : C = B:A = (flag<<8) | char
+        pla                 // Retrieve the character into A (low byte)
+        rep   #0x20         // Switch A to 16 bits: C = B:A = (flag<<8) | char
         rtl
         }
 

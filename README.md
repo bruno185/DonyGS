@@ -18,7 +18,7 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 
 ## Getting Started
 
-1. **Load a model**: Run the program and enter the path to a simplified OBJ file when prompted. After entering the file path, press `Enter` five times in a row to accept the default values for distance, horizontal angle, vertical angle, screen rotation, and any additional prompts. Those defaults can still be changed later through the application controls.
+1. **Load a model**: Run the program and enter the path to a simplified OBJ file when prompted. You can omit '.obj' at the end of the filename; the program will add it for you. After entering the file path, press `Enter` five times in a row to accept the default values for distance, horizontal angle, vertical angle, screen rotation, and any additional prompts. Those defaults can still be changed later through the application controls.
 2. **Now you see the 3D object centred on the screen**
 3. **Use the controls**: Navigate the scene with the keyboard and switch rendering modes using keys `1` through `7`.
 4. **Change the color palette**: Press `G` to cycle through the available color palettes.
@@ -231,9 +231,9 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | Key | Action | Description |
 |-----|--------|-------------|
 | `A` / `Z` | Distance | Move camera closer (A) or farther (Z) |
-| `Left` / `Right` | Horizontal Rotation | Rotate camera around vertical axis |
-| `Up` / `Down` | Vertical Rotation | Rotate camera around horizontal axis |
-| `W` / `X` | Screen Rotation | Rotate view around screen Z-axis |
+| `Left` / `Right` | Horizontal Rotation | Rotate camera 10 degrees around vertical axis (1 degree with Open-Apple key) |
+| `Up` / `Down` | Vertical Rotation | Rotate camera 10 degrees around horizontal axis (1 degree with Open-Apple key) |
+| `W` / `X` | Screen Rotation | Rotate view 10 degrees around screen Z-axis (1 degree with Open-Apple key) |
 | `+` / `-` | Projection Scale | Increase/decrease perspective scaling (±10%) |
 | `K` | Edit Parameters | Manually enter camera distance and angles |
 
