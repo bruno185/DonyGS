@@ -117,6 +117,9 @@
 | **readFaces_model** | Parse les faces (f) d'un fichier OBJ et les stocke dans les tableaux parallèles du modèle. |
 | **readVertices** | Parse les sommets (v) d'un fichier OBJ, convertit en Fixed32, centre le modèle et calcule l'auto-fit. |
 | **remove_duplicates** | Élimine tout index apparaissant plusieurs fois dans une liste de sommets (conserve la première occurrence). |
+| **renderModelFullscreenZBuffer** | Point d'entrée du rendu alternatif par Z-buffer plein écran 16 bits (dispatcher fast/biased selon cull_back_faces, même logique que renderModelScanlineZBuffer). |
+| **renderModelFullscreenZBuffer_biased** | Variante du Z-buffer plein écran avec biais (Z_FIGHT_BIAS) pour réduire les artefacts de coplanarité entre faces front/back, utilisée quand le back-face culling est désactivé. |
+| **renderModelFullscreenZBuffer_fast** | Version sans biais du Z-buffer plein écran, utilisée quand le back-face culling est actif. |
 | **renderModelScanlineZBuffer** | Point d'entrée du rendu alternatif par Z-buffer scanline. |
 | **renderModelScanlineZBuffer_biased** | Variante du Z-buffer avec biais pour réduire les artefacts de coplanarité. |
 | **renderModelScanlineZBuffer_fast** | Version optimisée du Z-buffer scanline. |
@@ -144,3 +147,11 @@
 | **split_face_by_plane** | Découpe une face par le plan d'une autre face ; crée de nouveaux sommets et fragments. |
 | **strict_inside** | Teste si un point est strictement à l'intérieur d'un polygone (rejette les points sur les bords). |
 | **updateFace2DBounds** | Met à jour les bbox 2D de toutes les faces à partir des coordonnées projetées courantes. |
+| **ZBuffer_Clear** | Réinitialise tout le tampon de profondeur du Z-buffer plein écran à la valeur « vide » (0xFFFF) ; appelée une fois par frame, avant de parcourir les lignes. |
+| **ZBuffer_ClearFast** | Variante assembleur de ZBuffer_Clear (remplissage direct des deux banks mémoire) ; pas encore branchée dans le chemin de rendu actuel. |
+| **ZBuffer_Init** | Alloue les deux banks mémoire du Z-buffer plein écran (128 Ko, alignés sur une frontière de bank) et construit la table de pointeurs par ligne ; à appeler une seule fois au démarrage. |
+| **ZBuffer_QuantizeInvZ** | Convertit une profondeur 1/z flottante en la représentation 16 bits stockée dans le Z-buffer plein écran (distance inversée, selon l'échelle courante). |
+| **ZBuffer_SetScaleForFrame** | Recalcule l'échelle de quantification du Z-buffer plein écran à partir du 1/z maximum observé sur la frame courante, pour s'adapter automatiquement au niveau de zoom. |
+| **ZBuffer_Shutdown** | Libère la mémoire allouée par ZBuffer_Init. |
+| **ZBuffer_TestAndSet** | Teste et met à jour un pixel du Z-buffer plein écran (version C, utilisée pixel par pixel par renderModelFullscreenZBuffer). |
+| **ZBuffer_TestSetRow** | Routine assembleur de test/écriture de profondeur pour un span entier via adressage indirect long ; prévue pour une future fusion avec l'écriture couleur, pas encore branchée dans le chemin de rendu actuel. |

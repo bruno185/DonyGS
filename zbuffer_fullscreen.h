@@ -1,153 +1,166 @@
 /* zbuffer_fullscreen.h
  *
- * Z-buffer plein ecran 16 bits pour Apple IIGS (320x200, mode SHR).
- * Remplace le Z-buffer par scanline (une seule ligne, reinitialisee a
- * chaque ligne, en float natif) par un tampon de profondeur PERSISTANT
- * sur toute la frame, en entier 16 bits, reparti sur 2 banks de 64 Ko.
+ * Full-screen 16-bit Z-buffer for Apple IIGS (320x200, SHR mode).
+ * Replaces the scanline Z-buffer (a single line, reinitialized on
+ * every line, in native float) with a PERSISTENT depth buffer across
+ * the whole frame, in 16-bit integers, spread over 2 banks of 64 KB.
  *
- * ATTENTION PRECISION (decision explicite, risque assume) :
- * le renderer scanline existant garde deliberement la profondeur en
- * float32 (voir l'entete de renderModelScanlineZBuffer_old) a cause
- * d'un cas reel deja diagnostique : deux faces (13 et 18) dont les
- * profondeurs interobserver s'entrelacent a moins de 1% d'ecart dans
- * leur zone de recouvrement a l'ecran -- un Fixed32 (16.16) s'etait
- * revele insuffisant pour ce cas. Un entier 16 bits offre MOINS de
- * precision utile qu'un Fixed32 pour la meme plage de valeurs, donc
- * ce Z-buffer plein ecran peut reproduire le meme defaut d'occlusion
- * sur des faces proches similaires. Retenu malgre tout par choix.
- * ZBUFFER_INV_Z_SCALE ci-dessous doit etre calibre empiriquement sur
- * la plage reelle de 1/z de vos modeles pour exploiter au mieux les
- * 16 bits disponibles (voir ZBuffer_QuantizeInvZ).
+ * PRECISION WARNING (explicit decision, assumed risk):
+ * the existing scanline renderer deliberately keeps depth in
+ * float32 (see the header of renderModelScanlineZBuffer_old) because
+ * of a real case already diagnosed: two faces (13 and 18) whose
+ * interobserver depths interleave with less than 1% difference in
+ * their on-screen overlap region -- a Fixed32 (16.16) had proved
+ * insufficient for that case. A 16-bit integer offers LESS useful
+ * precision than a Fixed32 for the same value range, so this
+ * full-screen Z-buffer can reproduce the same occlusion defect on
+ * similar close faces. Kept nonetheless by choice.
+ * ZBUFFER_INV_Z_SCALE below must be calibrated empirically on the
+ * real 1/z range of your models to best exploit the available
+ * 16 bits (see ZBuffer_QuantizeInvZ).
  *
- * Codage stocke : "distance inversee" 16 bits, PAS 1/z directement :
- *   valeur_stockee = 0xFFFF - clamp(round(inv_z * ZBUFFER_INV_Z_SCALE), 0, 0xFFFF)
- * Ce choix garde la meme convention "plus petit = plus proche, 0xFFFF
- * = vide/jamais dessine" que le premier jet de ce module, ce qui
- * permet un test a une seule branche (BCS) dans la boucle assembleur
- * plutot que deux. inv_z = 0 (point a l'infini) mappe naturellement
- * sur 0xFFFF, donc "vide" et "infiniment loin" sont la meme valeur --
- * pas de cas particulier a gerer pour l'etat initial.
+ * Stored encoding: 16-bit "inverted distance", NOT 1/z directly:
+ *   stored_value = 0xFFFF - clamp(round(inv_z * ZBUFFER_INV_Z_SCALE), 0, 0xFFFF)
+ * This choice keeps the same convention "smaller = closer, 0xFFFF
+ * = empty/never drawn" as the first draft of this module, which
+ * allows a single-branch test (BCS) in the assembly loop rather
+ * than two. inv_z = 0 (point at infinity) naturally maps to
+ * 0xFFFF, so "empty" and "infinitely far" are the same value --
+ * no special case to handle for the initial state.
  */
+
 
 #ifndef ZBUFFER_FULLSCREEN_H
 #define ZBUFFER_FULLSCREEN_H
 
+
 #define ZBUF_WIDTH       320
 #define ZBUF_HEIGHT      200
-#define ZBUF_ROW_WORDS   ZBUF_WIDTH               /* 320 mots 16 bits / ligne */
-#define ZBUF_ROW_BYTES   (ZBUF_WIDTH * 2)          /* 640 octets / ligne       */
-#define ZBUF_FAR_VALUE   0xFFFFU                   /* "vide" = infiniment loin */
+#define ZBUF_ROW_WORDS   ZBUF_WIDTH               /* 320 16-bit words / line */
+#define ZBUF_ROW_BYTES   (ZBUF_WIDTH * 2)          /* 640 bytes / line       */
+#define ZBUF_FAR_VALUE   0xFFFFU                   /* "empty" = infinitely far */
 
-/* A CALIBRER sur la plage reelle de inv_z (1/zo) de vos modeles.
- * Trop petit -> tout se tasse pres de 0xFFFF (perte de resolution
- * pres de la camera, ou les conflits de profondeur sont les plus
- * genants). Trop grand -> saturation (clamp) pour les points proches,
- * ce qui les rend tous "a egalite" en profondeur. Methode simple :
- * loguer temporairement min/max de inv_z sur quelques scenes typiques
- * et choisir ZBUFFER_INV_Z_SCALE pour que le inv_z max observe soit
- * proche de 65535 / ZBUFFER_INV_Z_SCALE.
+
+/* TO BE CALIBRATED on the real inv_z (1/zo) range of your models.
+ * Too small -> everything packs near 0xFFFF (loss of resolution
+ * near the camera, where depth conflicts are most troublesome).
+ * Too large -> saturation (clamp) for nearby points, making them
+ * all "equal" in depth. Simple method: temporarily log min/max of
+ * inv_z on a few typical scenes and choose ZBUFFER_INV_Z_SCALE so
+ * that the observed max inv_z is close to 65535 / ZBUFFER_INV_Z_SCALE.
  */
 #define ZBUFFER_INV_Z_SCALE  7979000.0f
-/* Valeur de secours uniquement, utilisee tant que
- * ZBuffer_SetScaleForFrame() n'a pas encore ete appelee au moins une
- * fois (ex. tout premier frame). En temps normal l'echelle reelle est
- * recalculee CHAQUE FRAME par ZBuffer_SetScaleForFrame() a partir du
- * inv_z max de la scene en cours -- voir plus bas. Une echelle fixe a
- * ete testee et s'est reveleee incorrecte des que le niveau de zoom
- * change (le max de inv_z change avec le zoom, une echelle calibree
- * sur une scene sature a 0xFFFF sur une autre plus zoomee, faisant
- * passer plusieurs faces a egalite de profondeur -> ordre aleatoire). */
+/* Fallback value only, used until ZBuffer_SetScaleForFrame() has
+ * been called at least once (e.g. very first frame). In normal
+ * operation the real scale is recomputed EVERY FRAME by
+ * ZBuffer_SetScaleForFrame() from the current scene's max inv_z --
+ * see below. A fixed scale was tested and proved incorrect as soon
+ * as the zoom level changes (max inv_z changes with zoom; a scale
+ * calibrated on one scene saturates at 0xFFFF on a more zoomed-in
+ * one, making several faces equal in depth -> random order). */
 
-#define ZBUFFER_TARGET_MAX_CODE  60000.0f  /* marge sous 65535 */
 
-/* Recalcule l'echelle de quantification pour la frame en cours, a
- * partir du plus grand inv_z reellement observe sur cette frame (pas
- * une constante figee). A appeler UNE FOIS PAR FRAME, apres avoir
- * calcule inv_z[] pour tous les sommets visibles et avant le premier
- * appel a ZBuffer_QuantizeInvZ de cette frame. Ne fait rien (garde
- * l'echelle precedente) si max_inv_z est nul ou negatif (scene vide/
- * degenerescente), pour eviter une division par zero.
+#define ZBUFFER_TARGET_MAX_CODE  60000.0f  /* margin under 65535 */
+
+
+/* Recomputes the quantization scale for the current frame, from
+ * the largest inv_z actually observed on this frame (not a fixed
+ * constant). Call ONCE PER FRAME, after computing inv_z[] for all
+ * visible vertices and before the first call to ZBuffer_QuantizeInvZ
+ * of this frame. Does nothing (keeps the previous scale) if
+ * max_inv_z is zero or negative (empty/degenerate scene), to avoid
+ * a division by zero.
  */
 void ZBuffer_SetScaleForFrame(float max_inv_z);
 
+
 typedef unsigned short  UWORD16;
 typedef unsigned long   ULONG32;
-typedef short           SWORD16;   /* pour dz_step signe */
+typedef short           SWORD16;   /* for signed dz_step */
 
-/* Pointeur 24 bits (bank:offset). Sur ORCA/C pour l'IIGS, un pointeur
- * "normal" est deja un pointeur 24 bits (pas de distinction near/far
- * a declarer) -- pas de mot-cle special necessaire, contrairement a
- * ce qui etait suppose dans une version precedente de ce fichier
- * (le mot-cle "far" n'existe pas dans ce compilateur : erreur de
- * compilation confirmee).
+
+/* 24-bit pointer (bank:offset). On ORCA/C for the IIGS, a "normal"
+ * pointer is already a 24-bit pointer (no near/far distinction to
+ * declare) -- no special keyword needed, unlike what was assumed
+ * in a previous version of this file (the "far" keyword does not
+ * exist in this compiler: compilation error confirmed).
  */
 typedef UWORD16 * FarWordPtr;
 
-/* Table de 200 pointeurs far, un par ligne d'ecran, precalculee une
- * seule fois par ZBuffer_Init(). Adressage lineaire simple
- * (base + y*ZBUF_ROW_BYTES) : AUCUN decoupage special n'est requis
- * pour eviter qu'une ligne chevauche la frontiere entre les deux
- * banks, car l'adressage indirect long du 65816 ([ptr],y) fait une
- * vraie addition 24 bits avec report dans l'octet de banque -- voir
- * la note d'architecture en tete de ZBuffer_TestSetRow.
+
+/* Table of 200 far pointers, one per screen line, precomputed once
+ * by ZBuffer_Init(). Simple linear addressing
+ * (base + y*ZBUF_ROW_BYTES): NO special splitting is required to
+ * prevent a line from straddling the boundary between the two
+ * banks, because the 65816 long indirect addressing ([ptr],y)
+ * performs a true 24-bit addition with carry into the bank byte --
+ * see the architecture note at the top of ZBuffer_TestSetRow.
  */
 extern FarWordPtr zbuf_row[ZBUF_HEIGHT];
 
-/* Alloue 2 banks (128 Ko utiles, alignes sur une frontiere de bank)
- * via le memory manager GS/OS, construit zbuf_row[], puis appelle
- * ZBuffer_Clear(). Retourne 0 si l'allocation echoue, 1 sinon.
+
+/* Allocates 2 banks (128 KB usable, aligned on a bank boundary)
+ * via the GS/OS memory manager, builds zbuf_row[], then calls
+ * ZBuffer_Clear(). Returns 0 if allocation fails, 1 otherwise.
  */
 int  ZBuffer_Init(void);
 
-/* Libere le bloc alloue par ZBuffer_Init. */
+
+/* Frees the block allocated by ZBuffer_Init. */
 void ZBuffer_Shutdown(void);
 
-/* Remet toute la frame a ZBUF_FAR_VALUE. Version C, lisible, pour le
- * debug -- preferer ZBuffer_ClearFast (asm) pour le rendu reel.
+
+/* Resets the whole frame to ZBUF_FAR_VALUE. C version, readable, for
+ * debug -- prefer ZBuffer_ClearFast (asm) for real rendering.
  */
 void ZBuffer_Clear(void);
 
-/* Pointeur far vers le debut de la ligne y (0..199). */
+
+/* Far pointer to the start of line y (0..199). */
 #define ZBuffer_RowPtr(y)  (zbuf_row[y])
 
-/* Convertit un 1/z natif (float) en la representation 16 bits
- * stockee dans le Z-buffer (voir le codage explique en tete de ce
- * fichier). A utiliser une fois par extremite de span (2 appels),
- * pas par pixel -- l'interpolation par pixel se fait ensuite en
- * entier via dz_step, cf. ZBuffer_TestSetRow.
+
+/* Converts a native 1/z (float) into the 16-bit representation
+ * stored in the Z-buffer (see the encoding explained at the top of
+ * this file). Use once per span endpoint (2 calls), not per pixel --
+ * per-pixel interpolation is then done in integer via dz_step,
+ * cf. ZBuffer_TestSetRow.
  */
 UWORD16 ZBuffer_QuantizeInvZ(float inv_z);
 
-/* Test-and-set haut niveau, un pixel a la fois (debug / chemins non
- * critiques). Retourne 1 si z est plus proche (0xFFFF - inv_z code)
- * que ce qui etait deja stocke, 0 sinon.
+
+/* High-level test-and-set, one pixel at a time (debug / non-critical
+ * paths). Returns 1 if z is closer (0xFFFF - inv_z code) than what
+ * was already stored, 0 otherwise.
  */
 int ZBuffer_TestAndSet(int x, int y, UWORD16 z);
 
-/* ---- routines assembleur en ligne (voir zbuffer_fullscreen.c) ---- */
 
-/* Remplit les DEUX banks du Z-buffer avec ZBUF_FAR_VALUE. A appeler
- * une fois par frame. bank_lo/bank_hi = numeros de bank du Z-buffer
- * (bank_hi = bank_lo + 1), obtenus a l'init a partir de l'octet de
- * poids fort du pointeur de base alloue.
+/* ---- inline assembly routines (see zbuffer_fullscreen.c) ---- */
+
+
+/* Fills BOTH banks of the Z-buffer with ZBUF_FAR_VALUE. Call once
+ * per frame. bank_lo/bank_hi = bank numbers of the Z-buffer
+ * (bank_hi = bank_lo + 1), obtained at init from the high byte of
+ * the allocated base pointer.
  */
 asm void ZBuffer_ClearFast(int bank_lo, int bank_hi);
 
-/* Teste et met a jour "count" pixels consecutifs d'une ligne du
- * Z-buffer, profondeur interpolee lineairement (z_start, +dz_step
- * signe par pixel). zbuf_ptr = ZBuffer_RowPtr(y) decale de x_start
- * mots (voir integration dans le renderer). Utilise l'adressage
- * indirect long [ptr],y : correct meme si le span chevauche la
- * frontiere entre les deux banks (voir note d'architecture dans
- * zbuffer_fullscreen.c).
+
+/* Tests and updates "count" consecutive pixels of a Z-buffer line,
+ * with linearly interpolated depth (z_start, + signed dz_step per
+ * pixel). zbuf_ptr = ZBuffer_RowPtr(y) offset by x_start words
+ * (see integration in the renderer). Uses long indirect addressing
+ * [ptr],y: correct even if the span straddles the boundary between
+ * the two banks (see architecture note in zbuffer_fullscreen.c).
  *
- * Ne fait QUE le test/ecriture de profondeur -- l'ecriture couleur
- * (nibble pack/unpack dans le framebuffer SHR, cf. drawPixel) reste
- * a fusionner separement ; voir la note de fin de fichier .c sur le
- * cout du changement de largeur d'accumulateur (SEP/REP) que ca
- * implique en boucle serree.
+ * Does ONLY the depth test/write -- color write (nibble pack/unpack
+ * in the SHR framebuffer, cf. drawPixel) remains to be merged
+ * separately; see the end-of-file note in the .c on the cost of the
+ * accumulator width change (SEP/REP) that implies in a tight loop.
  */
 asm void ZBuffer_TestSetRow(FarWordPtr zbuf_ptr, UWORD16 z_start,
                              SWORD16 dz_step, int count);
+
 
 #endif /* ZBUFFER_FULLSCREEN_H */

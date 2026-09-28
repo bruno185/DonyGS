@@ -12,9 +12,9 @@ A 3D model viewer and explorer implementing multiple painter's algorithms, speci
 
 ## Overview
 
-3D Explorer is an interactive 3D rendering application that reads simplified Wavefront OBJ files and displays them with manipulation capabilities. The project demonstrates advanced rendering techniques on resource-constrained hardware (Apple IIGS with 2.8 MHz 65C816 CPU) through careful optimization and multiple algorithm implementations. It performs satisfactorily on a modern computer and in emulation mode, due to the large number of calculations it requires.
+3D Explorer is an interactive 3D rendering application that reads simplified Wavefront OBJ files and displays them with manipulation capabilities. The project demonstrates advanced rendering techniques on resource-constrained hardware (Apple IIGS with 2.8 MHz 65C816 CPU and 1 Mb) through careful optimization and multiple algorithm implementations. It performs satisfactorily on a modern computer and in emulation mode, due to the large number of calculations it requires.
 
-It is built around the painter's algorithm: faces are sorted and drawn back-to-front so that nearer polygons naturally occlude farther ones without a Z-buffer. The application includes several painter variants, from fast z-mean ordering to more robust geometric correction passes for overlapping and intersecting faces.
+It is built around the painter's algorithm: faces are sorted and drawn back-to-front so that nearer polygons naturally occlude farther ones without. The application includes several painter variants, from fast z-mean ordering to more robust geometric correction passes for overlapping and intersecting faces. Two Z-Buffer implemantations have be addes : a scanline Z-Buffer and a fullscreen Z-Buffer.
 
 ## Getting Started
 
@@ -28,18 +28,20 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 8. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the farther face in front of the nearer face or `E` to move the nearer face behind the farther face in the sorted face list.
 9. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
 10. **Repair ordering**: Press `;` to run the face order repair helper, and press `.` to run `check_sort_repair_fast` for a QuickDraw-centroid-based minimal repair.
+11. **Use Z-buffer rendering**: Press `O` or `U`to render the model using scanline or fullscreen rendedering, respectively.
 
 ### Why use this explorer/viewer?
 
 - It is optimized for the Apple IIGS hardware and demonstrates fixed-point 3D rendering techniques.
 - It includes advanced painter algorithms for difficult overlapping geometry.
 - It provides a scanline Z-buffer rendering
+- It provides a full-screen Z-buffer rendering (16-bit, faster than the scanline Z-buffer for small models)
 - It provides interactive inspection and debugging tools for face order, overlap, and visibility issues.
 
 ## Limitations 
-However, it has many limitations, including: speed (requires an accelerator or emulator), the number of vertices and faces, the number of vertices per face, very limited handling of intersecting faces, and handling of the case of cyclic overlap by scanline Z-buffer only.
+However, it has many limitations, including: speed (requires an accelerator or emulator), the number of vertices and faces, the number of vertices per face, very limited handling of intersecting faces, and handling of the case of cyclic overlap by the Z-buffer renderers only (scanline or full-screen), not by any painter mode.
 Example : ![cycle](Screenshots/cyclic_overlap.png)
-This image couldn't have been generated with painters as they are implemented here. But Z-Buffer scanline function (triggered by 'O' key) do it correctly.
+This image couldn't have been generated with painters as they are implemented here. But either Z-buffer renderer (scanline, triggered by 'O' key, or full-screen triggered by 'U' key) resolves it correctly.
 
 ### Quick start keys
 
@@ -52,6 +54,7 @@ This image couldn't have been generated with painters as they are implemented he
 - `6`: CORRECT mode
 - `7`: CORRECT V2 mode
 - `O`: experimental scanline Z-buffer mode (prototype, slow)
+- `U`: full-screen Z-buffer mode (16-bit depth, ~2x faster than the scanline Z-buffer; see "Full-Screen Z-Buffer Mode" below)
 - `8`: random colors (quick mode, sets both fill and frame to random)
 - `>`: choose fill color (interactive color chooser)
 - `<`: choose frame color, including "same as fill color" = no separate border (interactive color chooser)
@@ -156,6 +159,15 @@ This image couldn't have been generated with painters as they are implemented he
 - Fill and border colors exactly follow the user's current color choices (default colors, manual overrides, orientation shading, and random-color cycling) — same logic as the painter's `drawPolygons`
 - Pixel plotting uses a hand-written 65816 assembly routine (`drawPixel`) writing directly to SHR bitmap memory, rather than QuickDraw II calls, for performance
 - **Status**: experimental/prototype — computation is significantly slower than any painter mode due to per-pixel depth interpolation; primarily useful for validating painter's-algorithm ordering on difficult geometry (near-tangent or interpenetrating faces) rather than for interactive use
+
+#### Full-Screen Z-Buffer Mode (Key: `U`)
+- Second alternative renderer, alongside the scanline Z-buffer, also entirely separate from the painter's-algorithm pipeline
+- Unlike the scanline Z-buffer (a single 320-entry line buffer, reset every scanline), this mode keeps a **persistent, full-screen** depth buffer (320x200) across the whole frame, cleared once per frame rather than once per line
+- Depth is stored as a **16-bit integer** ("inverted distance" encoding: smaller stored value = closer, `0xFFFF` = empty/infinitely far), not as native float like the scanline Z-buffer. This is a deliberate precision trade-off, made after the scanline Z-buffer had already needed float32 specifically to resolve a real near-coplanar case (two faces whose depths interleaved within <1% of each other) that a Fixed32 (16.16) representation could not resolve correctly. A plain 16-bit integer offers *less* usable precision than Fixed32 for the same case, so this renderer can, in principle, reproduce that same class of ordering error for faces that are extremely close in depth. The quantization scale is **recalculated every frame** from the actual maximum `1/z` observed in the current scene (`ZBuffer_SetScaleForFrame`), so it adapts automatically to the current zoom level rather than needing manual recalibration
+- Because the depth buffer persists across scanlines (unlike the single-line buffer), it correctly resolves depth for widened/anti-aliased edge pixels that spill onto a neighboring scanline — a case the scanline Z-buffer could not handle honestly, since the neighboring line's depths no longer exist in memory by the time such a pixel is drawn
+- Same fast/biased dispatcher as the scanline Z-buffer (`renderModelFullscreenZBuffer` calls `renderModelFullscreenZBuffer_fast` when back-face culling is active, `renderModelFullscreenZBuffer_biased` — with the same `Z_FIGHT_BIAS` anti-coplanarity bias — when culling is off), and the same fill/border color logic (`getFaceFillColor`/`getFaceFrameColor`) and `drawPixel` assembly routine as the scanline Z-buffer
+- **Status**: functional and measured faster than the scanline Z-buffer on the small models, after replacing the naive per-pixel float-to-16-bit quantization (a software floating-point multiply per pixel on hardware with no FPU) with quantization only at each span's two endpoints, interpolated in between with a plain 16-bit integer step
+- **Known limitation**: the depth precision trade-off above means very close/near-coplanar faces can still be misordered in rare cases; increase `ZBUFFER_INV_Z_SCALE`'s effective resolution or fall back to the scanline Z-buffer if this is a problem for a specific model
 
 ### Mathematical Implementation
 
@@ -262,6 +274,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `6` | CORRECT       | Advanced ordering correction (homebrew implementation) |
 | `7` | CORRECT V2    | Experimental local correction, homebrew implementation V2 (`painter_correctV2`) |
 | `O` | Z-BUFFER      | Experimental scanline Z-buffer renderer (prototype, slow) |
+| `U` | FULLSCREEN Z-BUFFER | Full-screen 16-bit Z-buffer renderer (functional, ~2x faster than the scanline Z-buffer) |
 
 #### Color Management
 | Key | Action | Description |
@@ -408,6 +421,7 @@ Below is a summary table of the most useful keys and the **C functions** they in
 |-----|-----------------|-----------------------------------------|
 | `1`..`7` | Change painter mode | sets `painter_mode` → subsequently calls `painter_newell_sancha_fastV2` (FAST), a bubble-sort based ordering pass (BUBBLE SORT — exact function name not yet confirmed), `painter_newell_sancha` (NEWELL SANCHA), `painter_geo`/`painter_geoV2` (GEO), `painter_geoV3` (GEO V3), `painter_correct` (CORRECT), or `painter_correctV2` (CORRECT V2) depending on the mode |
 | `O` | Scanline Z-buffer render (experimental) | `renderModelScanlineZBuffer` |
+| `U` | Full-screen Z-buffer render | `renderModelFullscreenZBuffer` (dispatches to `renderModelFullscreenZBuffer_fast` or `renderModelFullscreenZBuffer_biased` depending on `cull_back_faces`) |
 | `>` | Choose fill color | `colorChooser(0, &palette, ...)` — sets `user_fill_color`; also triggers `generate_random_colors` if random is chosen |
 | `<` | Choose frame color | `colorChooser(1, &palette, ...)` — sets `user_frame_color`; also triggers `generate_random_colors` if random is chosen |
 | `8` | Random colors (quick, both fill and frame) | sets `user_fill_color`/`user_frame_color` to random mode + `generate_random_colors` |
@@ -520,6 +534,8 @@ python DEPLOY.py
 - Implement better lighting model
 - Optimize screenshot export (`*` key): current implementation copies SHR memory one byte at a time via inline assembly, which is correct but slow — a line-at-a-time (or full-buffer) assembly copy would be significantly faster
 - Optimize the scanline Z-buffer renderer (`O` key) for interactive framerates, and/or extend it with a font/adaptive resolution to speed up per-pixel depth interpolation
+- Assign a permanent key to the full-screen Z-buffer renderer (currently reachable in code as `renderModelFullscreenZBuffer` but not yet bound to a key)
+- Fuse depth testing and color writing into a single assembly routine for the full-screen Z-buffer's span fill loop (currently two separate steps in C), to push performance further
 
 ## Credits
 

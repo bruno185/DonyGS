@@ -45,6 +45,8 @@
 <div class="line">│</div>
 <div class="line">├── <span class="fn" data-desc="Alloue et verrouille le buffer de sauvegarde de l&#x27;écran SHR complet (32 Ko) utilisé par saveScreen/restoreScreen ; à appeler une seule fois au démarrage.">initScreenSaveBuffer</span>()</div>
 <div class="line">│</div>
+<div class="line">├── <span class="fn" data-desc="Alloue les deux banks mémoire du Z-buffer plein écran (128 Ko, alignés sur une frontière de bank) et construit la table de pointeurs par ligne ; à appeler une seule fois au démarrage.">ZBuffer_Init</span>()</div>
+<div class="line">│</div>
 <div class="line">├── <span class="fn" data-desc="Alloue dynamiquement toute la structure Model3D (sommets, faces, plans, buffers). Retourne NULL en cas d&#x27;échec.">createModel3D</span>()</div>
 <div class="line">│</div>
 <div class="line">├── <span class="fn" data-desc="Initialise les tables de palettes QuickDraw utilisées par le programme.">initPalettes</span>()</div>
@@ -535,6 +537,20 @@
 <div class="line">│   │   └── <span class="fn" data-desc="Pose un pixel couleur aux coordonnées écran données (utilisé par le Z-buffer scanline).">drawPixel</span>()</div>
 <div class="line">│   └── <span class="fn" data-desc="Pose un pixel couleur aux coordonnées écran données (utilisé par le Z-buffer scanline).">drawPixel</span>()</div>
 <div class="line">│</div>
+<div class="line">├── <span class="fn" data-desc="Point d&#x27;entrée du rendu alternatif par Z-buffer plein écran 16 bits (dispatcher fast/biased selon cull_back_faces, même logique que renderModelScanlineZBuffer).">renderModelFullscreenZBuffer</span>()</div>
+<div class="line">│   ├── <span class="fn" data-desc="Version sans biais du Z-buffer plein écran, utilisée quand le back-face culling est actif.">renderModelFullscreenZBuffer_fast</span>()</div>
+<div class="line">│   │   ├── <span class="fn" data-desc="Réinitialise tout le tampon de profondeur du Z-buffer plein écran à la valeur « vide » (0xFFFF) ; appelée une fois par frame, avant de parcourir les lignes.">ZBuffer_Clear</span>()</div>
+<div class="line">│   │   ├── <span class="fn" data-desc="Recalcule l&#x27;échelle de quantification du Z-buffer plein écran à partir du 1/z maximum observé sur la frame courante, pour s&#x27;adapter automatiquement au niveau de zoom.">ZBuffer_SetScaleForFrame</span>()</div>
+<div class="line">│   │   ├── <span class="fn" data-desc="Convertit une profondeur 1/z flottante en la représentation 16 bits stockée dans le Z-buffer plein écran (distance inversée, selon l&#x27;échelle courante).">ZBuffer_QuantizeInvZ</span>()</div>
+<div class="line">│   │   ├── <span class="fn" data-desc="Teste et met à jour un pixel du Z-buffer plein écran (version C, utilisée pixel par pixel par renderModelFullscreenZBuffer).">ZBuffer_TestAndSet</span>()</div>
+<div class="line">│   │   └── <span class="fn" data-desc="Pose un pixel couleur aux coordonnées écran données (utilisé par le Z-buffer scanline).">drawPixel</span>()</div>
+<div class="line">│   └── <span class="fn" data-desc="Variante du Z-buffer plein écran avec biais (Z_FIGHT_BIAS) pour réduire les artefacts de coplanarité entre faces front/back, utilisée quand le back-face culling est désactivé.">renderModelFullscreenZBuffer_biased</span>()</div>
+<div class="line">│       ├── <span class="fn" data-desc="Réinitialise tout le tampon de profondeur du Z-buffer plein écran à la valeur « vide » (0xFFFF) ; appelée une fois par frame, avant de parcourir les lignes.">ZBuffer_Clear</span>()</div>
+<div class="line">│       ├── <span class="fn" data-desc="Recalcule l&#x27;échelle de quantification du Z-buffer plein écran à partir du 1/z maximum observé sur la frame courante, pour s&#x27;adapter automatiquement au niveau de zoom.">ZBuffer_SetScaleForFrame</span>()</div>
+<div class="line">│       ├── <span class="fn" data-desc="Convertit une profondeur 1/z flottante en la représentation 16 bits stockée dans le Z-buffer plein écran (distance inversée, selon l&#x27;échelle courante).">ZBuffer_QuantizeInvZ</span>()</div>
+<div class="line">│       ├── <span class="fn" data-desc="Teste et met à jour un pixel du Z-buffer plein écran (version C, utilisée pixel par pixel par renderModelFullscreenZBuffer).">ZBuffer_TestAndSet</span>()</div>
+<div class="line">│       └── <span class="fn" data-desc="Pose un pixel couleur aux coordonnées écran données (utilisé par le Z-buffer scanline).">drawPixel</span>()</div>
+<div class="line">│</div>
 <div class="line">│  ─── Sauvegarde / restauration écran (touches sans changement graphique) ───</div>
 <div class="line">│</div>
 <div class="line">├── <span class="fn" data-desc="Sauvegarde l&#x27;écran SHR complet dans le buffer alloué par initScreenSaveBuffer, via une instruction assembleur MVN patchée dynamiquement (banques calculées à l&#x27;exécution).">saveScreen</span>()</div>
@@ -561,7 +577,7 @@
   </div>
   <div class="legend">
     <p>Astuce : survolez les noms en <code>vert</code> — description en police 16&nbsp;px.</p>
-    <p>140 fonctions documentées (dictionnaire + arbre).</p>
+    <p>151 fonctions documentées (dictionnaire + arbre).</p>
   </div>
   <div id="tooltip"></div>
 <script>

@@ -9618,19 +9618,28 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
     int test1state = 0, test2state = 0, test3state = 0, test4state = 0; /* 0=inconclusive, 1=passed, -1=failed */
     int c;
 
-    if (f1 == -1 && f2 == -1) {
-        printf("PAIR_DEBUG: enter face index f1: "); fflush(stdout);
-        if (scanf("%d", &f1) != 1) {
-            printf("invalid input\n"); keypress(); return 0;
-        }
-        while ((c = getchar()) != '\n' && c != EOF) ;
-
-        printf("PAIR_DEBUG: enter face index f2: "); fflush(stdout);
-        if (scanf("%d", &f2) != 1) {
-            printf("invalid input\n"); keypress(); return 0;
-        }
-        while ((c = getchar()) != '\n' && c != EOF) ;
+    printf("PAIR_DEBUG: enter face index f1: ");
+    fflush(stdout);
+    if (scanf("%d", &f1) != 1) {
+        printf("invalid input\n");
+        while ((c = getchar()) != '\n' && c != EOF);
+        keypress();
+        return 0;
     }
+    while ((c = getchar()) != '\n' && c != EOF);
+
+    printf("PAIR_DEBUG: enter face index f2: ");
+    fflush(stdout);
+    if (scanf("%d", &f2) != 1) {
+        printf("invalid input\n");
+        /* Vider le buffer d'entrée */
+        while ((c = getchar()) != '\n' && c != EOF);
+        keypress();
+        return 0;
+    }
+    while ((c = getchar()) != '\n' && c != EOF);
+
+
     printf("\n=== Geometric test (using plane equations) comparing %d vs %d ===\n", f1, f2);
 
     // Use cached plane normals and d terms computed in calculateFaceDepths
