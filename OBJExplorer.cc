@@ -552,7 +552,6 @@ segment "main";
             case 77: // 'M' - debug pair_plane_before
             case 109: // 'm'
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
-                // pair_plane_before_debug(model, 0, 0);
                 pair_plane_geometric_tests(model, -1, -1); // force type pair numbers
 			    // New approach: instead of re-rendering the entire scene, 
                 // we save the screen state before switching views and restore it afterward.
