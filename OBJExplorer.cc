@@ -53,8 +53,8 @@ segment "main";
         char filename[100];
         // char input[50];
         int colorpalette = 0; // default color palette
-        int last_process_time_start = 0;
-        int last_process_time_end = 0;
+        long last_process_time_start = 0;
+        long last_process_time_end = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
         int  oa; // Open-Apple key status
@@ -339,7 +339,7 @@ segment "main";
                 if (user_frame_color == 16) printf("    Frame color: Random\n");
                 else if (user_frame_color >= 0) printf("    Frame color: %d\n", user_frame_color);
                 else printf("    Frame color: Default (COL_FRAME (#7))\n");
-                printf ("Processing time: %d ticks (1/60 sec.)\n", last_process_time_end - last_process_time_start);
+                printf ("Processing time: %ld ticks (1/60 sec.)\n", last_process_time_end - last_process_time_start);
                 printf("===================================\n");
                 printf("\n");
                 printf("Free memory = %lu bytes\n", FreeMem());
@@ -610,7 +610,7 @@ segment "main";
 
             case 56: // '8' - quick random mode for both colors
                 user_fill_color = 16;
-                user_frame_color = 16;
+                // user_frame_color = 16; // uncomment if you want to randomize the frame color as well
                 if (model != NULL) {
                     generate_random_colors(model->faces.face_count);
                 }
@@ -626,6 +626,35 @@ segment "main";
                 printf("Colors reset to defaults, palette reset to 0, shading OFF\n");
                 goto loopReDraw;
 
+
+            case 79:  // 'o' - Render model using scanline Z-buffer
+            case 111: // 'o'
+                startgraph(mode);
+                long startTime = GetTick();
+                renderModelScanlineZBuffer(model);
+                long endTime = GetTick();
+                key = getkeypress();
+                if (key == '*') { saveNextScreenshot(); }
+                MoveTo(3, 10);
+                printf("Z-Buffer scanline render time: %ld ticks.\nPress a key to continue.\n", endTime - startTime);
+                keypress();
+                restoreScreen();    // Restore the previously saved screen memory
+                goto getakey; // return to key press handling
+
+
+            case 'U': // 'U' - Render model using fullscreen Z-buffer
+            case 'u': 
+                startgraph(mode);
+                startTime = GetTick();
+                renderModelFullscreenZBuffer(model);
+                endTime = GetTick();
+                key = getkeypress();
+                if (key == '*') { saveNextScreenshot(); }
+                MoveTo(3, 10);
+                printf("Z-Buffer fullscreen render time: %ld ticks.\nPress a key to continue.\n", endTime - startTime);
+                keypress();
+                restoreScreen();    // Restore the previously saved screen memory
+                goto getakey; // return to key press handling                
 
 
             case 80:  // 'P' - toggle frame-only polygon rendering
@@ -718,44 +747,8 @@ segment "main";
             case 27:  // ESC - quit
                 goto end;
             
-            // 'O' - some functionality for the 'O' key
-            case 79:  // 'O'
-            case 111: // 'o'
-                startgraph(mode);
 
-                // Implement the desired behavior for the 'O' key here
-                int startTime = GetTick();
-                renderModelScanlineZBuffer(model);
-                int endTime = GetTick();
-                key = getkeypress();
-                if (key == '*') { saveNextScreenshot(); }
-
-                // endgraph();
-                // DoText();
-
-                // printf("endtime = %d\n", endTime);
-                MoveTo(3, 10);
-                printf("Z-Buffer scanline render time: %d ticks.\nPress a key to continue.\n", endTime - startTime);
-                keypress();
-                restoreScreen();    // Restore the previously saved screen memory
-                goto getakey; // return to key press handling
-
-
-            case 'U': // Some action for 'U' key
-            case 'u': 
-                startgraph(mode);
-                // Implement the desired behavior for the 'O' key here
-                startTime = GetTick();
-                renderModelFullscreenZBuffer(model);
-                endTime = GetTick();
-                key = getkeypress();
-                if (key == '*') { saveNextScreenshot(); }
-
-                MoveTo(3, 10);
-                printf("Z-Buffer fullscreen render time: %d ticks.\nPress a key to continue.\n", endTime - startTime);
-                keypress();
-                restoreScreen();    // Restore the previously saved screen memory
-                goto getakey; // return to key press handling
+            
                 
 
 
