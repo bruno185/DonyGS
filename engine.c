@@ -1,10 +1,11 @@
 #include "declare.c"
-#include "scanline.c"
 #include "dony.c"
 #include "screen_save_restore.c"
 #include "color.c"
 // #include "zbuffer_fullscreen_old.c"
+#include "zbuffer_scanline.c"
 #include "zbuffer_fullscreen.c"
+#include "zbuffer_fullscreen_offscreen.c"
 
 
 segment "model_loading";

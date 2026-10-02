@@ -1,4 +1,4 @@
-/* zbuffer_fullscreen_v2.c
+/* zbuffer_fullscreen.c
  *
  * Full-screen 16-bit Z-buffer + renderer — V2 (scanline borders).
  *
@@ -19,7 +19,7 @@
 
 
 segment "ZBUF";
-#include "zbuffer_fullscreen_v2.h"
+#include "zbuffer_fullscreen.h"
 
 
 #ifdef ZBUF_DIAG_SCALE

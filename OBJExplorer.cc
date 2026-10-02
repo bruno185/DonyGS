@@ -55,6 +55,8 @@ segment "main";
         int colorpalette = 0; // default color palette
         long last_process_time_start = 0;
         long last_process_time_end = 0;
+        long last_ZB_FS_render_time = 0;
+        long last_ZB_SL_render_time = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
         int  oa; // Open-Apple key status
@@ -109,7 +111,12 @@ segment "main";
         // printf ("zbuf_row[0] = %p\n", zbuf_row[0]);
         // printf ("zbuf_row[199] = %p\n", zbuf_row[199]);
         // keypress(); // wait for user input after initializing Z-buffer
-        
+    
+        /* Initialize offscreen render buffer (optional) */
+        if (!Offscreen_Init()) {
+            /* non-fatal: continue without offscreen support */
+            // printf("Warning: Offscreen buffer init failed, continuing\n");
+        }
     
 
         // Ask for filename (loop until a non-empty filename is entered and the model loads)
@@ -340,6 +347,8 @@ segment "main";
                 else if (user_frame_color >= 0) printf("    Frame color: %d\n", user_frame_color);
                 else printf("    Frame color: Default (COL_FRAME (#7))\n");
                 printf ("Processing time: %ld ticks (1/60 sec.)\n", last_process_time_end - last_process_time_start);
+                printf("Last Z-Buffer fullscreen render time: %ld ticks\n", last_ZB_FS_render_time);
+                printf("Last Z-Buffer scanline render time: %ld ticks\n", last_ZB_SL_render_time);
                 printf("===================================\n");
                 printf("\n");
                 printf("Free memory = %lu bytes\n", FreeMem());
@@ -627,36 +636,41 @@ segment "main";
                 goto loopReDraw;
 
 
+                
+            // Z buffer scanline and fullscreen rendering
+
             case 79:  // 'o' - Render model using scanline Z-buffer
             case 111: // 'o'
                 startgraph(mode);
+                MoveTo(3, 10);
+                printf("Z-Buffer scanline rendering...\n");
                 long startTime = GetTick();
                 renderModelScanlineZBuffer(model);
                 long endTime = GetTick();
-                key = getkeypress();
-                if (key == '*') { saveNextScreenshot(); }
-                MoveTo(3, 10);
-                printf("Z-Buffer scanline render time: %ld ticks.\nPress a key to continue.\n", endTime - startTime);
-                keypress();
-                restoreScreen();    // Restore the previously saved screen memory
+                last_ZB_SL_render_time = endTime - startTime;
                 goto getakey; // return to key press handling
-
 
             case 'U': // 'U' - Render model using fullscreen Z-buffer
             case 'u': 
                 startgraph(mode);
-                startTime = GetTick();
-                renderModelFullscreenZBuffer(model);
-                endTime = GetTick();
-                key = getkeypress();
-                if (key == '*') { saveNextScreenshot(); }
                 MoveTo(3, 10);
-                printf("Z-Buffer fullscreen render time: %ld ticks.\nPress a key to continue.\n", endTime - startTime);
-                keypress();
-                restoreScreen();    // Restore the previously saved screen memory
+                if (!oa) printf("Z-Buffer fullscreen rendering (offscreen)...\n");
+                else printf("Z-Buffer fullscreen rendering (onscreen)...\n");
+                startTime = GetTick(); 
+                if (!oa) {
+                    Offscreen_Clear();
+                    renderModelFullscreenZBuffer_offscreen(model);
+                    Offscreen_FlushToScreen();
+                }
+                else {
+                    renderModelFullscreenZBuffer(model);
+                }
+
+                endTime = GetTick();
+                last_ZB_FS_render_time = endTime - startTime;
                 goto getakey; // return to key press handling                
 
-
+            
             case 80:  // 'P' - toggle frame-only polygon rendering
             case 112: // 'p'
                 framePolyOnly ^= 1;
@@ -771,6 +785,7 @@ segment "main";
         }
         destroyModel3D(model);
         ZBuffer_Shutdown();
+        Offscreen_Shutdown();
         return 0;
     }
 
