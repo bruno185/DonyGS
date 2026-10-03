@@ -5,46 +5,89 @@
  *   Offscreen_Init() once at startup,
  *   renderModelFullscreenZBuffer_offscreen(model) to render into the offscreen
  *   buffer, and Offscreen_FlushToScreen() to copy the buffer to the visible SHR.
+ *
+ * Optimisations par rapport a la version precedente :
+ *  - pas de float dans la boucle de scanline (marche d'aretes en virgule fixe)
+ *  - liste de faces actives (tri par comptage sur la premiere ligne visible)
+ *    au lieu de tester toutes les faces a chaque ligne
+ *  - couleurs de face calculees une seule fois par frame
+ *  - aretes en tableau de structures, avec ya/yb pre-calcules
+ *  - boucle de pixels interieurs sans appel de fonction (pointeurs de ligne)
+ *  - table des lignes du buffer offscreen (plus de y*160 ni de handle a deref)
+ *  - Offscreen_Clear par MVN chevauchant
  */
 
 segment "ZBUF";
 #include "zbuffer_fullscreen.h"
 
-/* Offscreen buffer (locked handle) */
-#define OFF_PIXELS 32000   /* 200 lignes * 160 octets */
+#define OFF_PIXELS  32000   /* 200 lignes * 160 octets */
+#define OFF_ROWS    200     /* doit valoir SCREEN_HEIGHT */
+#define OFF_FRAC    12
+#define OFF_ROUND   0x800L          /* 1 << (OFF_FRAC - 1) */
+#define OFF_Z_BIAS  0.0005f         /* meme valeur que Z_FIGHT_BIAS */
 
+/* Offscreen buffer (locked handle) */
 Handle offscreen_handle = NULL;
 Byte   offscreen_bank = 0;
 Word   offscreen_offset = 0;
 
+/* Pointeur de debut de chaque ligne du buffer (valide tant que le handle est verrouille) */
+static unsigned char *off_row[OFF_ROWS];
+static int off_ready = 0;
+
 int Offscreen_Init(void)
 {
     Pointer p;
+    unsigned char *base;
+    int i;
+    off_ready = 0;
     offscreen_handle = NewHandle(OFF_PIXELS, userid(), attrLocked | attrNoCross, 0L);
     if (offscreen_handle == NULL || toolerror()) return 0;
     p = *offscreen_handle;
     offscreen_bank = (Byte)(((long)p >> 16) & 0xFF);
     offscreen_offset = (Word)((long)p & 0xFFFF);
+    base = (unsigned char *)p;
+    for (i = 0; i < OFF_ROWS; ++i) off_row[i] = base + (long)i * 160L;
+    off_ready = 1;
     return 1;
 }
 
 void Offscreen_Shutdown(void)
 {
+    off_ready = 0;
     if (offscreen_handle != NULL) {
         DisposeHandle(offscreen_handle);
         offscreen_handle = NULL;
     }
 }
 
-/* Clear the offscreen pixel buffer to color 0 (both nibbles zeroed) */
+/* Clear the offscreen pixel buffer to color 0 (both nibbles zeroed).
+   Premier octet mis a 0 en C, puis MVN chevauchant (src = base, dst = base+1)
+   qui propage ce 0 sur tout le buffer. */
 void Offscreen_Clear(void)
 {
+    unsigned char *p;
     if (offscreen_handle == NULL) return;
-    volatile unsigned char *buf = *offscreen_handle;
-    int i;
-    int clear_len = OFF_PIXELS;
-    //if (clear_len > SCREEN_SIZE) clear_len = SCREEN_SIZE;
-    for (i = 0; i < clear_len; ++i) buf[i] = 0x00;
+    p = (unsigned char *)*offscreen_handle;
+    *p = 0;
+    asm {
+        php
+        phb
+        sep #0x20
+        lda offscreen_bank
+        sta >clear_mvn+1
+        sta >clear_mvn+2
+        rep #0x30
+        lda offscreen_offset
+        tax
+        tay
+        iny
+        lda #OFF_PIXELS-2
+    clear_mvn:
+        mvn 0x00,0x00
+        plb
+        plp
+    }
 }
 
 // /* Diagnostic helpers: dump offscreen handle info and a small hex sample */
@@ -115,24 +158,16 @@ void Offscreen_FlushToScreen(void)
 //     for (i = 0; i < OFF_PIXELS / 2; ++i) dst[i] = src[i];
 // }
 
-/* Offscreen pixel plot (C path): write into locked handle buffer packed 2 pixels/byte */
+/* Offscreen pixel plot: 2 pixels/octet, pixel pair x even = nibble haut */
 static inline void Offscreen_DrawPixel(int x, int y, int color)
 {
-    if (offscreen_handle == NULL) return;
+    unsigned char *pp;
     if ((unsigned)x >= (unsigned)SCREEN_WIDTH || (unsigned)y >= (unsigned)SCREEN_HEIGHT) return;
-    int offset = y * 160 + (x >> 1);
-    volatile unsigned char *buf = *offscreen_handle;
-    unsigned char orig = buf[offset];
-    color &= 0x0F;
-    if ((x & 1) == 0) {
-        unsigned char hi = (unsigned char)((color << 4) & 0xF0);
-        unsigned char lo = orig & 0x0F;
-        buf[offset] = (unsigned char)(hi | lo);
-    } else {
-        unsigned char lo = (unsigned char)(color & 0x0F);
-        unsigned char hi = orig & 0xF0;
-        buf[offset] = (unsigned char)(hi | lo);
-    }
+    pp = off_row[y] + (x >> 1);
+    if ((x & 1) == 0)
+        *pp = (unsigned char)((*pp & 0x0F) | ((color & 0x0F) << 4));
+    else
+        *pp = (unsigned char)((*pp & 0xF0) | (color & 0x0F));
 }
 
 /* Local span-prev struct */
@@ -143,10 +178,10 @@ typedef struct {
     UWORD16 zq0, zq1;
 } OffZBufSpanPrev;
 
+
 /* Offscreen border/bridge/paint routines adapted from zbuffer_fullscreen_v2.c
    but calling Offscreen_DrawPixel instead of drawPixel. These operate on the
    global zbuf_row/ZBuffer_TestAndSet from the original ZBuffer implementation. */
-
 static void Off_PlotBorder(int sx, int sy, UWORD16 zq, int color)
 {
     FarWordPtr row;
@@ -220,14 +255,18 @@ static void Off_BridgeBorderZQ(int x0, int y0, UWORD16 zq0,
     }
 }
 
-#define OFF_FRAC    12
-#define OFF_ROUND   0x800L          /* 1 << (OFF_FRAC - 1) */
-#define OFF_Z_BIAS  0.0005f         /* meme valeur que Z_FIGHT_BIAS */
-
 typedef struct {
     int x;
     UWORD16 zq;
 } OffScanIntersection;
+
+/* Arete : etat courant (x et zq en virgule fixe 12 bits, arrondi deja inclus),
+   pentes par ligne, et lignes ou l'arete est active : [ya, yb) */
+typedef struct {
+    long x, z;
+    long sx, sz;
+    int ya, yb;
+} OffEdge;
 
 /* zq a l'abscisse x, par interpolation lineaire entre (xa,za) et (xb,zb).
    Uniquement utilise pour les spans coupes par le clipping horizontal. */
@@ -239,7 +278,7 @@ static UWORD16 Off_LerpZ(UWORD16 za, UWORD16 zb, int xa, int xb, int x)
     return (UWORD16)((long)za + num / (long)(xb - xa));
 }
 
-/* Meme logique que Off_PaintSpan, mais prend directement les zq aux extremites */
+/* Trace un span (x0..x1 deja clippes) avec zq interpole entre zq0 et zq_end */
 static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
                            UWORD16 zq0, UWORD16 zq_end,
                            int fillColor, int frameColor,
@@ -247,9 +286,12 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
                            OffZBufSpanPrev *prev,
                            int z_nudge_lsbs)
 {
-    int nsteps, x, sx, sxr, silhouette_r;
+    int nsteps, x, sx, sxr, silhouette_r, n, odd;
     UWORD16 zq_cur, zr;
     long z_acc, z_step_16;
+    FarWordPtr zp;
+    unsigned char *pp;
+    unsigned char hi, lo;
 
     if (x0 > x1) return;
 
@@ -277,12 +319,27 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
                 Off_PlotBorder(x + pan_dx, screenY, zq_cur, frameColor);
             }
         } else {
-            for (x = x0 + 1; x < x1; x++) {
-                z_acc += z_step_16;
-                zq_cur = (UWORD16)(z_acc >> 16);
-                sx = x + pan_dx;
-                if (ZBuffer_TestAndSet(sx, screenY, zq_cur))
-                    Offscreen_DrawPixel(sx, screenY, fillColor);
+            /* pixels interieurs : test Z (zq < z courant) et ecriture directe.
+               x est deja clippe, donc sx reste dans [1, SCREEN_WIDTH-2]. */
+            n = x1 - x0 - 1;
+            if (n > 0) {
+                sx  = x0 + 1 + pan_dx;
+                zp  = zbuf_row[screenY] + sx;
+                pp  = off_row[screenY] + (sx >> 1);
+                odd = sx & 1;
+                lo  = (unsigned char)(fillColor & 0x0F);
+                hi  = (unsigned char)(lo << 4);
+                do {
+                    z_acc += z_step_16;
+                    zq_cur = (UWORD16)(z_acc >> 16);
+                    if (zq_cur < *zp) {
+                        *zp = zq_cur;
+                        if (odd) *pp = (unsigned char)((*pp & 0xF0) | lo);
+                        else     *pp = (unsigned char)((*pp & 0x0F) | hi);
+                    }
+                    zp++;
+                    if (odd) { pp++; odd = 0; } else odd = 1;
+                } while (--n);
             }
         }
 
@@ -324,29 +381,53 @@ static void Off_RenderCore(Model3D* model, int biased)
     FaceArrays3D* faces = &model->faces;
     int vcount = vtx->vertex_count;
     int fcount = faces->face_count;
-    int y, f, i, k, e;
+    int y, f, i, k, b, si, ai, keep, active_count;
     int total_edges, end;
     int clip_x_min, clip_x_max, y_lo, y_hi;
     float frame_max_inv_z;
+    OffEdge* ed;
     OffScanIntersection hits[MAX_SPAN_INTERSECTIONS];
 
     static float* inv_z = NULL;
     static UWORD16* vzq = NULL;
     static UWORD16* vzq_b = NULL;
     static int vert_capacity = 0;
+
     static OffZBufSpanPrev* span_prev = NULL;
-    static int span_prev_capacity = 0;
-    static long* e_x = NULL;     /* x courant (12 bits frac.)  */
-    static long* e_z = NULL;     /* zq courant (12 bits frac.) */
-    static long* e_sx = NULL;    /* pente x par ligne          */
-    static long* e_sz = NULL;    /* pente zq par ligne         */
+    static int* face_start = NULL;          /* ligne de depart (relative a y_lo), -1 = ignoree */
+    static int* face_sorted = NULL;         /* faces triees par ligne de depart                */
+    static int* face_active = NULL;         /* faces actives, en ordre croissant d'indice      */
+    static unsigned char* face_fill = NULL;
+    static unsigned char* face_frame = NULL;
+    static unsigned char* face_nudge = NULL;
+    static int face_capacity = 0;
+
+    static OffEdge* edge_buf = NULL;
     static int edge_capacity = 0;
 
+    static int bucket[OFF_ROWS + 1];
+    static int bucket_cur[OFF_ROWS + 1];
+
+    if (!off_ready) return;
+
     /* ---- allocations (croissance seulement) ---- */
-    if (span_prev_capacity < fcount) {
-        if (span_prev) free(span_prev);
-        span_prev = (OffZBufSpanPrev*)malloc(fcount * sizeof(OffZBufSpanPrev));
-        span_prev_capacity = span_prev ? fcount : 0;
+    if (face_capacity < fcount) {
+        if (span_prev)    free(span_prev);
+        if (face_start)   free(face_start);
+        if (face_sorted)  free(face_sorted);
+        if (face_active)  free(face_active);
+        if (face_fill)    free(face_fill);
+        if (face_frame)   free(face_frame);
+        if (face_nudge)   free(face_nudge);
+        span_prev   = (OffZBufSpanPrev*)malloc(fcount * sizeof(OffZBufSpanPrev));
+        face_start  = (int*)malloc(fcount * sizeof(int));
+        face_sorted = (int*)malloc(fcount * sizeof(int));
+        face_active = (int*)malloc(fcount * sizeof(int));
+        face_fill   = (unsigned char*)malloc(fcount);
+        face_frame  = (unsigned char*)malloc(fcount);
+        face_nudge  = (unsigned char*)malloc(fcount);
+        face_capacity = (span_prev && face_start && face_sorted && face_active &&
+                         face_fill && face_frame && face_nudge) ? fcount : 0;
     }
     if (vert_capacity < vcount) {
         if (inv_z) free(inv_z);
@@ -363,17 +444,11 @@ static void Off_RenderCore(Model3D* model, int biased)
         if (end > total_edges) total_edges = end;
     }
     if (edge_capacity < total_edges) {
-        if (e_x)  free(e_x);
-        if (e_z)  free(e_z);
-        if (e_sx) free(e_sx);
-        if (e_sz) free(e_sz);
-        e_x  = (long*)malloc((size_t)total_edges * sizeof(long));
-        e_z  = (long*)malloc((size_t)total_edges * sizeof(long));
-        e_sx = (long*)malloc((size_t)total_edges * sizeof(long));
-        e_sz = (long*)malloc((size_t)total_edges * sizeof(long));
-        edge_capacity = (e_x && e_z && e_sx && e_sz) ? total_edges : 0;
+        if (edge_buf) free(edge_buf);
+        edge_buf = (OffEdge*)malloc((size_t)total_edges * sizeof(OffEdge));
+        edge_capacity = edge_buf ? total_edges : 0;
     }
-    if (!span_prev || !inv_z || !vzq || !vzq_b || !e_x || !e_z || !e_sx || !e_sz)
+    if (face_capacity < fcount || vert_capacity < vcount || edge_capacity < total_edges)
         return;
 
     for (f = 0; f < fcount; f++) span_prev[f].valid = 0;
@@ -401,18 +476,35 @@ static void Off_RenderCore(Model3D* model, int biased)
 
     ZBuffer_Clear();
 
-    /* ---- initialisation des aretes : pentes + valeur a la premiere ligne visible ---- */
+    /* ---- par face, une fois par frame : eligibilite, couleurs, aretes ---- */
+    for (b = 0; b <= OFF_ROWS; b++) bucket[b] = 0;
+
     for (f = 0; f < fcount; f++) {
-        int n, offt;
+        int n, offt, fmin, fmax, fill;
         UWORD16* zsrc;
 
+        face_start[f] = -1;
         if (!faces->display_flag[f]) continue;
         n = faces->vertex_count[f];
         if (n < 3) continue;
+        fmin = faces->miny[f];
+        fmax = faces->maxy[f];
+        if (fmax < y_lo || fmin > y_hi) continue;
+
+        b = ((fmin > y_lo) ? fmin : y_lo) - y_lo;
+        face_start[f] = b;
+        bucket[b + 1]++;
+
+        fill = getFaceFillColor(f);
+        face_fill[f]  = (unsigned char)fill;
+        face_frame[f] = (unsigned char)getFaceFrameColor(f, fill);
+        face_nudge[f] = (unsigned char)((biased && faces->plane_d[f] > 0) ? 2 : 0);
+
         offt = faces->vertex_indices_ptr[f];
         zsrc = (biased && faces->plane_d[f] > 0) ? vzq_b : vzq;
+        ed = edge_buf + offt;
 
-        for (k = 0; k < n; k++) {
+        for (k = 0; k < n; k++, ed++) {
             int k2 = (k + 1 < n) ? (k + 1) : 0;
             int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
             int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
@@ -422,9 +514,9 @@ static void Off_RenderCore(Model3D* model, int biased)
             int ya, yb, xs;
             long zs, ex, ez, sx, sz, skip;
 
-            e = offt + k;
             if (dy == 0) {
-                e_x[e] = 0L; e_z[e] = 0L; e_sx[e] = 0L; e_sz[e] = 0L;
+                ed->ya = 32767; ed->yb = 32767;      /* jamais active */
+                ed->x = 0L; ed->z = 0L; ed->sx = 0L; ed->sz = 0L;
                 continue;
             }
 
@@ -444,56 +536,63 @@ static void Off_RenderCore(Model3D* model, int biased)
                 ez += sz * skip;
             }
 
-            e_x[e] = ex; e_z[e] = ez; e_sx[e] = sx; e_sz[e] = sz;
+            ed->ya = ya;  ed->yb = yb;
+            ed->x  = ex + OFF_ROUND;     /* l'arrondi est integre une fois pour toutes */
+            ed->z  = ez + OFF_ROUND;
+            ed->sx = sx;  ed->sz = sz;
         }
     }
 
+    /* ---- tri par comptage : faces classees par ligne de depart ---- */
+    for (b = 0; b < OFF_ROWS; b++) bucket[b + 1] += bucket[b];
+    for (b = 0; b <= OFF_ROWS; b++) bucket_cur[b] = bucket[b];
+    for (f = 0; f < fcount; f++) {
+        b = face_start[f];
+        if (b >= 0) face_sorted[bucket_cur[b]++] = f;
+    }
+
     /* ---- boucle principale ---- */
+    active_count = 0;
     for (y = y_lo; y <= y_hi; y++) {
         int screenY = y + pan_dy;
+        int row = y - y_lo;
 
-        for (f = 0; f < fcount; f++) {
+        /* faces qui deviennent actives a cette ligne (insertion, ordre d'indice conserve) */
+        for (si = bucket[row]; si < bucket[row + 1]; si++) {
+            int nf = face_sorted[si];
+            int pos = active_count;
+            while (pos > 0 && face_active[pos - 1] > nf) {
+                face_active[pos] = face_active[pos - 1];
+                pos--;
+            }
+            face_active[pos] = nf;
+            active_count++;
+        }
+
+        keep = 0;
+        for (ai = 0; ai < active_count; ai++) {
             int n, offt, hit_count;
-            int fillColor, frameColor;
-            int on_top_or_bottom, nudge;
+            int fillColor, frameColor, on_top_or_bottom, nudge;
 
-            if (!faces->display_flag[f]) continue;
+            f = face_active[ai];
+            if (faces->maxy[f] < y) continue;      /* face terminee : retiree de la liste */
+            face_active[keep++] = f;
+
             n = faces->vertex_count[f];
-            if (n < 3) continue;
-            if (y < faces->miny[f] || y > faces->maxy[f]) continue;
-
-            fillColor  = getFaceFillColor(f);
-            frameColor = getFaceFrameColor(f, fillColor);
-            on_top_or_bottom = (y == faces->miny[f] || y == faces->maxy[f]);
-            nudge = (biased && faces->plane_d[f] > 0) ? 2 : 0;
-
             offt = faces->vertex_indices_ptr[f];
             hit_count = 0;
 
-            for (k = 0; k < n; k++) {
-                int k2 = (k + 1 < n) ? (k + 1) : 0;
-                int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
-                int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
-                int y1 = vtx->y2d[vid1];
-                int y2 = vtx->y2d[vid2];
-                int dy = y2 - y1;
-
-                if (dy == 0) continue;
-                if (dy > 0) {
-                    if (y < y1 || y >= y2) continue;
-                } else {
-                    if (y < y2 || y >= y1) continue;
-                }
-
-                e = offt + k;
+            ed = edge_buf + offt;
+            for (k = 0; k < n; k++, ed++) {
+                if (y < ed->ya || y >= ed->yb) continue;
                 if (hit_count < MAX_SPAN_INTERSECTIONS) {
-                    hits[hit_count].x  = (int)((e_x[e] + OFF_ROUND) >> OFF_FRAC);
-                    hits[hit_count].zq = (UWORD16)((e_z[e] + OFF_ROUND) >> OFF_FRAC);
+                    hits[hit_count].x  = (int)(ed->x >> OFF_FRAC);
+                    hits[hit_count].zq = (UWORD16)(ed->z >> OFF_FRAC);
                     hit_count++;
                 }
                 /* avancer meme si la table d'intersections est pleine */
-                e_x[e] += e_sx[e];
-                e_z[e] += e_sz[e];
+                ed->x += ed->sx;
+                ed->z += ed->sz;
             }
 
             if (hit_count < 2) continue;
@@ -505,17 +604,22 @@ static void Off_RenderCore(Model3D* model, int biased)
                     hits[1] = tmp;
                 }
             } else {
-                int a, b;
+                int a, c;
                 for (a = 1; a < hit_count; a++) {
                     OffScanIntersection key = hits[a];
-                    b = a - 1;
-                    while (b >= 0 && hits[b].x > key.x) {
-                        hits[b + 1] = hits[b];
-                        b--;
+                    c = a - 1;
+                    while (c >= 0 && hits[c].x > key.x) {
+                        hits[c + 1] = hits[c];
+                        c--;
                     }
-                    hits[b + 1] = key;
+                    hits[c + 1] = key;
                 }
             }
+
+            fillColor  = face_fill[f];
+            frameColor = face_frame[f];
+            nudge      = face_nudge[f];
+            on_top_or_bottom = (y == faces->miny[f] || y == faces->maxy[f]);
 
             {
                 int p;
@@ -543,6 +647,7 @@ static void Off_RenderCore(Model3D* model, int biased)
                 }
             }
         }
+        active_count = keep;
     }
 }
 
