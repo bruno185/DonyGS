@@ -15,6 +15,7 @@
  *  - boucle de pixels interieurs sans appel de fonction (pointeurs de ligne)
  *  - table des lignes du buffer offscreen (plus de y*160 ni de handle a deref)
  *  - Offscreen_Clear par MVN chevauchant
+ *  - Off_SpanRun : pixel gauche + interieur + pixel droit d'un span en assembleur
  */
 
 segment "ZBUF";
@@ -25,7 +26,6 @@ segment "ZBUF";
 #define OFF_FRAC    12
 #define OFF_ROUND   0x800L          /* 1 << (OFF_FRAC - 1) */
 #define OFF_Z_BIAS  0.0005f         /* meme valeur que Z_FIGHT_BIAS */
-#define OFF_ASM_MIN 4               /* en dessous, la boucle C est plus rapide (cout de preparation) */
 /* #define OFF_NO_ASM */            /* decommenter pour forcer la boucle C (comparaison) */
 
 /* Offscreen buffer (locked handle) */
@@ -262,12 +262,15 @@ typedef struct {
     UWORD16 zq;
 } OffScanIntersection;
 
-/* Arete : etat courant (x et zq en virgule fixe 12 bits, arrondi deja inclus),
-   pentes par ligne, et lignes ou l'arete est active : [ya, yb) */
+/* Arete : x = decalage depuis xb (x du premier sommet) et z = zq courant, en
+   virgule fixe 12 bits, arrondi (+0.5) deja inclus ; pentes par ligne ; lignes
+   ou l'arete est active : [ya, yb). Le decalage est converti comme l'ancien code
+   flottant : xi = xb + (int)(v + 0.5f), c'est-a-dire une troncature vers zero. */
 typedef struct {
     long x, z;
     long sx, sz;
     int ya, yb;
+    int xb;
 } OffEdge;
 
 /* zq a l'abscisse x, par interpolation lineaire entre (xa,za) et (xb,zb).
@@ -281,29 +284,32 @@ static UWORD16 Off_LerpZ(UWORD16 za, UWORD16 zb, int xa, int xb, int x)
 }
 
 /* ------------------------------------------------------------------------
-   Boucle des pixels interieurs d'un span, en assembleur.
-   Parametres passes par des variables globales (pas de convention d'appel) :
-     off_p_zacc / off_p_zstep : accumulateur z et pas, en 16.16 (le mot haut = zq)
-     off_p_zptr               : adresse 24 bits du premier mot du Z-buffer a traiter
-     off_p_pptr               : adresse 24 bits de l'octet offscreen du premier pixel
-     off_p_n                  : nombre de pixels (>= 1)
-     off_p_odd                : 1 si le premier pixel est impair (nibble bas)
-     off_p_lo / off_p_hi      : couleur en 0x0N (nibble bas) et 0xN0 (nibble haut)
-   Equivalent exact de la boucle C :
-     z_acc += z_step; zq = z_acc >> 16;
-     if (zq < *zp) { *zp = zq; ecrire le nibble }
-   Cadre direct page de 24 octets alloue sur la pile :
-     0 zacc(4) 4 zstep(4) 8 zptr(3) 12 pptr(3) 16 n 18 lo 20 hi
+   Trace d'un span complet en assembleur : pixel gauche + pixels interieurs +
+   pixel droit, en un seul appel. Parametres passes par des variables globales
+   (pas de convention d'appel a respecter) :
+     off_p_zptr / off_p_pptr : adresses 24 bits du mot Z et de l'octet offscreen
+                               du pixel GAUCHE (x0 + pan_dx)
+     off_p_odd               : parite de ce pixel (1 = nibble bas)
+     off_p_zl / off_p_zr     : zq exact du pixel gauche / du pixel droit
+     off_p_cl / off_p_ci / off_p_cr : couleur (0..15) gauche / interieur / droit
+     off_p_zacc / off_p_zstep : accumulateur z 16.16 et pas (le mot haut = zq)
+     off_p_n                 : nombre de pixels interieurs (>= 0)
+     off_p_mode              : 0 = pixel gauche seul, 1 = span complet
+   Chaque pixel : si (zq < z courant) { z = zq; ecrire le nibble }.
+   Les x sont deja clippes : aucun test de bornes ici.
+   Cadre direct page de 32 octets alloue sur la pile :
+     0 zacc(4) 4 zstep(4) 8 zptr(3) 12 pptr(3) 16 n 18 lo 20 hi 22 parite
+     24 masque 26 valeur
    Le Z-buffer est indexe par Y avec [8],y : une ligne qui chevauche deux banques
    est geree. Le buffer offscreen ne chevauche jamais de banque (attrNoCross),
    donc le pointeur pixel avance par un simple inc 16 bits.
    ------------------------------------------------------------------------ */
 long off_p_zacc, off_p_zstep;
 unsigned long off_p_zptr, off_p_pptr;
-int off_p_n, off_p_odd;
-unsigned int off_p_lo, off_p_hi;
+int off_p_n, off_p_odd, off_p_mode, off_p_cl, off_p_ci, off_p_cr;
+unsigned int off_p_zl, off_p_zr;
 
-static void Off_FillInterior(void)
+static void Off_SpanRun(void)
 {
     asm {
         php
@@ -311,7 +317,7 @@ static void Off_FillInterior(void)
         rep #0x30
         tsc
         sec
-        sbc #24
+        sbc #32
         tcs
         inc a
         tcd
@@ -334,13 +340,65 @@ static void Off_FillInterior(void)
         sta 14
         lda >off_p_n
         sta 16
-        lda >off_p_lo
+        lda >off_p_ci
+        and #0x000F
         sta 18
-        lda >off_p_hi
+        asl a
+        asl a
+        asl a
+        asl a
         sta 20
+        lda >off_p_odd
+        eor #1
+        sta 22
         ldy #0
 
         lda >off_p_odd
+        beq sr_l_ev
+        lda #0x00F0
+        sta 24
+        lda >off_p_cl
+        and #0x000F
+        sta 26
+        bra sr_l_go
+    sr_l_ev:
+        lda #0x000F
+        sta 24
+        lda >off_p_cl
+        and #0x000F
+        asl a
+        asl a
+        asl a
+        asl a
+        sta 26
+    sr_l_go:
+        lda >off_p_zl
+        cmp [8],y
+        bcs sr_lsk
+        sta [8],y
+        sep #0x20
+        lda [12]
+        and 24
+        ora 26
+        sta [12]
+        rep #0x20
+    sr_lsk:
+        lda >off_p_mode
+        bne sr_full
+        brl sr_done
+    sr_full:
+        iny
+        iny
+        lda >off_p_odd
+        beq sr_lev
+        inc 12
+    sr_lev:
+
+        lda 16
+        bne sr_int
+        brl sr_right
+    sr_int:
+        lda 22
         beq sp_even
 
         clc
@@ -391,7 +449,6 @@ static void Off_FillInterior(void)
     sp_e1:
         iny
         iny
-
         clc
         lda 0
         adc 4
@@ -418,7 +475,9 @@ static void Off_FillInterior(void)
     sp_tail:
         lda 16
         and #1
-        beq sp_done
+        bne sp_t1
+        brl sr_right
+    sp_t1:
 
         clc
         lda 0
@@ -437,12 +496,49 @@ static void Off_FillInterior(void)
         sta [12]
         rep #0x20
     sp_e2:
+        iny
+        iny
 
-    sp_done:
+    sr_right:
+        lda >off_p_n
+        clc
+        adc 22
+        and #1
+        beq sr_r_ev
+        lda #0x00F0
+        sta 24
+        lda >off_p_cr
+        and #0x000F
+        sta 26
+        bra sr_r_go
+    sr_r_ev:
+        lda #0x000F
+        sta 24
+        lda >off_p_cr
+        and #0x000F
+        asl a
+        asl a
+        asl a
+        asl a
+        sta 26
+    sr_r_go:
+        lda >off_p_zr
+        cmp [8],y
+        bcs sr_rsk
+        sta [8],y
+        sep #0x20
+        lda [12]
+        and 24
+        ora 26
+        sta [12]
+        rep #0x20
+    sr_rsk:
+
+    sr_done:
         rep #0x30
         tsc
         clc
-        adc #24
+        adc #32
         tcs
         pld
         plp
@@ -457,7 +553,7 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
                            OffZBufSpanPrev *prev,
                            int z_nudge_lsbs)
 {
-    int nsteps, x, sx, sxr, silhouette_r, n, odd;
+    int nsteps, x, sx, sx0, sxr, silhouette_r, n, odd;
     UWORD16 zq_cur, zr;
     long z_acc, z_step_16;
     FarWordPtr zp;
@@ -473,72 +569,80 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
         else zq_end = 0;
     }
 
+    sx0 = x0 + pan_dx;
+
     if (x0 == x1) {
         zq_end = zq0;
-        Off_PlotBorder(x0 + pan_dx, screenY, zq0, frameColor);
+#ifndef OFF_NO_ASM
+        off_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
+        off_p_pptr = (unsigned long)(off_row[screenY] + (sx0 >> 1));
+        off_p_odd  = sx0 & 1;
+        off_p_zl   = zq0;
+        off_p_cl   = frameColor;
+        off_p_mode = 0;
+        Off_SpanRun();
+#else
+        Off_PlotBorder(sx0, screenY, zq0, frameColor);
+#endif
     } else {
         nsteps    = x1 - x0;
         z_step_16 = (((long)zq_end - (long)zq0) << 16) / nsteps;
         z_acc     = ((long)zq0 << 16) + 0x8000L;
 
-        Off_PlotBorder(x0 + pan_dx, screenY, zq0, frameColor);
-
-        if (whole_span_is_border) {
-            for (x = x0 + 1; x < x1; x++) {
-                z_acc += z_step_16;
-                zq_cur = (UWORD16)(z_acc >> 16);
-                Off_PlotBorder(x + pan_dx, screenY, zq_cur, frameColor);
-            }
-        } else {
-            /* pixels interieurs : test Z (zq < z courant) et ecriture directe.
-               x est deja clippe, donc sx reste dans [1, SCREEN_WIDTH-2]. */
-            n = x1 - x0 - 1;
-            if (n > 0) {
-                sx  = x0 + 1 + pan_dx;
-                zp  = zbuf_row[screenY] + sx;
-                pp  = off_row[screenY] + (sx >> 1);
-                odd = sx & 1;
-                lo  = (unsigned char)(fillColor & 0x0F);
-                hi  = (unsigned char)(lo << 4);
-#ifndef OFF_NO_ASM
-                if (n >= OFF_ASM_MIN) {
-                    off_p_zacc  = z_acc;
-                    off_p_zstep = z_step_16;
-                    off_p_zptr  = (unsigned long)zp;
-                    off_p_pptr  = (unsigned long)pp;
-                    off_p_n     = n;
-                    off_p_odd   = odd;
-                    off_p_lo    = lo;
-                    off_p_hi    = hi;
-                    Off_FillInterior();
-                } else
-#endif
-                {
-                    do {
-                        z_acc += z_step_16;
-                        zq_cur = (UWORD16)(z_acc >> 16);
-                        if (zq_cur < *zp) {
-                            *zp = zq_cur;
-                            if (odd) *pp = (unsigned char)((*pp & 0xF0) | lo);
-                            else     *pp = (unsigned char)((*pp & 0x0F) | hi);
-                        }
-                        zp++;
-                        if (odd) { pp++; odd = 0; } else odd = 1;
-                    } while (--n);
-                }
-            }
-        }
-
+        /* silhouette a droite : lecture du voisin (les pixels traces ci-dessous
+           ne modifient que des colonnes < sxr, l'ordre n'a donc pas d'importance) */
         sxr = x1 + pan_dx;
         silhouette_r = 1;
         if (sxr + 1 < ZBUF_WIDTH) {
             zr = zbuf_row[screenY][sxr + 1];
             if (zr != ZBUF_FAR_VALUE && (int)zq_end - (int)zr >= -1) silhouette_r = 0;
         }
+
+#ifndef OFF_NO_ASM
+        off_p_zptr  = (unsigned long)(zbuf_row[screenY] + sx0);
+        off_p_pptr  = (unsigned long)(off_row[screenY] + (sx0 >> 1));
+        off_p_odd   = sx0 & 1;
+        off_p_zl    = zq0;
+        off_p_zr    = zq_end;
+        off_p_zacc  = z_acc;
+        off_p_zstep = z_step_16;
+        off_p_n     = nsteps - 1;
+        off_p_cl    = frameColor;
+        off_p_ci    = whole_span_is_border ? frameColor : fillColor;
+        off_p_cr    = (silhouette_r || whole_span_is_border) ? frameColor : fillColor;
+        off_p_mode  = 1;
+        Off_SpanRun();
+#else
+        /* version C de reference */
+        Off_PlotBorder(sx0, screenY, zq0, frameColor);
+
+        n = nsteps - 1;
+        if (n > 0) {
+            sx  = sx0 + 1;
+            zp  = zbuf_row[screenY] + sx;
+            pp  = off_row[screenY] + (sx >> 1);
+            odd = sx & 1;
+            if (whole_span_is_border) { lo = (unsigned char)(frameColor & 0x0F); }
+            else                      { lo = (unsigned char)(fillColor & 0x0F); }
+            hi  = (unsigned char)(lo << 4);
+            do {
+                z_acc += z_step_16;
+                zq_cur = (UWORD16)(z_acc >> 16);
+                if (zq_cur < *zp) {
+                    *zp = zq_cur;
+                    if (odd) *pp = (unsigned char)((*pp & 0xF0) | lo);
+                    else     *pp = (unsigned char)((*pp & 0x0F) | hi);
+                }
+                zp++;
+                if (odd) { pp++; odd = 0; } else odd = 1;
+            } while (--n);
+        }
+
         if (silhouette_r || whole_span_is_border)
             Off_PlotBorder(sxr, screenY, zq_end, frameColor);
         else if (ZBuffer_TestAndSet(sxr, screenY, zq_end))
             Offscreen_DrawPixel(sxr, screenY, fillColor);
+#endif
     }
 
     if (prev != NULL && prev->valid && prev->y == y - 1) {
@@ -709,8 +813,8 @@ static void Off_RenderCore(Model3D* model, int biased)
             sx = (((long)vtx->x2d[vid2] - (long)vtx->x2d[vid1]) * 4096L) / (long)dy;
             sz = (((long)zsrc[vid2] - (long)zsrc[vid1]) * 4096L) / (long)dy;
 
-            if (dy > 0) { ya = y1; yb = y2; xs = vtx->x2d[vid1]; zs = (long)zsrc[vid1]; }
-            else        { ya = y2; yb = y1; xs = vtx->x2d[vid2]; zs = (long)zsrc[vid2]; }
+            if (dy > 0) { ya = y1; yb = y2; xs = 0;                                        zs = (long)zsrc[vid1]; }
+            else        { ya = y2; yb = y1; xs = vtx->x2d[vid2] - vtx->x2d[vid1];          zs = (long)zsrc[vid2]; }
 
             ex = (long)xs * 4096L;
             ez = zs * 4096L;
@@ -723,6 +827,7 @@ static void Off_RenderCore(Model3D* model, int biased)
             }
 
             ed->ya = ya;  ed->yb = yb;
+            ed->xb = vtx->x2d[vid1];
             ed->x  = ex + OFF_ROUND;     /* l'arrondi est integre une fois pour toutes */
             ed->z  = ez + OFF_ROUND;
             ed->sx = sx;  ed->sz = sz;
@@ -772,7 +877,8 @@ static void Off_RenderCore(Model3D* model, int biased)
             for (k = 0; k < n; k++, ed++) {
                 if (y < ed->ya || y >= ed->yb) continue;
                 if (hit_count < MAX_SPAN_INTERSECTIONS) {
-                    hits[hit_count].x  = (int)(ed->x >> OFF_FRAC);
+                    long t = ed->x;
+                    hits[hit_count].x  = ed->xb + ((t >= 0L) ? (int)(t >> OFF_FRAC) : -(int)((-t) >> OFF_FRAC));
                     hits[hit_count].zq = (UWORD16)(ed->z >> OFF_FRAC);
                     hit_count++;
                 }
