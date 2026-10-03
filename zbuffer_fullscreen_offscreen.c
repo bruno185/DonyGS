@@ -25,6 +25,8 @@ segment "ZBUF";
 #define OFF_FRAC    12
 #define OFF_ROUND   0x800L          /* 1 << (OFF_FRAC - 1) */
 #define OFF_Z_BIAS  0.0005f         /* meme valeur que Z_FIGHT_BIAS */
+#define OFF_ASM_MIN 4               /* en dessous, la boucle C est plus rapide (cout de preparation) */
+/* #define OFF_NO_ASM */            /* decommenter pour forcer la boucle C (comparaison) */
 
 /* Offscreen buffer (locked handle) */
 Handle offscreen_handle = NULL;
@@ -178,10 +180,10 @@ typedef struct {
     UWORD16 zq0, zq1;
 } OffZBufSpanPrev;
 
-
 /* Offscreen border/bridge/paint routines adapted from zbuffer_fullscreen_v2.c
    but calling Offscreen_DrawPixel instead of drawPixel. These operate on the
    global zbuf_row/ZBuffer_TestAndSet from the original ZBuffer implementation. */
+
 static void Off_PlotBorder(int sx, int sy, UWORD16 zq, int color)
 {
     FarWordPtr row;
@@ -278,6 +280,175 @@ static UWORD16 Off_LerpZ(UWORD16 za, UWORD16 zb, int xa, int xb, int x)
     return (UWORD16)((long)za + num / (long)(xb - xa));
 }
 
+/* ------------------------------------------------------------------------
+   Boucle des pixels interieurs d'un span, en assembleur.
+   Parametres passes par des variables globales (pas de convention d'appel) :
+     off_p_zacc / off_p_zstep : accumulateur z et pas, en 16.16 (le mot haut = zq)
+     off_p_zptr               : adresse 24 bits du premier mot du Z-buffer a traiter
+     off_p_pptr               : adresse 24 bits de l'octet offscreen du premier pixel
+     off_p_n                  : nombre de pixels (>= 1)
+     off_p_odd                : 1 si le premier pixel est impair (nibble bas)
+     off_p_lo / off_p_hi      : couleur en 0x0N (nibble bas) et 0xN0 (nibble haut)
+   Equivalent exact de la boucle C :
+     z_acc += z_step; zq = z_acc >> 16;
+     if (zq < *zp) { *zp = zq; ecrire le nibble }
+   Cadre direct page de 24 octets alloue sur la pile :
+     0 zacc(4) 4 zstep(4) 8 zptr(3) 12 pptr(3) 16 n 18 lo 20 hi
+   Le Z-buffer est indexe par Y avec [8],y : une ligne qui chevauche deux banques
+   est geree. Le buffer offscreen ne chevauche jamais de banque (attrNoCross),
+   donc le pointeur pixel avance par un simple inc 16 bits.
+   ------------------------------------------------------------------------ */
+long off_p_zacc, off_p_zstep;
+unsigned long off_p_zptr, off_p_pptr;
+int off_p_n, off_p_odd;
+unsigned int off_p_lo, off_p_hi;
+
+static void Off_FillInterior(void)
+{
+    asm {
+        php
+        phd
+        rep #0x30
+        tsc
+        sec
+        sbc #24
+        tcs
+        inc a
+        tcd
+
+        lda >off_p_zacc
+        sta 0
+        lda >off_p_zacc+2
+        sta 2
+        lda >off_p_zstep
+        sta 4
+        lda >off_p_zstep+2
+        sta 6
+        lda >off_p_zptr
+        sta 8
+        lda >off_p_zptr+2
+        sta 10
+        lda >off_p_pptr
+        sta 12
+        lda >off_p_pptr+2
+        sta 14
+        lda >off_p_n
+        sta 16
+        lda >off_p_lo
+        sta 18
+        lda >off_p_hi
+        sta 20
+        ldy #0
+
+        lda >off_p_odd
+        beq sp_even
+
+        clc
+        lda 0
+        adc 4
+        sta 0
+        lda 2
+        adc 6
+        sta 2
+        cmp [8],y
+        bcs sp_o1
+        sta [8],y
+        sep #0x20
+        lda [12]
+        and #0xF0
+        ora 18
+        sta [12]
+        rep #0x20
+    sp_o1:
+        iny
+        iny
+        inc 12
+        dec 16
+
+    sp_even:
+        lda 16
+        lsr a
+        tax
+        beq sp_tail
+
+    sp_pair:
+        clc
+        lda 0
+        adc 4
+        sta 0
+        lda 2
+        adc 6
+        sta 2
+        cmp [8],y
+        bcs sp_e1
+        sta [8],y
+        sep #0x20
+        lda [12]
+        and #0x0F
+        ora 20
+        sta [12]
+        rep #0x20
+    sp_e1:
+        iny
+        iny
+
+        clc
+        lda 0
+        adc 4
+        sta 0
+        lda 2
+        adc 6
+        sta 2
+        cmp [8],y
+        bcs sp_o2
+        sta [8],y
+        sep #0x20
+        lda [12]
+        and #0xF0
+        ora 18
+        sta [12]
+        rep #0x20
+    sp_o2:
+        iny
+        iny
+        inc 12
+        dex
+        bne sp_pair
+
+    sp_tail:
+        lda 16
+        and #1
+        beq sp_done
+
+        clc
+        lda 0
+        adc 4
+        sta 0
+        lda 2
+        adc 6
+        sta 2
+        cmp [8],y
+        bcs sp_e2
+        sta [8],y
+        sep #0x20
+        lda [12]
+        and #0x0F
+        ora 20
+        sta [12]
+        rep #0x20
+    sp_e2:
+
+    sp_done:
+        rep #0x30
+        tsc
+        clc
+        adc #24
+        tcs
+        pld
+        plp
+    }
+}
+
 /* Trace un span (x0..x1 deja clippes) avec zq interpole entre zq0 et zq_end */
 static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
                            UWORD16 zq0, UWORD16 zq_end,
@@ -329,17 +500,32 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
                 odd = sx & 1;
                 lo  = (unsigned char)(fillColor & 0x0F);
                 hi  = (unsigned char)(lo << 4);
-                do {
-                    z_acc += z_step_16;
-                    zq_cur = (UWORD16)(z_acc >> 16);
-                    if (zq_cur < *zp) {
-                        *zp = zq_cur;
-                        if (odd) *pp = (unsigned char)((*pp & 0xF0) | lo);
-                        else     *pp = (unsigned char)((*pp & 0x0F) | hi);
-                    }
-                    zp++;
-                    if (odd) { pp++; odd = 0; } else odd = 1;
-                } while (--n);
+#ifndef OFF_NO_ASM
+                if (n >= OFF_ASM_MIN) {
+                    off_p_zacc  = z_acc;
+                    off_p_zstep = z_step_16;
+                    off_p_zptr  = (unsigned long)zp;
+                    off_p_pptr  = (unsigned long)pp;
+                    off_p_n     = n;
+                    off_p_odd   = odd;
+                    off_p_lo    = lo;
+                    off_p_hi    = hi;
+                    Off_FillInterior();
+                } else
+#endif
+                {
+                    do {
+                        z_acc += z_step_16;
+                        zq_cur = (UWORD16)(z_acc >> 16);
+                        if (zq_cur < *zp) {
+                            *zp = zq_cur;
+                            if (odd) *pp = (unsigned char)((*pp & 0xF0) | lo);
+                            else     *pp = (unsigned char)((*pp & 0x0F) | hi);
+                        }
+                        zp++;
+                        if (odd) { pp++; odd = 0; } else odd = 1;
+                    } while (--n);
+                }
             }
         }
 

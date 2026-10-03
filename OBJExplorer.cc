@@ -59,6 +59,7 @@ segment "main";
         long last_ZB_SL_render_time = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
+        keypress(); // wait for initial key press
         int  oa; // Open-Apple key status
 
         // Initialize the screen save/restore buffer

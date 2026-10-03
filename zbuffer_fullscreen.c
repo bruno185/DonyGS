@@ -74,17 +74,23 @@ void ZBuffer_Shutdown(void)
 }
 
 
+// void ZBuffer_Clear(void)
+// {
+//     int y, x;
+//     for (y = 0; y < ZBUF_HEIGHT; y++) {
+//         FarWordPtr row = zbuf_row[y];
+//         for (x = 0; x < ZBUF_WIDTH; x++) {
+//             row[x] = ZBUF_FAR_VALUE;
+//         }
+//     }
+// }
+
 void ZBuffer_Clear(void)
 {
-    int y, x;
-    for (y = 0; y < ZBUF_HEIGHT; y++) {
-        FarWordPtr row = zbuf_row[y];
-        for (x = 0; x < ZBUF_WIDTH; x++) {
-            row[x] = ZBUF_FAR_VALUE;
-        }
-    }
+    int y;
+    for (y = 0; y < ZBUF_HEIGHT; y++)
+        memset((void*)zbuf_row[y], 0xFF, ZBUF_ROW_BYTES);
 }
-
 
 static float zbuffer_scale = ZBUFFER_INV_Z_SCALE;
 
