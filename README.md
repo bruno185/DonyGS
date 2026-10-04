@@ -9,6 +9,7 @@ A 3D model viewer and explorer implementing multiple painter's algorithms, speci
 ![crossSub_shaded](Screenshots/crossSub_shaded.png)
 ![charpente_shaded](Screenshots/charpente_shaded.png)
 ![monkey_shaded](Screenshots/monkey.png)
+![bigsphere_jitter](Screenshots/bigsphere_jitter.png)
 
 ## Overview
 
@@ -35,7 +36,7 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 - It is optimized for the Apple IIGS hardware and demonstrates fixed-point 3D rendering techniques.
 - It includes advanced painter algorithms for difficult overlapping geometry.
 - It provides a scanline Z-buffer rendering
-- It provides a full-screen Z-buffer rendering (16-bit, faster than the scanline Z-buffer for small models)
+- It provides a full-screen 16-bit Z-buffer rendering, with performance comparable to the optimized scanline Z-buffer
 - It provides interactive inspection and debugging tools for face order, overlap, and visibility issues.
 
 ## Limitations 
@@ -53,8 +54,9 @@ This image couldn't have been generated with painters as they are implemented he
 - `5`: GEO V3 mode
 - `6`: CORRECT mode
 - `7`: CORRECT V2 mode
-- `O`: experimental scanline Z-buffer mode (prototype, slow)
-- `U`: full-screen Z-buffer mode (16-bit depth, ~2x faster than the scanline Z-buffer; see "Full-Screen Z-Buffer Mode" below)
+- `O`: optimized scanline Z-buffer mode
+- `U`: optimized full-screen Z-buffer mode using the offscreen framebuffer
+- `Open-Apple + U`: optimized full-screen Z-buffer mode rendered directly onscreen
 - `8`: random colors (quick mode, sets both fill and frame to random)
 - `>`: choose fill color (interactive color chooser)
 - `<`: choose frame color, including "same as fill color" = no separate border (interactive color chooser)
@@ -152,22 +154,25 @@ This image couldn't have been generated with painters as they are implemented he
 - Slower, mainly for pathological models or advanced debugging
 
 #### Scanline Z-Buffer Mode (Key: `O`)
-- Alternative renderer, entirely separate from the painter's-algorithm pipeline (does not sort faces, does not touch `processModelFast` or `calculateFaceDepths`)
-- Rasterizes each face scanline by scanline, computing per-pixel edge intersections and even-odd span pairing — correctly handles concave faces (e.g. a star) without special-casing
-- Depth is resolved per pixel via a single-scanline (320-entry) buffer of interpolated `1/z` (perspective-correct), rather than sorting whole faces — this can correctly resolve cases where two faces interpenetrate or interleave in depth by only a small margin, which the painter's algorithm cannot represent (it can only order whole faces front-to-back)
-- Face borders are drawn as a free byproduct of the scan-conversion (the first/last pixel of each span), rather than a separate outline pass
-- Fill and border colors exactly follow the user's current color choices (default colors, manual overrides, orientation shading, and random-color cycling) — same logic as the painter's `drawPolygons`
-- Pixel plotting uses a hand-written 65816 assembly routine (`drawPixel`) writing directly to SHR bitmap memory, rather than QuickDraw II calls, for performance
-- **Status**: experimental/prototype — computation is significantly slower than any painter mode due to per-pixel depth interpolation; primarily useful for validating painter's-algorithm ordering on difficult geometry (near-tangent or interpenetrating faces) rather than for interactive use
+- Alternative renderer, entirely separate from the painter's-algorithm pipeline: visibility is resolved per pixel rather than by sorting complete faces
+- Rasterizes polygons scanline by scanline and uses even-odd span pairing, so concave faces are handled without special-casing
+- Uses a **single 320-entry 16-bit depth buffer**, reused for every scanline (about 640 bytes of depth-buffer storage)
+- Reciprocal depth (`1/z`) is prepared and quantized to a 16-bit depth representation; the hot span loop avoids per-pixel floating-point operations
+- Edge/span interpolation and the Z-test are optimized for the 65C816; span rendering performs depth testing, Z-buffer updates and direct SHR pixel writes without calling `drawPixel()` once per visible pixel
+- Face fill and border colors follow the same user settings as the painter renderer (default/manual colors, orientation shading and random colors)
+- Back-face culling is honored; when culling is disabled, the renderer uses the corresponding biased path to reduce coplanar Z-fighting
+- **Performance**: the current optimized implementation has measured performance comparable to the optimized full-screen Z-buffer while requiring only one scanline of depth storage
 
-#### Full-Screen Z-Buffer Mode (Key: `U`)
-- Second alternative renderer, alongside the scanline Z-buffer, also entirely separate from the painter's-algorithm pipeline
-- Unlike the scanline Z-buffer (a single 320-entry line buffer, reset every scanline), this mode keeps a **persistent, full-screen** depth buffer (320x200) across the whole frame, cleared once per frame rather than once per line
-- Depth is stored as a **16-bit integer** ("inverted distance" encoding: smaller stored value = closer, `0xFFFF` = empty/infinitely far), not as native float like the scanline Z-buffer. This is a deliberate precision trade-off, made after the scanline Z-buffer had already needed float32 specifically to resolve a real near-coplanar case (two faces whose depths interleaved within <1% of each other) that a Fixed32 (16.16) representation could not resolve correctly. A plain 16-bit integer offers *less* usable precision than Fixed32 for the same case, so this renderer can, in principle, reproduce that same class of ordering error for faces that are extremely close in depth. The quantization scale is **recalculated every frame** from the actual maximum `1/z` observed in the current scene (`ZBuffer_SetScaleForFrame`), so it adapts automatically to the current zoom level rather than needing manual recalibration
-- Because the depth buffer persists across scanlines (unlike the single-line buffer), it correctly resolves depth for widened/anti-aliased edge pixels that spill onto a neighboring scanline — a case the scanline Z-buffer could not handle honestly, since the neighboring line's depths no longer exist in memory by the time such a pixel is drawn
-- Same fast/biased dispatcher as the scanline Z-buffer (`renderModelFullscreenZBuffer` calls `renderModelFullscreenZBuffer_fast` when back-face culling is active, `renderModelFullscreenZBuffer_biased` — with the same `Z_FIGHT_BIAS` anti-coplanarity bias — when culling is off), and the same fill/border color logic (`getFaceFillColor`/`getFaceFrameColor`) and `drawPixel` assembly routine as the scanline Z-buffer
-- **Status**: functional and measured faster than the scanline Z-buffer on the small models, after replacing the naive per-pixel float-to-16-bit quantization (a software floating-point multiply per pixel on hardware with no FPU) with quantization only at each span's two endpoints, interpolated in between with a plain 16-bit integer step
-- **Known limitation**: the depth precision trade-off above means very close/near-coplanar faces can still be misordered in rare cases; increase `ZBUFFER_INV_Z_SCALE`'s effective resolution or fall back to the scanline Z-buffer if this is a problem for a specific model
+#### Full-Screen Z-Buffer Mode (Key: `U`, or `Open-Apple + U`)
+- Alternative renderer, also independent of painter face ordering, using a persistent **320x200 16-bit depth buffer** for the complete frame
+- Depth uses the optimized 16-bit reciprocal-depth encoding (smaller stored value = closer, `0xFFFF` = empty/infinitely far), with the quantization scale adapted to the current frame
+- The full-screen depth buffer is cleared once per frame and retained for all scanlines
+- Span rendering is optimized for the 65C816 and performs the per-pixel depth test/update together with direct pixel output
+- Back-face culling selects the fast or biased rendering path as appropriate
+- **`U`**: clears the offscreen framebuffer, calls `renderModelFullscreenZBuffer_offscreen(model)`, then copies the completed image to SHR with `Offscreen_FlushToScreen()`
+- **`Open-Apple + U`**: calls `renderModelFullscreenZBuffer(model)` and renders directly to the SHR screen instead of using the offscreen framebuffer
+- **Performance**: measured performance is comparable to the optimized scanline Z-buffer; the main architectural difference is memory usage and persistence of depth information, not rendering speed
+- Because depth information for the complete frame remains available, the full-screen renderer can support operations involving pixels outside the currently processed scanline more naturally than the one-line renderer
 
 ### Mathematical Implementation
 
@@ -242,7 +247,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 #### Camera Movement
 | Key | Action | Description |
 |-----|--------|-------------|
-| `A` / `Z` | Distance | Move camera closer (A) or farther (Z) |
+| `A` / `Z` | Distance | Move camera closer/farther by 10%; with Open-Apple, change distance by 50% |
 | `Left` / `Right` | Horizontal Rotation | Rotate camera 10 degrees around vertical axis (1 degree with Open-Apple key) |
 | `Up` / `Down` | Vertical Rotation | Rotate camera 10 degrees around horizontal axis (1 degree with Open-Apple key) |
 | `W` / `X` | Screen Rotation | Rotate view 10 degrees around screen Z-axis (1 degree with Open-Apple key) |
@@ -252,8 +257,8 @@ Observer-space culling eliminates faces oriented away from the viewer:
 #### View Controls
 | Key | Action | Description |
 |-----|--------|-------------|
-| `E` / `R` | Pan Left/Right | 2D screen offset (10 pixels) |
-| `T` / `Y` | Pan Up/Down | 2D screen offset (10 pixels) |
+| `E` / `R` | Pan Left/Right | 2D screen offset by 10 pixels; 1 pixel with Open-Apple |
+| `T` / `Y` | Pan Up/Down | 2D screen offset by 10 pixels; 1 pixel with Open-Apple |
 | `0` | Reset Pan | Return to center position (0, 0) |
 | `C` | Toggle Colors | Show/hide color palette |
 | `J` | Toggle Jitter | Toggle stylized rendering that applies a random per-vertex 2D offset (0..10 px) |
@@ -273,8 +278,9 @@ Observer-space culling eliminates faces oriented away from the viewer:
 | `5` | GEO V3        | Geometry-only mode inspired by R. Dony's book, without face splitting |
 | `6` | CORRECT       | Advanced ordering correction (homebrew implementation) |
 | `7` | CORRECT V2    | Experimental local correction, homebrew implementation V2 (`painter_correctV2`) |
-| `O` | Z-BUFFER      | Experimental scanline Z-buffer renderer (prototype, slow) |
-| `U` | FULLSCREEN Z-BUFFER | Full-screen 16-bit Z-buffer renderer (functional, ~2x faster than the scanline Z-buffer) |
+| `O` | SCANLINE Z-BUFFER | Optimized 16-bit Z-buffer renderer using a single 320-pixel depth line |
+| `U` | FULLSCREEN Z-BUFFER | Optimized full-screen Z-buffer rendered through the offscreen framebuffer, then copied to SHR |
+| `Open-Apple + U` | FULLSCREEN Z-BUFFER (ONSCREEN) | Optimized full-screen Z-buffer rendered directly to SHR |
 
 #### Color Management
 | Key | Action | Description |
@@ -357,7 +363,7 @@ Saves the current SHR display to disk as an uncompressed native picture file, re
 - **Format**: raw (uncompressed) Super Hi-Res picture — 32000 bytes of pixel data, 256 bytes of Scan Control Bytes (200 real entries + 56 reserved padding bytes), and 512 bytes of color table data (16 palettes × 16 colors), matching the documented Apple IIGS SHR memory layout exactly.
 - **ProDOS file type**: `$C1`, auxtype `$0000` ("Apple IIGS Super Hi-Res Graphic Screen Image" — the plain format matching this project's 16-shared-palettes-plus-per-scanline-SCB architecture, not the different $0002 "3200 colors" per-scanline-palette format).
 - Screen memory and SCB bytes are copied via absolute-long-addressed 65816 assembly rather than a raw C pointer, to avoid a near/far pointer truncation issue that otherwise corrupts the saved image.
-- Works after any renderer — the painter modes or the scanline Z-buffer — since it simply captures whatever is currently in SHR video memory.
+- Works after any renderer — painter, scanline Z-buffer, full-screen offscreen Z-buffer after its flush, or direct onscreen full-screen Z-buffer — since it simply captures whatever is currently in SHR video memory.
 
 ### Workflow Example
 
@@ -370,13 +376,13 @@ Saves the current SHR display to disk as an uncompressed native picture file, re
    - Press `>` to choose a specific fill color
    - Press `<` to choose a specific frame color
    - Press `9` to reset to defaults
-4. **Select Rendering Mode** (`1`-`7`) based on geometry complexity
+4. **Select Rendering Mode** (`1`-`7`) based on geometry complexity.
 5. **Enable Inspection** with `I` to see inconclusive pairs
 6. **Investigate Artifacts**:
    - Press `V` to view individual faces
    - Use `D` to inspect faces before problematic face (in preview press `A` to move all or `O` to move overlaps)
    - Use `S` to inspect faces after (in preview press `A` to move all or `O` to move overlaps)
-7. **Adjust View** with `E`/`R`/`T`/`Y` for precise framing
+7. **Adjust View** with `E`/`R`/`T`/`Y/`+`/`-` for precise framing
 8. **Export Data** with `F` for external analysis
 
 ### Face Inspection Mode
@@ -420,8 +426,9 @@ Below is a summary table of the most useful keys and the **C functions** they in
 | Key | Action (short) | C functions involved (entry point) |
 |-----|-----------------|-----------------------------------------|
 | `1`..`7` | Change painter mode | sets `painter_mode` → subsequently calls `painter_newell_sancha_fastV2` (FAST), a bubble-sort based ordering pass (BUBBLE SORT — exact function name not yet confirmed), `painter_newell_sancha` (NEWELL SANCHA), `painter_geo`/`painter_geoV2` (GEO), `painter_geoV3` (GEO V3), `painter_correct` (CORRECT), or `painter_correctV2` (CORRECT V2) depending on the mode |
-| `O` | Scanline Z-buffer render (experimental) | `renderModelScanlineZBuffer` |
-| `U` | Full-screen Z-buffer render | `renderModelFullscreenZBuffer` (dispatches to `renderModelFullscreenZBuffer_fast` or `renderModelFullscreenZBuffer_biased` depending on `cull_back_faces`) |
+| `O` | Optimized scanline Z-buffer render | `renderModelScanlineZBuffer` |
+| `U` | Full-screen Z-buffer via offscreen buffer | `Offscreen_Clear` → `renderModelFullscreenZBuffer_offscreen` → `Offscreen_FlushToScreen` |
+| `Open-Apple + U` | Full-screen Z-buffer directly onscreen | `renderModelFullscreenZBuffer` |
 | `>` | Choose fill color | `colorChooser(0, &palette, ...)` — sets `user_fill_color`; also triggers `generate_random_colors` if random is chosen |
 | `<` | Choose frame color | `colorChooser(1, &palette, ...)` — sets `user_frame_color`; also triggers `generate_random_colors` if random is chosen |
 | `8` | Random colors (quick, both fill and frame) | sets `user_fill_color`/`user_frame_color` to random mode + `generate_random_colors` |
@@ -534,7 +541,6 @@ python DEPLOY.py
 - Implement better lighting model
 - Optimize screenshot export (`*` key): current implementation copies SHR memory one byte at a time via inline assembly, which is correct but slow — a line-at-a-time (or full-buffer) assembly copy would be significantly faster
 - Optimize the scanline Z-buffer renderer (`O` key) for interactive framerates, and/or extend it with a font/adaptive resolution to speed up per-pixel depth interpolation
-- Assign a permanent key to the full-screen Z-buffer renderer (currently reachable in code as `renderModelFullscreenZBuffer` but not yet bound to a key)
 - Fuse depth testing and color writing into a single assembly routine for the full-screen Z-buffer's span fill loop (currently two separate steps in C), to push performance further
 
 ## Credits

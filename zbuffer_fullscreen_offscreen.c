@@ -1,42 +1,73 @@
 /* zbuffer_fullscreen_offscreen.c
  *
- * Offscreen variant of the fullscreen Z-buffer renderer.
- * Usage: include/compile after engine.c symbols are visible, then call
- *   Offscreen_Init() once at startup,
- *   renderModelFullscreenZBuffer_offscreen(model) to render into the offscreen
- *   buffer, and Offscreen_FlushToScreen() to copy the buffer to the visible SHR.
+ * Off-screen variant of the full-screen Z-buffer renderer: the model is drawn into
+ * a 32000-byte buffer in fast RAM and copied to the SHR screen ($E1:2000) in one
+ * block move, so the slow screen memory is written only once per frame.
  *
- * Optimisations par rapport a la version precedente :
- *  - pas de float dans la boucle de scanline (marche d'aretes en virgule fixe)
- *  - liste de faces actives (tri par comptage sur la premiere ligne visible)
- *    au lieu de tester toutes les faces a chaque ligne
- *  - couleurs de face calculees une seule fois par frame
- *  - aretes en tableau de structures, avec ya/yb pre-calcules
- *  - boucle de pixels interieurs sans appel de fonction (pointeurs de ligne)
- *  - table des lignes du buffer offscreen (plus de y*160 ni de handle a deref)
- *  - Offscreen_Clear par MVN chevauchant
- *  - Off_SpanRun : pixel gauche + interieur + pixel droit d'un span en assembleur
+ * USAGE
+ *   Offscreen_Init()                       once at start-up
+ *   Offscreen_Clear()                      before each frame
+ *   renderModelFullscreenZBuffer_offscreen(model)   draw into the buffer
+ *   Offscreen_FlushToScreen()              copy the buffer to the screen
+ *   Offscreen_Shutdown()                   on exit
+ * The Z-buffer itself (zbuf_row[], ZBuffer_Init, ZBuffer_Clear, quantisation of
+ * inv_z, ZBuffer_SetScaleForFrame) lives in zbuffer_fullscreen.c.
+ *
+ * OFFSCREEN BUFFER
+ *   200 rows x 160 bytes, two 4-bit pixels per byte (even x = high nibble), in a
+ *   locked block that never crosses a bank boundary.  That guarantees that the
+ *   block-move instruction (MVN) works and that a pixel pointer can advance with a
+ *   plain 16-bit increment.
+ *
+ * DEPTH ENCODING
+ *   Every vertex gets inv_z = 1/z.  inv_z is linear in screen space, so it can be
+ *   interpolated along edges and spans with plain additions.  It is quantised to a
+ *   16-bit code
+ *       zq = 0xFFFF - round(inv_z * scale)
+ *   SMALLER zq = CLOSER, and 0xFFFF means "empty".  The scale is recomputed every
+ *   frame from the largest inv_z so the whole 16-bit range is used.
+ *
+ * FRAME PIPELINE  (Off_RenderCore)
+ *   1. per vertex   1/z, scale, quantise            -> vzq[]
+ *   2. per face     visibility, colours, edge set-up in 12-bit fixed point
+ *   3. counting sort of the faces by first visible scanline
+ *   4. per scanline activate the faces that start here, advance their edges,
+ *                   sort the intersections, pair them up into spans
+ *   5. per span     left pixel + interior + right pixel are written by
+ *                   Off_SpanRun (assembler) with a strict "closer wins" test;
+ *                   gap bridges join the span ends of consecutive scanlines
+ *
+ * BORDERS
+ *   frameColor on the left end of a span and, on true silhouettes only, on the
+ *   right end; frameColor on the whole span on the first and last scanline of a
+ *   face; fillColor elsewhere.  Between two consecutive scanlines the span ends are
+ *   joined by a bridge so that shallow diagonals are solid instead of dotted.  A
+ *   bridge NEVER writes a closer depth (that punched holes through other surfaces);
+ *   it only reinforces pixels that already belong to the same surface.
  */
 
 segment "ZBUF";
 #include "zbuffer_fullscreen.h"
 
-#define OFF_PIXELS  32000   /* 200 lignes * 160 octets */
-#define OFF_ROWS    200     /* doit valoir SCREEN_HEIGHT */
-#define OFF_FRAC    12
-#define OFF_ROUND   0x800L          /* 1 << (OFF_FRAC - 1) */
-#define OFF_Z_BIAS  0.0005f         /* meme valeur que Z_FIGHT_BIAS */
-/* #define OFF_NO_ASM */            /* decommenter pour forcer la boucle C (comparaison) */
+#define OFF_PIXELS  32000           /* 200 rows * 160 bytes: the SHR pixel area      */
+#define OFF_ROWS    200             /* must equal SCREEN_HEIGHT                      */
+#define OFF_FRAC    12              /* fractional bits of the edge fixed point       */
+#define OFF_ROUND   0x800L          /* 1 << (OFF_FRAC - 1): the +0.5 of a rounding   */
+#define OFF_Z_BIAS  0.0005f         /* inv_z bias that pulls "biased" faces closer   */
 
-/* Offscreen buffer (locked handle) */
+
+/* Offscreen buffer: a locked handle that never crosses a bank boundary.  The bank
+ * and the offset are kept in globals for the assembler routines. */
 Handle offscreen_handle = NULL;
 Byte   offscreen_bank = 0;
 Word   offscreen_offset = 0;
 
-/* Pointeur de debut de chaque ligne du buffer (valide tant que le handle est verrouille) */
+/* Start of every row of the buffer (valid as long as the handle stays locked). */
 static unsigned char *off_row[OFF_ROWS];
 static int off_ready = 0;
 
+
+/* Allocates the buffer and builds the row table.  Returns 1 on success, 0 on failure. */
 int Offscreen_Init(void)
 {
     Pointer p;
@@ -54,6 +85,7 @@ int Offscreen_Init(void)
     return 1;
 }
 
+
 void Offscreen_Shutdown(void)
 {
     off_ready = 0;
@@ -63,9 +95,10 @@ void Offscreen_Shutdown(void)
     }
 }
 
-/* Clear the offscreen pixel buffer to color 0 (both nibbles zeroed).
-   Premier octet mis a 0 en C, puis MVN chevauchant (src = base, dst = base+1)
-   qui propage ce 0 sur tout le buffer. */
+
+/* Clears the buffer to colour 0 (both nibbles zero).  The first byte is zeroed in
+ * C, then an overlapping MVN (source = base, destination = base + 1) propagates it
+ * over the whole buffer. */
 void Offscreen_Clear(void)
 {
     unsigned char *p;
@@ -73,12 +106,18 @@ void Offscreen_Clear(void)
     p = (unsigned char *)*offscreen_handle;
     *p = 0;
     asm {
+        /* Fill by an overlapping block move: the first byte (already 0) is copied to the */
+        /* second, the second to the third, and so on, which propagates the 0 over the whole */
+        /* buffer.  Source and destination are in the same bank, so both operand bytes of the */
+        /* MVN below are patched with that bank (self-modifying code). */
         php
         phb
         sep #0x20
         lda offscreen_bank
         sta >clear_mvn+1
         sta >clear_mvn+2
+        /* X = source = start of the buffer, Y = destination = start + 1, */
+        /* A = number of bytes to move - 1 (31999 bytes: every byte except the first). */
         rep #0x30
         lda offscreen_offset
         tax
@@ -92,34 +131,8 @@ void Offscreen_Clear(void)
     }
 }
 
-// /* Diagnostic helpers: dump offscreen handle info and a small hex sample */
-// void Offscreen_DumpInfo(void)
-// {
-//     if (offscreen_handle == NULL) {
-//         printf("Offscreen: handle=NULL\n");
-//         return;
-//     }
-//     Pointer p = *offscreen_handle;
-//     printf("Offscreen: bank=0x%02X offset=0x%04X ptr=%p\n", offscreen_bank, offscreen_offset, p);
-// }
 
-// void Offscreen_DumpBytes(int start, int count)
-// {
-//     if (offscreen_handle == NULL) {
-//         printf("Offscreen: handle=NULL\n");
-//         return;
-//     }
-//     volatile unsigned char *buf = *offscreen_handle;
-//     int i;
-//     printf("Offscreen buffer sample starting 0x%04X (%d bytes):", start, count);
-//     for (i = 0; i < count; ++i) {
-//         if ((i & 0x0F) == 0) printf("\n%04X: ", start + i);
-//         printf("%02X ", buf[start + i]);
-//     }
-//     printf("\n");
-// }
-
-/* Flush offscreen buffer to visible SHR bank $E1 using patched MVN */
+/* Copies the buffer to the visible SHR screen ($E1:2000) with one patched MVN. */
 void Offscreen_FlushToScreen(void)
 {
     if (offscreen_handle == NULL) return;
@@ -129,13 +142,16 @@ void Offscreen_FlushToScreen(void)
         rep #0x10
         sep #0x20
 
-        /* patch the MVN immediate operand bytes: operand1 = dest bank, operand2 = src bank
-           We want to copy FROM offscreen_handle (src bank) TO visible SHR (dest bank 0xE1) */
+        /* Patch the MVN operands: first operand byte = destination bank ($E1, the visible */
+        /* SHR screen), second = source bank (the offscreen buffer). */
         lda offscreen_bank
         sta >flush_mvn+2
         lda #0xE1
         sta >flush_mvn+1
 
+        /* X = source offset (buffer), Y = destination offset ($2000 = start of the SHR */
+        /* pixel area), A = number of bytes to copy - 1 (the 32000 pixel bytes only, so the */
+        /* scan-line control bytes and palettes at $9D00 and above are left alone). */
         rep #0x30
         lda offscreen_offset
         tax
@@ -149,18 +165,9 @@ void Offscreen_FlushToScreen(void)
     }
 }
 
-/* C fallback flush: direct CPU copy from offscreen buffer to SHR address (for debugging) */
-// void Offscreen_FlushToScreen_c(void)
-// {
-//     unsigned int *src;
-//     unsigned int *dst = (unsigned int *)0xE12000L;
-//     unsigned int i;
-//     if (offscreen_handle == NULL) return;
-//     src = (unsigned int *)*offscreen_handle;
-//     for (i = 0; i < OFF_PIXELS / 2; ++i) dst[i] = src[i];
-// }
 
-/* Offscreen pixel plot: 2 pixels/octet, pixel pair x even = nibble haut */
+/* Plots one pixel into the buffer (two pixels per byte, even x = high nibble).
+ * Used by the gap bridges only; the span painter writes pixels itself. */
 static inline void Offscreen_DrawPixel(int x, int y, int color)
 {
     unsigned char *pp;
@@ -172,7 +179,8 @@ static inline void Offscreen_DrawPixel(int x, int y, int color)
         *pp = (unsigned char)((*pp & 0xF0) | (color & 0x0F));
 }
 
-/* Local span-prev struct */
+
+/* The span of the previous scanline for one face (used to bridge the gaps). */
 typedef struct {
     int valid;
     int y;
@@ -180,22 +188,13 @@ typedef struct {
     UWORD16 zq0, zq1;
 } OffZBufSpanPrev;
 
-/* Offscreen border/bridge/paint routines adapted from zbuffer_fullscreen_v2.c
-   but calling Offscreen_DrawPixel instead of drawPixel. These operate on the
-   global zbuf_row/ZBuffer_TestAndSet from the original ZBuffer implementation. */
 
-static void Off_PlotBorder(int sx, int sy, UWORD16 zq, int color)
-{
-    FarWordPtr row;
-    UWORD16 cur;
-    if ((unsigned)sx >= (unsigned)ZBUF_WIDTH || (unsigned)sy >= (unsigned)ZBUF_HEIGHT) return;
-    row = zbuf_row[sy];
-    cur = row[sx];
-    if (zq < cur) {
-        row[sx] = zq;
-        Offscreen_DrawPixel(sx, sy, color);
-    }
-}
+/* ====================================================================
+ * Gap bridges between the span ends of consecutive scanlines
+ *
+ * A bridge runs only when a span end moved by more than one pixel between two
+ * scanlines.  Everything here is integer.
+ * ==================================================================== */
 
 static void Off_PlotBridge(int sx, int sy, UWORD16 zq, int color)
 {
@@ -257,15 +256,31 @@ static void Off_BridgeBorderZQ(int x0, int y0, UWORD16 zq0,
     }
 }
 
+
+/* ====================================================================
+ * Fixed-point edge walking and span painting
+ * ==================================================================== */
+
+/* One intersection of a scanline with the polygon: pixel x and its depth code. */
 typedef struct {
     int x;
     UWORD16 zq;
 } OffScanIntersection;
 
-/* Arete : x = decalage depuis xb (x du premier sommet) et z = zq courant, en
-   virgule fixe 12 bits, arrondi (+0.5) deja inclus ; pentes par ligne ; lignes
-   ou l'arete est active : [ya, yb). Le decalage est converti comme l'ancien code
-   flottant : xi = xb + (int)(v + 0.5f), c'est-a-dire une troncature vers zero. */
+
+/* One polygon edge, walked from its upper end to its lower end, one row at a time.
+ *
+ *   x, z   current position, in 12-bit fixed point:
+ *            x = offset from xb (the x of the edge's first vertex)
+ *            z = zq code
+ *          The +0.5 rounding is already included, so reading a value needs no
+ *          extra add.
+ *   sx, sz change per scanline (dx/dy and dzq/dy, 12-bit fixed point)
+ *   ya, yb the edge is active on rows ya <= y < yb
+ *   xb     x of the edge's first vertex
+ *
+ * Because the state is advanced once per visited row, an edge costs two long
+ * additions per scanline and no division. */
 typedef struct {
     long x, z;
     long sx, sz;
@@ -273,8 +288,9 @@ typedef struct {
     int xb;
 } OffEdge;
 
-/* zq a l'abscisse x, par interpolation lineaire entre (xa,za) et (xb,zb).
-   Uniquement utilise pour les spans coupes par le clipping horizontal. */
+
+/* zq at abscissa x by linear interpolation between (xa, za) and (xb, zb).
+ * Only used for spans cut by the horizontal clipping. */
 static UWORD16 Off_LerpZ(UWORD16 za, UWORD16 zb, int xa, int xb, int x)
 {
     long num;
@@ -283,26 +299,31 @@ static UWORD16 Off_LerpZ(UWORD16 za, UWORD16 zb, int xa, int xb, int x)
     return (UWORD16)((long)za + num / (long)(xb - xa));
 }
 
+
 /* ------------------------------------------------------------------------
-   Trace d'un span complet en assembleur : pixel gauche + pixels interieurs +
-   pixel droit, en un seul appel. Parametres passes par des variables globales
-   (pas de convention d'appel a respecter) :
-     off_p_zptr / off_p_pptr : adresses 24 bits du mot Z et de l'octet offscreen
-                               du pixel GAUCHE (x0 + pan_dx)
-     off_p_odd               : parite de ce pixel (1 = nibble bas)
-     off_p_zl / off_p_zr     : zq exact du pixel gauche / du pixel droit
-     off_p_cl / off_p_ci / off_p_cr : couleur (0..15) gauche / interieur / droit
-     off_p_zacc / off_p_zstep : accumulateur z 16.16 et pas (le mot haut = zq)
-     off_p_n                 : nombre de pixels interieurs (>= 0)
-     off_p_mode              : 0 = pixel gauche seul, 1 = span complet
-   Chaque pixel : si (zq < z courant) { z = zq; ecrire le nibble }.
-   Les x sont deja clippes : aucun test de bornes ici.
-   Cadre direct page de 32 octets alloue sur la pile :
-     0 zacc(4) 4 zstep(4) 8 zptr(3) 12 pptr(3) 16 n 18 lo 20 hi 22 parite
-     24 masque 26 valeur
-   Le Z-buffer est indexe par Y avec [8],y : une ligne qui chevauche deux banques
-   est geree. Le buffer offscreen ne chevauche jamais de banque (attrNoCross),
-   donc le pointeur pixel avance par un simple inc 16 bits.
+   Paints a whole span into the offscreen buffer in assembler: left pixel +
+   interior pixels + right pixel in a single call.
+
+   The parameters are passed in global variables (no calling convention to
+   respect):
+     off_p_zptr / off_p_pptr : 24-bit addresses of the Z word and of the buffer
+                               byte of the LEFT pixel (x0 + pan_dx)
+     off_p_odd               : parity of that pixel (1 = low nibble)
+     off_p_zl / off_p_zr     : exact zq of the left / right pixel
+     off_p_cl / off_p_ci / off_p_cr : colour (0..15) left / interior / right
+     off_p_zacc / off_p_zstep : z accumulator and step, 16.16 (high word = zq)
+     off_p_n                 : number of interior pixels (>= 0)
+     off_p_mode              : 0 = left pixel only, 1 = whole span
+   Each pixel:  if (zq < stored z) { stored z = zq; write the nibble }
+   x is already clipped, so there is no bounds test here.
+
+   A 32-byte direct-page frame is allocated on the stack:
+     0 zacc(4)  4 zstep(4)  8 zptr(3)  12 pptr(3)  16 n  18 lo  20 hi
+     22 parity of the first interior pixel  24 nibble mask  26 nibble value
+
+   The Z row is indexed with Y through [8],y, which carries into the bank byte:
+   a row that straddles two banks is handled.  The buffer pointer only needs a
+   16-bit increment because the buffer never crosses a bank (attrNoCross).
    ------------------------------------------------------------------------ */
 long off_p_zacc, off_p_zstep;
 unsigned long off_p_zptr, off_p_pptr;
@@ -312,6 +333,8 @@ unsigned int off_p_zl, off_p_zr;
 static void Off_SpanRun(void)
 {
     asm {
+        /* Allocate a 32-byte direct-page frame on the stack and point D at it */
+        /* (the C direct page is saved by phd and restored by pld at the end). */
         php
         phd
         rep #0x30
@@ -322,6 +345,7 @@ static void Off_SpanRun(void)
         inc a
         tcd
 
+        /* Load the parameters into the frame (see the layout above). */
         lda >off_p_zacc
         sta 0
         lda >off_p_zacc+2
@@ -340,6 +364,7 @@ static void Off_SpanRun(void)
         sta 14
         lda >off_p_n
         sta 16
+        /* Interior colour -> lo = 0x0N (low nibble) and hi = 0xN0 (high nibble). */
         lda >off_p_ci
         and #0x000F
         sta 18
@@ -348,9 +373,14 @@ static void Off_SpanRun(void)
         asl a
         asl a
         sta 20
+        /* Parity of the first interior pixel = parity of the left pixel xor 1. */
         lda >off_p_odd
         eor #1
         sta 22
+        /* Y = byte offset of the current pixel in the Z row (2 per pixel). */
+
+        /* ---- LEFT PIXEL: exact zq (zl), colour cl ---- */
+        /* A = parity -> mask (24) of the nibble to keep, value (26) to OR in. */
         ldy #0
 
         lda >off_p_odd
@@ -372,6 +402,7 @@ static void Off_SpanRun(void)
         asl a
         sta 26
     sr_l_go:
+        /* Depth test: draw only if zq is STRICTLY smaller (closer) than the stored Z. */
         lda >off_p_zl
         cmp [8],y
         bcs sr_lsk
@@ -383,9 +414,12 @@ static void Off_SpanRun(void)
         sta [12]
         rep #0x20
     sr_lsk:
+        /* mode 0: left pixel only, we are done. */
         lda >off_p_mode
         bne sr_full
         brl sr_done
+        /* Step over the left pixel: Z index += 2, and the pixel pointer moves to the */
+        /* next byte after an odd pixel (low nibble). */
     sr_full:
         iny
         iny
@@ -394,9 +428,12 @@ static void Off_SpanRun(void)
         inc 12
     sr_lev:
 
+        /* ---- INTERIOR PIXELS (n may be 0) ---- */
         lda 16
         bne sr_int
         brl sr_right
+        /* If the first interior pixel is odd, do it alone so that the rest runs as */
+        /* (even, odd) pairs, one byte per pair. */
     sr_int:
         lda 22
         beq sp_even
@@ -423,6 +460,9 @@ static void Off_SpanRun(void)
         inc 12
         dec 16
 
+        /* Pairs: X = n / 2.  Each pass does an even pixel (high nibble) then an odd */
+        /* pixel (low nibble) and then moves the pixel pointer to the next byte. */
+        /* z += step is a 32-bit add; the high word is the pixel's zq. */
     sp_even:
         lda 16
         lsr a
@@ -472,6 +512,7 @@ static void Off_SpanRun(void)
         dex
         bne sp_pair
 
+        /* Tail: if n is odd, one last even pixel remains. */
     sp_tail:
         lda 16
         and #1
@@ -499,6 +540,8 @@ static void Off_SpanRun(void)
         iny
         iny
 
+        /* ---- RIGHT PIXEL: exact zq (zr), colour cr ---- */
+        /* Parity = (parity of first interior pixel + n) & 1. */
     sr_right:
         lda >off_p_n
         clc
@@ -534,6 +577,7 @@ static void Off_SpanRun(void)
         rep #0x20
     sr_rsk:
 
+        /* Free the frame and restore D and the processor flags. */
     sr_done:
         rep #0x30
         tsc
@@ -545,7 +589,16 @@ static void Off_SpanRun(void)
     }
 }
 
-/* Trace un span (x0..x1 deja clippes) avec zq interpole entre zq0 et zq_end */
+
+/* Paints the span x0..x1 (already clipped) of scanline y.
+ *
+ *   zq0, zq_end         depth codes at x0 and x1
+ *   fillColor           colour of the interior
+ *   frameColor          colour of the borders
+ *   whole_span_is_border  1 on the first / last scanline of a face: the whole span
+ *                       is drawn in frameColor
+ *   prev                span of the previous scanline of the same face (bridges)
+ *   z_nudge_lsbs        number of LSBs subtracted from zq (pulls a face closer) */
 static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
                            UWORD16 zq0, UWORD16 zq_end,
                            int fillColor, int frameColor,
@@ -553,15 +606,13 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
                            OffZBufSpanPrev *prev,
                            int z_nudge_lsbs)
 {
-    int nsteps, x, sx, sx0, sxr, silhouette_r, n, odd;
-    UWORD16 zq_cur, zr;
+    int nsteps, sx0, sxr, silhouette_r;
+    UWORD16 zr;
     long z_acc, z_step_16;
-    FarWordPtr zp;
-    unsigned char *pp;
-    unsigned char hi, lo;
 
     if (x0 > x1) return;
 
+    /* Depth nudge: a smaller zq is closer.  Saturates at 0. */
     if (z_nudge_lsbs > 0) {
         if (zq0 > (UWORD16)z_nudge_lsbs) zq0 = (UWORD16)(zq0 - (UWORD16)z_nudge_lsbs);
         else zq0 = 0;
@@ -569,11 +620,11 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
         else zq_end = 0;
     }
 
-    sx0 = x0 + pan_dx;
+    sx0 = x0 + pan_dx;      /* screen column of the left pixel */
 
     if (x0 == x1) {
+        /* One-pixel span: just the left pixel, in frameColor. */
         zq_end = zq0;
-#ifndef OFF_NO_ASM
         off_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
         off_p_pptr = (unsigned long)(off_row[screenY] + (sx0 >> 1));
         off_p_odd  = sx0 & 1;
@@ -581,16 +632,21 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
         off_p_cl   = frameColor;
         off_p_mode = 0;
         Off_SpanRun();
-#else
-        Off_PlotBorder(sx0, screenY, zq0, frameColor);
-#endif
     } else {
         nsteps    = x1 - x0;
+
+        /* Depth step per pixel in 16.16, so intermediate depths stay faithful to the
+         * two endpoints.  The accumulator starts with +0.5 so the high word is a
+         * rounded value. */
         z_step_16 = (((long)zq_end - (long)zq0) << 16) / nsteps;
         z_acc     = ((long)zq0 << 16) + 0x8000L;
 
-        /* silhouette a droite : lecture du voisin (les pixels traces ci-dessous
-           ne modifient que des colonnes < sxr, l'ordre n'a donc pas d'importance) */
+        /* Right end: it gets frameColor only on a true silhouette.  If the pixel to
+         * the right already holds a depth that is not clearly farther than ours (within
+         * 1 LSB, or closer), the surface continues there, so the end is just fill.  An
+         * empty neighbour, or one clearly farther, means we are on the silhouette.  The
+         * pixels drawn below only touch columns < sxr, so reading the neighbour first
+         * gives the same answer as reading it afterwards. */
         sxr = x1 + pan_dx;
         silhouette_r = 1;
         if (sxr + 1 < ZBUF_WIDTH) {
@@ -598,7 +654,6 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
             if (zr != ZBUF_FAR_VALUE && (int)zq_end - (int)zr >= -1) silhouette_r = 0;
         }
 
-#ifndef OFF_NO_ASM
         off_p_zptr  = (unsigned long)(zbuf_row[screenY] + sx0);
         off_p_pptr  = (unsigned long)(off_row[screenY] + (sx0 >> 1));
         off_p_odd   = sx0 & 1;
@@ -606,45 +661,16 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
         off_p_zr    = zq_end;
         off_p_zacc  = z_acc;
         off_p_zstep = z_step_16;
-        off_p_n     = nsteps - 1;
+        off_p_n     = nsteps - 1;       /* interior pixels */
         off_p_cl    = frameColor;
         off_p_ci    = whole_span_is_border ? frameColor : fillColor;
         off_p_cr    = (silhouette_r || whole_span_is_border) ? frameColor : fillColor;
         off_p_mode  = 1;
         Off_SpanRun();
-#else
-        /* version C de reference */
-        Off_PlotBorder(sx0, screenY, zq0, frameColor);
-
-        n = nsteps - 1;
-        if (n > 0) {
-            sx  = sx0 + 1;
-            zp  = zbuf_row[screenY] + sx;
-            pp  = off_row[screenY] + (sx >> 1);
-            odd = sx & 1;
-            if (whole_span_is_border) { lo = (unsigned char)(frameColor & 0x0F); }
-            else                      { lo = (unsigned char)(fillColor & 0x0F); }
-            hi  = (unsigned char)(lo << 4);
-            do {
-                z_acc += z_step_16;
-                zq_cur = (UWORD16)(z_acc >> 16);
-                if (zq_cur < *zp) {
-                    *zp = zq_cur;
-                    if (odd) *pp = (unsigned char)((*pp & 0xF0) | lo);
-                    else     *pp = (unsigned char)((*pp & 0x0F) | hi);
-                }
-                zp++;
-                if (odd) { pp++; odd = 0; } else odd = 1;
-            } while (--n);
-        }
-
-        if (silhouette_r || whole_span_is_border)
-            Off_PlotBorder(sxr, screenY, zq_end, frameColor);
-        else if (ZBuffer_TestAndSet(sxr, screenY, zq_end))
-            Offscreen_DrawPixel(sxr, screenY, fillColor);
-#endif
     }
 
+    /* Bridge only real gaps (span end moved by more than one pixel since the previous
+     * scanline); integer Z - cheap. */
     if (prev != NULL && prev->valid && prev->y == y - 1) {
         int dxl = prev->x0 - x0;
         int dxr = prev->x1 - x1;
@@ -654,6 +680,7 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
         if (dxr > 1) Off_BridgeBorderZQ(prev->x1, prev->y, prev->zq1, x1, y, zq_end, frameColor);
     }
 
+    /* Remember this span for the next scanline. */
     if (prev != NULL) {
         prev->valid = 1;
         prev->y = y;
@@ -664,7 +691,25 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
     }
 }
 
-/* Rendu commun aux variantes fast (biased = 0) et biased (biased = 1) */
+
+/* ====================================================================
+ * Rendering
+ *
+ *  - no float inside the scanline loop: edges are walked in fixed point and
+ *    zq is quantised once per vertex and per frame;
+ *  - only the faces crossing the current scanline are visited (active list built
+ *    with a counting sort on the first visible row);
+ *  - face colours are computed once per frame;
+ *  - edges live in an array of structures with ya/yb precomputed;
+ *  - spans are written by a single assembler call.
+ * ==================================================================== */
+
+/* Shared renderer for the "fast" (biased = 0) and "biased" (biased = 1) variants.
+ *
+ * biased = 1 is used when back faces are not culled: faces with plane_d > 0 are
+ * pulled slightly closer (inv_z + OFF_Z_BIAS, then 2 more LSBs of zq in
+ * Off_PaintSpanZ) so that they win depth ties against coplanar or nearly
+ * coplanar faces instead of z-fighting. */
 static void Off_RenderCore(Model3D* model, int biased)
 {
     VertexArrays3D* vtx = &model->vertices;
@@ -684,9 +729,9 @@ static void Off_RenderCore(Model3D* model, int biased)
     static int vert_capacity = 0;
 
     static OffZBufSpanPrev* span_prev = NULL;
-    static int* face_start = NULL;          /* ligne de depart (relative a y_lo), -1 = ignoree */
-    static int* face_sorted = NULL;         /* faces triees par ligne de depart                */
-    static int* face_active = NULL;         /* faces actives, en ordre croissant d'indice      */
+    static int* face_start = NULL;          /* first scanline of the face (relative to y_lo), -1 = skipped */
+    static int* face_sorted = NULL;         /* faces sorted by first scanline (counting sort)               */
+    static int* face_active = NULL;         /* faces crossing the current scanline, ascending face index    */
     static unsigned char* face_fill = NULL;
     static unsigned char* face_frame = NULL;
     static unsigned char* face_nudge = NULL;
@@ -695,12 +740,14 @@ static void Off_RenderCore(Model3D* model, int biased)
     static OffEdge* edge_buf = NULL;
     static int edge_capacity = 0;
 
+    /* counting-sort tables: bucket[r] .. bucket[r+1]-1 = faces starting at row r */
     static int bucket[OFF_ROWS + 1];
     static int bucket_cur[OFF_ROWS + 1];
 
+    /* Nothing to draw into until Offscreen_Init() has succeeded. */
     if (!off_ready) return;
 
-    /* ---- allocations (croissance seulement) ---- */
+    /* ---- scratch buffers: they only ever grow, so after the first frame there is no malloc ---- */
     if (face_capacity < fcount) {
         if (span_prev)    free(span_prev);
         if (face_start)   free(face_start);
@@ -741,9 +788,14 @@ static void Off_RenderCore(Model3D* model, int biased)
     if (face_capacity < fcount || vert_capacity < vcount || edge_capacity < total_edges)
         return;
 
+    /* No previous span yet for any face (used for the gap bridges). */
     for (f = 0; f < fcount; f++) span_prev[f].valid = 0;
 
-    /* ---- par sommet, une fois par frame : 1/z, echelle, quantification ---- */
+    /* ---- PER VERTEX, once per frame -------------------------------------
+     * inv_z = 1/z is linear in screen space.  The scale that maps inv_z to the
+     * 16-bit range is chosen from the largest inv_z of this frame, then every
+     * vertex is quantised ONCE (zq: smaller = closer).  Everything after this
+     * point is integer: edges and spans only interpolate zq. */
     frame_max_inv_z = 0.0f;
     for (i = 0; i < vcount; i++) {
         float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
@@ -751,7 +803,9 @@ static void Off_RenderCore(Model3D* model, int biased)
         if (inv_z[i] > frame_max_inv_z) frame_max_inv_z = inv_z[i];
     }
     ZBuffer_SetScaleForFrame(frame_max_inv_z);
+
     for (i = 0; i < vcount; i++) {
+        /* vzq_b is the "pulled closer" copy used by faces with plane_d > 0 (biased only). */
         vzq[i]   = ZBuffer_QuantizeInvZ(inv_z[i]);
         vzq_b[i] = biased ? ZBuffer_QuantizeInvZ(inv_z[i] + OFF_Z_BIAS) : vzq[i];
     }
@@ -759,6 +813,8 @@ static void Off_RenderCore(Model3D* model, int biased)
     SetPenMode(0);
     applyPalette(palette);
 
+    /* Visible window in model coordinates: the pan offsets (pan_dx, pan_dy) are
+     * added back when addressing the screen and the Z-buffer. */
     clip_x_min = -pan_dx;
     clip_x_max = SCREEN_WIDTH - 1 - pan_dx;
     y_lo = -pan_dy;
@@ -766,7 +822,10 @@ static void Off_RenderCore(Model3D* model, int biased)
 
     ZBuffer_Clear();
 
-    /* ---- par face, une fois par frame : eligibilite, couleurs, aretes ---- */
+    /* ---- PER FACE, once per frame -----------------------------------------
+     * - decide if the face can appear at all (shown, >= 3 vertices, overlaps the window)
+     * - cache its colours and depth nudge
+     * - set up one OffEdge per polygon edge (see the OffEdge comment) */
     for (b = 0; b <= OFF_ROWS; b++) bucket[b] = 0;
 
     for (f = 0; f < fcount; f++) {
@@ -781,9 +840,11 @@ static void Off_RenderCore(Model3D* model, int biased)
         fmax = faces->maxy[f];
         if (fmax < y_lo || fmin > y_hi) continue;
 
+        /* First scanline we will actually visit: faces that start above the
+         * window are activated on its first row. */
         b = ((fmin > y_lo) ? fmin : y_lo) - y_lo;
         face_start[f] = b;
-        bucket[b + 1]++;
+        bucket[b + 1]++;       /* histogram of start rows (shifted by one for the prefix sum) */
 
         fill = getFaceFillColor(f);
         face_fill[f]  = (unsigned char)fill;
@@ -805,21 +866,25 @@ static void Off_RenderCore(Model3D* model, int biased)
             long zs, ex, ez, sx, sz, skip;
 
             if (dy == 0) {
-                ed->ya = 32767; ed->yb = 32767;      /* jamais active */
+                ed->ya = 32767; ed->yb = 32767;      /* horizontal edge: never active */
                 ed->x = 0L; ed->z = 0L; ed->sx = 0L; ed->sz = 0L;
                 continue;
             }
 
+            /* Slopes per scanline in 12-bit fixed point (dx/dy and dzq/dy). */
             sx = (((long)vtx->x2d[vid2] - (long)vtx->x2d[vid1]) * 4096L) / (long)dy;
             sz = (((long)zsrc[vid2] - (long)zsrc[vid1]) * 4096L) / (long)dy;
 
+            /* The edge is walked from its upper end downwards.  x is stored as an
+             * offset from xb (= x of vertex 1), so for dy < 0 the starting offset
+             * is x(v2) - x(v1) and the slopes stay valid (dx/dy changes sign with dy). */
             if (dy > 0) { ya = y1; yb = y2; xs = 0;                                        zs = (long)zsrc[vid1]; }
             else        { ya = y2; yb = y1; xs = vtx->x2d[vid2] - vtx->x2d[vid1];          zs = (long)zsrc[vid2]; }
 
             ex = (long)xs * 4096L;
             ez = zs * 4096L;
 
-            /* arete qui commence au-dessus de la zone visible : avancer d'un coup */
+            /* Edge starts above the visible window: jump straight to the first visible row. */
             if (ya < y_lo && yb > y_lo) {
                 skip = (long)(y_lo - ya);
                 ex += sx * skip;
@@ -828,13 +893,14 @@ static void Off_RenderCore(Model3D* model, int biased)
 
             ed->ya = ya;  ed->yb = yb;
             ed->xb = vtx->x2d[vid1];
-            ed->x  = ex + OFF_ROUND;     /* l'arrondi est integre une fois pour toutes */
+            ed->x  = ex + OFF_ROUND;     /* the +0.5 rounding is baked in once, here */
             ed->z  = ez + OFF_ROUND;
             ed->sx = sx;  ed->sz = sz;
         }
     }
 
-    /* ---- tri par comptage : faces classees par ligne de depart ---- */
+    /* ---- COUNTING SORT: faces ordered by their first visible scanline ----
+     * (prefix sums turn the histogram into start offsets, then each face is placed). */
     for (b = 0; b < OFF_ROWS; b++) bucket[b + 1] += bucket[b];
     for (b = 0; b <= OFF_ROWS; b++) bucket_cur[b] = bucket[b];
     for (f = 0; f < fcount; f++) {
@@ -842,13 +908,17 @@ static void Off_RenderCore(Model3D* model, int biased)
         if (b >= 0) face_sorted[bucket_cur[b]++] = f;
     }
 
-    /* ---- boucle principale ---- */
+    /* ---- MAIN LOOP: one scanline at a time ---------------------------------
+     * Only faces crossing the scanline are visited (active list), instead of
+     * testing every face on every row. */
     active_count = 0;
     for (y = y_lo; y <= y_hi; y++) {
         int screenY = y + pan_dy;
         int row = y - y_lo;
 
-        /* faces qui deviennent actives a cette ligne (insertion, ordre d'indice conserve) */
+        /* Faces that start on this row join the active list.  The list is kept in
+         * ascending face index (insertion sort) so that depth ties are resolved in the
+         * same order as a plain loop over all faces. */
         for (si = bucket[row]; si < bucket[row + 1]; si++) {
             int nf = face_sorted[si];
             int pos = active_count;
@@ -866,29 +936,34 @@ static void Off_RenderCore(Model3D* model, int biased)
             int fillColor, frameColor, on_top_or_bottom, nudge;
 
             f = face_active[ai];
-            if (faces->maxy[f] < y) continue;      /* face terminee : retiree de la liste */
+            if (faces->maxy[f] < y) continue;      /* face finished: dropped from the list */
             face_active[keep++] = f;
 
             n = faces->vertex_count[f];
             offt = faces->vertex_indices_ptr[f];
             hit_count = 0;
 
+            /* Intersect the scanline with the polygon: every edge active on row y gives
+             * one hit (x, zq); the edge state is then advanced by one row. */
             ed = edge_buf + offt;
             for (k = 0; k < n; k++, ed++) {
                 if (y < ed->ya || y >= ed->yb) continue;
                 if (hit_count < MAX_SPAN_INTERSECTIONS) {
+                    /* Fixed-point -> pixel: truncate toward zero (like the (int)(v + 0.5f)
+                     * of the original float code), added to the edge's base x. */
                     long t = ed->x;
                     hits[hit_count].x  = ed->xb + ((t >= 0L) ? (int)(t >> OFF_FRAC) : -(int)((-t) >> OFF_FRAC));
                     hits[hit_count].zq = (UWORD16)(ed->z >> OFF_FRAC);
                     hit_count++;
                 }
-                /* avancer meme si la table d'intersections est pleine */
+                /* advance even when the hit table is full, to keep the edge in step */
                 ed->x += ed->sx;
                 ed->z += ed->sz;
             }
 
             if (hit_count < 2) continue;
 
+            /* Sort the hits by x (a swap for the usual 2 hits, insertion sort otherwise). */
             if (hit_count == 2) {
                 if (hits[0].x > hits[1].x) {
                     OffScanIntersection tmp = hits[0];
@@ -913,6 +988,8 @@ static void Off_RenderCore(Model3D* model, int biased)
             nudge      = face_nudge[f];
             on_top_or_bottom = (y == faces->miny[f] || y == faces->maxy[f]);
 
+            /* Consecutive hit pairs are the inside spans of the polygon (even-odd rule).
+             * Clip each span to the window; zq at a clipped end is interpolated. */
             {
                 int p;
                 for (p = 0; p + 1 < hit_count; p += 2) {
@@ -934,8 +1011,8 @@ static void Off_RenderCore(Model3D* model, int biased)
                     if (x0 > x1) continue;
 
                     Off_PaintSpanZ(x0, x1, y, screenY, zq0, zq1,
-                                   fillColor, frameColor, on_top_or_bottom,
-                                   &span_prev[f], nudge);
+                                       fillColor, frameColor, on_top_or_bottom,
+                                       &span_prev[f], nudge);
                 }
             }
         }
@@ -943,6 +1020,9 @@ static void Off_RenderCore(Model3D* model, int biased)
     }
 }
 
+
+/* Public entry points.  "fast" assumes back faces were culled; "biased" is for
+ * models drawn with both sides, where coplanar faces need the depth bias. */
 void renderModelFullscreenZBuffer_offscreen_fastV2(Model3D* model)
 {
     Off_RenderCore(model, 0);

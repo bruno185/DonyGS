@@ -362,12 +362,6 @@ segment "main";
                 // This mush faster than re-rendering the entire scene with 
                 //goto loopReDraw;
 
-            case 82:  // 'R' - pan right (was revert; revert disabled)
-            case 114: // 'r'
-                pan_dx += 10; // move right by 10 pixels
-                printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
-                goto loopReDraw;
-
             case 59: // ';' - Run check_sort_repair (repair ordering) and wait for key so user can read results
                 printf("Running check_sort_repair (ray_cast verification & minimal repair)...\n");
                 check_sort_repair(model, model->faces.face_count);
@@ -427,13 +421,15 @@ segment "main";
 
             case 65:  // 'A' - decrease distance
             case 97:  // 'a'
-                params.distance = params.distance - (params.distance / 10);
+                if (!oa) params.distance = params.distance - (params.distance / 10);
+                else params.distance = params.distance - (params.distance / 2);
                 printf("Distance decreased -> %.2f\n", FIXED_TO_FLOAT(params.distance));
                 goto bigloop;
 
             case 90:  // 'Z' - increase distance  
             case 122: // 'z'
-                params.distance = params.distance + (params.distance / 10);
+                if (!oa) params.distance = params.distance + (params.distance / 10);
+                else params.distance = params.distance + (params.distance / 2);
                 printf("Distance increased -> %.2f\n", FIXED_TO_FLOAT(params.distance));
                 goto bigloop;
 
@@ -490,19 +486,30 @@ segment "main";
             /* 2D panning: E=left, R=right (R replaced revert), T=up, Y=down (and lowercase) */
             case 69: /* 'E' */
             case 101: /* 'e' */
-                pan_dx -= 10; /* pan left */
+                if (!oa) pan_dx -= 10; /* pan left */
+                else pan_dx -= 1; /* pan left */
                 printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
                 goto loopReDraw;
 
+            case 82:  // 'R' - pan right (was revert; revert disabled)
+            case 114: // 'r'
+                if (!oa) pan_dx += 10; // move right by 10 pixels
+                else pan_dx += 1; // move right by 1 pixel
+                printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
+                goto loopReDraw;
+
+
             case 84: /* 'T' */
             case 116: /* 't' */
-                pan_dy -= 10; /* pan up = decrease Y */
+                if (!oa) pan_dy -= 10; /* pan up = decrease Y */
+                else pan_dy -= 1; /* pan up = decrease Y */
                 printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
                 goto loopReDraw;
 
             case 89: /* 'Y' */
             case 121: /* 'y' */
-                pan_dy += 10; /* pan down = increase Y */
+                if (!oa) pan_dy += 10; /* pan down = increase Y */
+                else pan_dy += 1; /* pan down = increase Y */
                 printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
                 goto loopReDraw;
 
