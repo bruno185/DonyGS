@@ -1,5 +1,6 @@
 /* GEOV3 painter - cleaned final version.
- * Geometric tests use geometric_face_relation() in both directions. */
+ * Geometric tests use geometric_face_relation() in both directions. 
+ Inspired by Robert Dony's algorithm. */
 
 /* Stable insertion sort by descending z_max. */
 static void sort_by_zmax(int* sorted, Fixed32* z_max, int nf)
