@@ -1,0 +1,38 @@
+voici les temps mesurés pou chaque painter, pour un modele de 500 faces :
+FAST : 54
+BUBBLE SORT : 94
+NEWELL SANCHA : 73
+GEOV2 : 67
+GEOV3 : 1092
+CORRECT : 390
+CORRECTV2 : 532
+
+voici les temps mesurés pou chaque painter, pour un modele de 70 faces :
+FAST : 8
+BUBBLE SORT : 12
+NEWELL SANCHA : 150
+GEOV2 : 35
+GEOV3 : 46 => 43  => 46
+CORRECT : 42
+CORRECTV2 : 62
+
+
+actuellement : dony new. Voir si dony original est meilleur. A priori : plus gros, plus lent.
+==> retour à l'original pressenti.
+
+
+dony new :
+a b def : 42
+a b 270 : ok 16
+ok sur tous les angle (v = 20 et v = 30)
+
+m b def : 1159
+m b 40 : 1038
+
+dony original :
+a b def : 47
+a b 270 : ok 16
+ok sur tous les angle (v = 20 et v = 30)
+
+m b def : 1199
+m b 40 : 1074
