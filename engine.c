@@ -2646,489 +2646,822 @@ void painter_bubble_sort(Model3D* model, int face_count)
 }
 
 /*
- * painter_newell_sanchaV2
- * ========================
+ * painter_newell_sancha
+ * =====================
+ * Modified Newell-Sancha painter algorithm.
  *
- * Draw-order correction (depth sort) for the painter's algorithm,
- * inspired by Newell, Newell & Sancha (1972), "A New Approach to the
- * Shading of the Faces of Polyhedra" -- hence the name. The original
- * Newell-Newell-Sancha idea is: start from an approximate depth (Z)
- * sort, then apply a series of increasingly expensive tests (Z-interval
- * overlap, bounding-box overlap, relative position of the faces'
- * planes) to detect and fix cases where two faces end up in the wrong
- * order despite the approximate sort.
+ * The original Newell algorithm resolves cases where the geometric
+ * ordering tests fail by reordering/retesting polygons and, when
+ * necessary, splitting polygons to resolve ambiguous or cyclic cases.
  *
- * TWO DELIBERATE SIMPLIFICATIONS compared to the original algorithm:
+ * This implementation does not split polygons and does not attempt to
+ * resolve cyclic dependencies. When all Newell separation tests fail
+ * and the projected polygons overlap, a hierarchical ray cast is used
+ * instead to determine their actual visible order.
  *
- *   1. No face splitting. When the original Newell-Newell-Sancha
- *      algorithm cannot determine a valid order between two faces that
- *      genuinely intersect in 3D (none of the tests can decide), the
- *      "proper" fix is to split one of the two faces along the other's
- *      plane, producing two sub-faces that CAN then be ordered without
- *      ambiguity. This function does not do that: such a case is simply
- *      marked "inconclusive" (see below) and left in its current order,
- *      with no correction and no splitting.
+ * To prevent endless oscillation in ambiguous or cyclic cases, each
+ * candidate pair is allowed to reverse its relative order only once.
+ * If the same pair later requires another reversal, the current order
+ * is preserved and the pair is treated as unresolved.
  *
- *   2. No cycle detection. The original algorithm can, in rare
- *      configurations, produce circular dependencies (A must come
- *      before B, B before C, C before A) that require explicit
- *      detection and cycle-breaking (typically via the face splitting
- *      above). This function does not detect such cycles: it fixes
- *      pairs locally on the fly (do_move below) and relies on the
- *      do...while loop to converge to a stable state. In the presence
- *      of a genuine cycle, this loop may never fully satisfy every
- *      constraint at once -- this is an accepted trade-off for this
- *      project (see the rest of the DonyGS/ObjExplorer pipeline), not
- *      an oversight.
- *
- * Everything else in this function (Z sweep, cache of already-decided
- * pairs, persistent buffers) is pure performance optimization around
- * this same logic -- see the inline comments below for the details of
- * each step.
+ * This works well for non-intersecting faces. Models containing cyclic
+ * visibility or intersecting faces should be rendered with the Z-buffer.
  */
+
 void painter_newell_sancha(Model3D* model, int face_count)
 {
-    // Trivial case: nothing to correct with 0 or 1 face.
+    FaceArrays3D* faces;
+    int* sorted;
+    int visible_count;
+
+    typedef struct {
+        int face1;
+        int face2;
+        int next;
+    } OrderedPair;
+
+    typedef struct {
+        int a;
+        int b;
+    } CandidatePair;
+
+#define HASH_SIZE_NS       2048
+#define HASH_MASK_NS       (HASH_SIZE_NS - 1)
+#define ORDERED_MAX_NS     4096
+
+#define PAIR_HASH_NS(a,b) \
+    ((((unsigned)(a) * 73856093u) ^ \
+      ((unsigned)(b) * 19349663u)) & HASH_MASK_NS)
+
+    /*
+     * Persistent working buffers.
+     */
+    static int* s_hash = NULL;
+    static OrderedPair* s_ordered = NULL;
+    static int* s_touched = NULL;
+
+    static int* s_pos = NULL;
+    static int s_pos_capacity = 0;
+
+    static int* s_by_zmin = NULL;
+    static int s_by_zmin_capacity = 0;
+
+    static int* s_active = NULL;
+    static int s_active_capacity = 0;
+
+    static CandidatePair* s_candidates = NULL;
+    static int s_candidates_capacity = 0;
+
+    /*
+     * Anti-oscillation flags.
+     *
+     * s_moved[c] is non-zero when candidate c has already
+     * caused one reversal.
+     *
+     * This is deliberately kept separate from CandidatePair
+     * so the original structure remains unchanged.
+     */
+    static unsigned char* s_moved = NULL;
+    static int s_moved_capacity = 0;
+
+    int ordered_count = 0;
+    int touched_count = 0;
+
+    int* pos;
+    int* by_zmin;
+    int* active;
+
+    int active_count;
+    int candidate_count;
+
+    int changed;
+
+    Fixed32* z_min;
+    Fixed32* z_max;
+
+    int* minx;
+    int* maxx;
+    int* miny;
+    int* maxy;
+
+
+    /*
+     * ------------------------------------------------------------
+     * 1. Initial approximate painter ordering
+     * ------------------------------------------------------------
+     */
     if (face_count <= 1) {
         painter_newell_sancha_fast(model, face_count);
         return;
     }
 
-    FaceArrays3D* faces = &model->faces;
+    faces = &model->faces;
 
-    // -------------------------------------------------
-    // 1. Initial fast sort + back-face culling
-    // -------------------------------------------------
-    // painter_newell_sancha_fast produces an APPROXIMATE depth order
-    // (typically by average or minimum Z per face) and places visible
-    // (non-culled) faces at the front of sorted[]. Everything below only
-    // CORRECTS the errors in that approximate order where they are
-    // visually significant -- it is not a second full sort.
     painter_newell_sancha_fast(model, face_count);
 
-    // Recount how many faces are actually visible after culling:
-    // sorted[0 .. visible_count-1] is the working range, the rest of
-    // sorted[] (culled faces) is ignored by everything below.
-    int visible_count = face_count;
+    /*
+     * Determine the number of visible faces.
+     * painter_newell_sancha_fast() has already put them first
+     * in sorted_face_indices[].
+     */
+    visible_count = face_count;
+
     if (cull_back_faces) {
+        int i;
+
         visible_count = 0;
-        for (int i = 0; i < face_count; ++i) {
-            if (faces->display_flag[i]) {
+
+        for (i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i])
                 ++visible_count;
-            }
         }
     }
 
-    // Nothing to correct with fewer than 2 visible faces.
-    if (visible_count < 2) return;
+    if (visible_count < 2)
+        return;
 
-    // sorted[] IS the final result: this function modifies it in place,
-    // via local permutations (see do_move below), until no correction
-    // is needed anymore.
-    int* sorted = faces->sorted_face_indices;
+    sorted = faces->sorted_face_indices;
 
-    // -------------------------------------------------
-    // 2. Cache of already-decided pairs (hash table) + sweep buffers
-    // -------------------------------------------------
-    // All of these are PERSISTENT (static) working buffers, allocated
-    // once on the very first call and then reused (and grown via
-    // realloc if needed) on every subsequent call. Goal: avoid a
-    // malloc()/free() every frame, while staying on the heap (no large
-    // static array in BSS) so as not to compete with the model's
-    // NewHandle-based memory.
 
-    typedef struct {
-        int face1;      // of the two faces in the pair, the one that must be drawn first (farther)
-        int face2;      // the one that must be drawn second (closer)
-        int next;       // next link in the hash collision chain
-    } OrderedPair;
+    /*
+     * ------------------------------------------------------------
+     * 2. Allocate/reuse persistent working buffers
+     * ------------------------------------------------------------
+     */
 
-    typedef struct {
-        int a;          // a candidate face pair per the Z sweep (see step 5)
-        int b;
-    } CandidatePair;
+    if (!s_hash) {
+        int i;
 
-    #define HASH_SIZE_V2        2048
-    #define HASH_MASK_V2        (HASH_SIZE_V2 - 1)
-    #define ORDERED_MAX_CAP_V2  4096
+        s_hash = (int*)malloc(HASH_SIZE_NS * sizeof(int));
 
-    static int*          s_hash_table      = NULL; // hash table (fixed size, allocated once)
-    static OrderedPair*  s_ordered         = NULL; // entries for already-decided pairs (correct or inconclusive)
-    static int*          s_touched_buckets = NULL; // hash buckets touched during the current call (for a targeted reset at the end)
-    static InconclusivePair* s_inconclusive_pairs = NULL; // "inconclusive" pairs for this call (for diagnostics/inspection)
+        if (!s_hash) {
+            painter_newell_sancha_fast(model, face_count);
+            return;
+        }
 
-    // --- Z-sweep scratch buffers, persistent + grow-on-demand -----------
-    static int*  s_pos              = NULL; // pos[face_id] = current slot of this face in sorted[]
-    static int   s_pos_capacity     = 0;    // sized on face_count (total faces in the model)
-    static int*  s_by_zmin          = NULL; // copy of visible faces, sorted by ascending z_min
-    static int   s_by_zmin_capacity = 0;    // sized on visible_count
-    static int*  s_active           = NULL; // list of faces "active" during the sweep (see step 5)
-    static int   s_active_capacity  = 0;    // sized on visible_count
-    static CandidatePair* s_candidates = NULL; // list of face pairs that overlap in Z
-    static int   s_candidates_capacity = 0;    // grows as needed (doubling)
-
-    // One-time allocation of the hash table (fixed size, never resized)
-    if (!s_hash_table) {
-        s_hash_table = (int*)malloc(HASH_SIZE_V2 * sizeof(int));
-        if (!s_hash_table) { painter_newell_sancha_fast(model, face_count); return; }
-        // -1 means "empty bucket": mandatory initial state before any use.
-        for (int i = 0; i < HASH_SIZE_V2; ++i) s_hash_table[i] = -1;
+        for (i = 0; i < HASH_SIZE_NS; ++i)
+            s_hash[i] = -1;
     }
-    // One-time allocation of the decided-pairs array (fixed max capacity)
+
+
     if (!s_ordered) {
-        s_ordered = (OrderedPair*)malloc(ORDERED_MAX_CAP_V2 * sizeof(OrderedPair));
-        if (!s_ordered) { painter_newell_sancha_fast(model, face_count); return; }
-    }
-    // One-time allocation of the list of buckets to reset at the end of the call
-    if (!s_touched_buckets) {
-        s_touched_buckets = (int*)malloc(ORDERED_MAX_CAP_V2 * sizeof(int));
-        if (!s_touched_buckets) { painter_newell_sancha_fast(model, face_count); return; }
-    }
-    // One-time allocation of the inconclusive-pairs diagnostic buffer.
-    // Best-effort: if this fails, inconclusive_pairs_capacity is set to 0
-    // below, exactly matching the original fallback behavior.
-    if (!s_inconclusive_pairs) {
-        s_inconclusive_pairs = (InconclusivePair*)malloc(ORDERED_MAX_CAP_V2 * sizeof(InconclusivePair));
+        s_ordered =
+            (OrderedPair*)malloc(
+                ORDERED_MAX_NS * sizeof(OrderedPair));
+
+        if (!s_ordered) {
+            painter_newell_sancha_fast(model, face_count);
+            return;
+        }
     }
 
-    // pos[] must be able to index any face id of the current model
-    // (0 .. face_count-1) -- grow it if the current model has more
-    // faces than previous calls anticipated.
-    if (s_pos_capacity < face_count) {
-        int newcap = face_count;
-        int* tmp = (int*)realloc(s_pos, newcap * sizeof(int));
-        if (!tmp) { painter_newell_sancha_fast(model, face_count); return; }
-        s_pos = tmp;
-        s_pos_capacity = newcap;
+
+    if (!s_touched) {
+        s_touched =
+            (int*)malloc(
+                ORDERED_MAX_NS * sizeof(int));
+
+        if (!s_touched) {
+            painter_newell_sancha_fast(model, face_count);
+            return;
+        }
     }
-    // by_zmin[] and active[] must each be able to hold up to
-    // visible_count faces.
+
+
+    if (s_pos_capacity < face_count) {
+        int* tmp;
+
+        tmp = (int*)realloc(
+            s_pos,
+            (size_t)face_count * sizeof(int));
+
+        if (!tmp) {
+            painter_newell_sancha_fast(model, face_count);
+            return;
+        }
+
+        s_pos = tmp;
+        s_pos_capacity = face_count;
+    }
+
+
     if (s_by_zmin_capacity < visible_count) {
-        int* tmp = (int*)realloc(s_by_zmin, visible_count * sizeof(int));
-        if (!tmp) { painter_newell_sancha_fast(model, face_count); return; }
+        int* tmp;
+
+        tmp = (int*)realloc(
+            s_by_zmin,
+            (size_t)visible_count * sizeof(int));
+
+        if (!tmp) {
+            painter_newell_sancha_fast(model, face_count);
+            return;
+        }
+
         s_by_zmin = tmp;
         s_by_zmin_capacity = visible_count;
     }
+
+
     if (s_active_capacity < visible_count) {
-        int* tmp = (int*)realloc(s_active, visible_count * sizeof(int));
-        if (!tmp) { painter_newell_sancha_fast(model, face_count); return; }
+        int* tmp;
+
+        tmp = (int*)realloc(
+            s_active,
+            (size_t)visible_count * sizeof(int));
+
+        if (!tmp) {
+            painter_newell_sancha_fast(model, face_count);
+            return;
+        }
+
         s_active = tmp;
         s_active_capacity = visible_count;
     }
 
-    int* hash_table   = s_hash_table;
-    OrderedPair* ordered = s_ordered;
-    int touched_count = 0; // number of buckets touched during THIS call (for the final targeted reset)
 
-    // Logical cache capacity for this call: bounded both by
-    // face_count*2 (never need more pairs than that in practice) and by
-    // the physically allocated capacity (ORDERED_MAX_CAP_V2).
-    int ordered_cap = face_count * 2;
-    if (ordered_cap > ORDERED_MAX_CAP_V2) ordered_cap = ORDERED_MAX_CAP_V2;
-    int ordered_count = 0; // number of entries actually used in ordered[] for this call
+    pos = s_pos;
+    by_zmin = s_by_zmin;
+    active = s_active;
 
-    // The diagnostic buffer is shared through a global variable (used
-    // elsewhere, e.g. the debug inspector): point it at our persistent
-    // buffer and reset the counter on every call.
-    inconclusive_pairs = s_inconclusive_pairs;
-    inconclusive_pairs_capacity = s_inconclusive_pairs ? ordered_cap : 0;
-    inconclusive_pairs_count = 0;
+    z_min = faces->z_min;
+    z_max = faces->z_max;
 
-    // Local pointers to the faces' geometry arrays, to avoid
-    // dereferencing faces-> on every access inside the hot loops below.
-    Fixed32* z_min = faces->z_min;
-    Fixed32* z_max = faces->z_max;
-    int* minx = faces->minx;
-    int* maxx = faces->maxx;
-    int* miny = faces->miny;
-    int* maxy = faces->maxy;
+    minx = faces->minx;
+    maxx = faces->maxx;
+    miny = faces->miny;
+    maxy = faces->maxy;
 
-    #define PAIR_HASH_V2(a, b)  ((((unsigned)(a) * 73856093u) ^ ((unsigned)(b) * 19349663u)) & HASH_MASK_V2)
 
-    // -------------------------------------------------
-    // 3. Build the reverse index pos[]
-    // -------------------------------------------------
-    // pos[face] gives the CURRENT position of `face` in sorted[].
-    // Needed because the steps below reason by face id (coming from the
-    // Z sweep, step 5), not by position -- and sorted[] changes as
-    // corrections are applied (do_move, step 6), so pos[] must be kept
-    // up to date at all times (see the update inside do_move).
-    int* pos = s_pos;
-    for (int idx = 0; idx < visible_count; ++idx) {
-        pos[sorted[idx]] = idx;
-    }
-
-    // -------------------------------------------------
-    // 4. Sort visible faces by ascending z_min (shell sort)
-    // -------------------------------------------------
-    // Prerequisite for the step-5 sweep: faces must be visited in order
-    // of their minimum Z bound to detect [z_min, z_max] interval
-    // overlaps in a single pass. Shell sort is chosen on purpose instead
-    // of a recursive sort (quicksort): no recursion, hence no risk of
-    // stack overflow on 65816/ORCA-C -- and it behaves well on input
-    // that is already roughly sorted (which is the case here, since
-    // sorted[] already comes out of the step-1 fast sort).
-    int* by_zmin = s_by_zmin;
-    for (int idx = 0; idx < visible_count; ++idx) {
-        by_zmin[idx] = sorted[idx];
-    }
+    /*
+     * ------------------------------------------------------------
+     * 3. Build current-position table
+     * ------------------------------------------------------------
+     */
     {
-        int gap = 1;
-        while (gap < visible_count / 3) gap = gap * 3 + 1; // Knuth-ish gap sequence
-        for (; gap > 0; gap /= 3) {
-            for (int idx = gap; idx < visible_count; ++idx) {
-                int tmp = by_zmin[idx];
-                Fixed32 tmp_zmin = z_min[tmp];
-                int k = idx;
-                while (k >= gap && z_min[by_zmin[k - gap]] > tmp_zmin) {
-                    by_zmin[k] = by_zmin[k - gap];
-                    k -= gap;
+        int i;
+
+        for (i = 0; i < visible_count; ++i)
+            pos[sorted[i]] = i;
+    }
+
+
+    /*
+     * ------------------------------------------------------------
+     * 4. Sort visible faces by ascending z_min
+     *
+     * This order is used only by the Z sweep.
+     * ------------------------------------------------------------
+     */
+    {
+        int i;
+        int gap;
+
+        for (i = 0; i < visible_count; ++i)
+            by_zmin[i] = sorted[i];
+
+        for (gap = visible_count / 2;
+             gap > 0;
+             gap /= 2) {
+
+            for (i = gap; i < visible_count; ++i) {
+
+                int f;
+                Fixed32 z;
+                int j;
+
+                f = by_zmin[i];
+                z = z_min[f];
+                j = i;
+
+                while (j >= gap &&
+                       z_min[by_zmin[j - gap]] > z) {
+
+                    by_zmin[j] =
+                        by_zmin[j - gap];
+
+                    j -= gap;
                 }
-                by_zmin[k] = tmp;
+
+                by_zmin[j] = f;
             }
         }
     }
 
-    // -------------------------------------------------
-    // 5. Sweep: enumerate every face pair that overlaps in Z, exactly
-    //    once.
-    // -------------------------------------------------
-    // This is the equivalent of "Test 1" (depth separation) from the
-    // Newell-Newell-Sancha algorithm, but found in O(n log n + k)
-    // instead of testing all n*(n-1)/2 pairs one by one: we sweep F
-    // along the Z axis (ascending z_min order) while maintaining an
-    // "active" list of faces whose [z_min, z_max] interval hasn't ended
-    // yet. Any face still active when we reach F necessarily overlaps F
-    // in Z (since its z_max is still ahead of F's z_min). k = the number
-    // of pairs that actually overlap, typically a small fraction of the
-    // total on a typical scene.
-    int* active = s_active;
-    int active_count = 0;
-    int candidate_count = 0;
 
-    for (int idx = 0; idx < visible_count; ++idx) {
-        int F = by_zmin[idx];
-        Fixed32 f_zmin = z_min[F];
+    /*
+     * ------------------------------------------------------------
+     * 5. Z sweep
+     *
+     * Generate only pairs whose Z intervals overlap.
+     *
+     * Therefore Newell test #1 (Z separation) is effectively
+     * performed here and such pairs never reach the expensive
+     * correction loop.
+     * ------------------------------------------------------------
+     */
+    active_count = 0;
+    candidate_count = 0;
 
-        // Drop finished intervals from the active list (their z_max can
-        // no longer overlap a future z_min, since z_min only increases
-        // from here on).
-        int w = 0;
-        for (int a = 0; a < active_count; ++a) {
-            if (z_max[active[a]] > f_zmin) {
-                active[w++] = active[a];
+    {
+        int n;
+
+        for (n = 0; n < visible_count; ++n) {
+
+            int f;
+            Fixed32 fmin;
+            int dst;
+            int a;
+
+            f = by_zmin[n];
+            fmin = z_min[f];
+
+            /*
+             * Remove faces whose Z interval has ended.
+             */
+            dst = 0;
+
+            for (a = 0; a < active_count; ++a) {
+
+                int q = active[a];
+
+                if (z_max[q] > fmin)
+                    active[dst++] = q;
             }
-        }
-        active_count = w;
 
-        // Every face still active overlaps F in Z: record the candidate
-        // pair (it will be re-tested against the finer criteria --
-        // bbox, polygons, planes -- in step 6).
-        for (int a = 0; a < active_count; ++a) {
-            if (s_candidates_capacity <= candidate_count) {
-                // List full: double its capacity (realloc, never freed
-                // between calls -- see the note at the top of the file
-                // about persistent buffers).
-                int newcap = s_candidates_capacity > 0 ? s_candidates_capacity * 2 : 256;
-                CandidatePair* tmp = (CandidatePair*)realloc(s_candidates, newcap * sizeof(CandidatePair));
-                if (!tmp) {
-                    // Out of memory for the candidate list: fall back to
-                    // the plain fast sort for this call only (no fine
-                    // correction this time, but no crash either).
-                    painter_newell_sancha_fast(model, face_count);
-                    return;
+            active_count = dst;
+
+
+            /*
+             * Every remaining active face overlaps f in Z.
+             */
+            for (a = 0; a < active_count; ++a) {
+
+                if (candidate_count >=
+                    s_candidates_capacity) {
+
+                    int newcap;
+                    CandidatePair* tmp;
+                    unsigned char* tmp_moved;
+
+                    if (s_candidates_capacity == 0)
+                        newcap = 64;
+                    else
+                        newcap =
+                            s_candidates_capacity * 2;
+
+                    tmp = (CandidatePair*)realloc(
+                        s_candidates,
+                        (size_t)newcap *
+                        sizeof(CandidatePair));
+
+                    if (!tmp) {
+                        painter_newell_sancha_fast(
+                            model, face_count);
+                        return;
+                    }
+
+                    s_candidates = tmp;
+                    s_candidates_capacity = newcap;
+
+
+                    /*
+                     * Grow the anti-oscillation array to the
+                     * same capacity.
+                     */
+                    if (s_moved_capacity < newcap) {
+
+                        tmp_moved =
+                            (unsigned char*)realloc(
+                                s_moved,
+                                (size_t)newcap *
+                                sizeof(unsigned char));
+
+                        if (!tmp_moved) {
+                            painter_newell_sancha_fast(
+                                model, face_count);
+                            return;
+                        }
+
+                        s_moved = tmp_moved;
+                        s_moved_capacity = newcap;
+                    }
                 }
-                s_candidates = tmp;
-                s_candidates_capacity = newcap;
-            }
-            s_candidates[candidate_count].a = active[a];
-            s_candidates[candidate_count].b = F;
-            ++candidate_count;
-        }
 
-        // F in turn becomes active for the faces that follow in the sweep.
-        active[active_count++] = F;
+
+                s_candidates[candidate_count].a =
+                    active[a];
+
+                s_candidates[candidate_count].b =
+                    f;
+
+                /*
+                 * This candidate has not caused a reversal yet.
+                 */
+                s_moved[candidate_count] = 0;
+
+                ++candidate_count;
+            }
+
+            active[active_count++] = f;
+        }
     }
 
-    CandidatePair* candidates = s_candidates;
 
-    // -------------------------------------------------
-    // 6. Correction passes
-    // -------------------------------------------------
-    // For each candidate pair (from the Z sweep above), apply the same
-    // criteria as the original Newell-Newell-Sancha algorithm, from
-    // cheapest to most expensive: bounding-box overlap, actual overlap
-    // of the projected polygons, then the relative position of the two
-    // faces' planes. If the current order is wrong, move the offending
-    // face (do_move). Repeat as long as a full pass still produces at
-    // least one change (do...while) -- necessary because moving one
-    // face can reveal or resolve other violations elsewhere in
-    // sorted[].
-    //
-    // Reminder of the two simplifications assumed here (see the header
-    // comment at the top of the file): an "inconclusive" case (none of
-    // the tests can decide, typically two faces that genuinely
-    // intersect) is NOT resolved by face splitting -- it is simply left
-    // in its current order and marked so it won't be re-tested. Likewise,
-    // no explicit cycle detection is performed: if several pairs'
-    // constraints contradict each other, the loop below may converge to
-    // a state that doesn't satisfy every constraint at once -- this is
-    // an accepted trade-off for this project, not an oversight.
-    int changed;
-
+    /*
+     * ------------------------------------------------------------
+     * 6. Newell correction passes
+     * ------------------------------------------------------------
+     *
+     * Important:
+     *
+     * A failed Newell test does NOT imply that the faces must
+     * be reversed. It only means that the next test has to be
+     * attempted.
+     *
+     * Only after all Newell separation tests fail and the
+     * projections really overlap do we invoke the ray cast.
+     *
+     * No polygon splitting.
+     *
+     * Each candidate is allowed to cause at most one reversal.
+     * If it later requests another reversal, preserve the current
+     * order instead of allowing an endless oscillation.
+     * ------------------------------------------------------------
+     */
     do {
+        int c;
+
         changed = 0;
 
-        for (int c = 0; c < candidate_count; ++c) {
-            int A = candidates[c].a;
-            int B = candidates[c].b;
+        for (c = 0; c < candidate_count; ++c) {
 
-            // Determine which of the two is currently drawn first (P,
-            // position i) and which is drawn second (Q, position j) --
-            // this is a property of THEIR CURRENT POSITION in sorted[],
-            // which can change from one pass to the next as other
-            // pairs' moves (do_move) shift things around.
-            int i, j, P, Q;
-            if (pos[A] < pos[B]) { i = pos[A]; j = pos[B]; P = A; Q = B; }
-            else                 { i = pos[B]; j = pos[A]; P = B; Q = A; }
+            int A;
+            int B;
 
-            // -------------------------------------------------
-            // Has this pair already been decided (correct or
-            // inconclusive) in a previous pass? If so, no need to redo
-            // the geometric tests -- the verdict only depends on the
-            // two faces' geometry, not on their position.
-            // -------------------------------------------------
-            unsigned h = PAIR_HASH_V2(P, Q);
-            int idx2 = hash_table[h];
-            int already_known = 0;
+            int i;
+            int j;
 
-            while (idx2 >= 0) {
-                if ((ordered[idx2].face1 == P && ordered[idx2].face2 == Q) ||
-                    (ordered[idx2].face1 == Q && ordered[idx2].face2 == P)) {
-                    already_known = 1;
+            int P;
+            int Q;
+
+            unsigned h;
+            int idx;
+            int known;
+
+
+            A = s_candidates[c].a;
+            B = s_candidates[c].b;
+
+
+            /*
+             * P is currently drawn before Q.
+             */
+            if (pos[A] < pos[B]) {
+                i = pos[A];
+                j = pos[B];
+
+                P = A;
+                Q = B;
+            }
+            else {
+                i = pos[B];
+                j = pos[A];
+
+                P = B;
+                Q = A;
+            }
+
+
+            /*
+             * ----------------------------------------------------
+             * Directional pair cache
+             * ----------------------------------------------------
+             *
+             * Only skip the pair if THIS precise orientation
+             * P-before-Q has already been validated.
+             *
+             * Q-before-P is NOT considered equivalent.
+             */
+            h = PAIR_HASH_NS(P, Q);
+
+            idx = s_hash[h];
+            known = 0;
+
+            while (idx >= 0) {
+
+                if (s_ordered[idx].face1 == P &&
+                    s_ordered[idx].face2 == Q) {
+
+                    known = 1;
                     break;
                 }
-                idx2 = ordered[idx2].next;
+
+                idx = s_ordered[idx].next;
             }
-            if (already_known) continue;
 
-            // Test 1 (Z separation) is already guaranteed by
-            // construction here: this pair comes from the step-5 sweep,
-            // which only enumerated pairs whose Z intervals overlap. No
-            // need to re-check it.
-
-            // Test 2 & 3: 2D bounding-box overlap (cheap rejection
-            // before the more expensive polygon test)
-            if (maxx[P] <= minx[Q] || maxx[Q] <= minx[P]) continue;
-            if (maxy[P] <= miny[Q] || maxy[Q] <= miny[P]) continue;
-
-            // Test 4: actual overlap of the polygons as projected on screen
-            if (!projected_polygons_overlap(model, P, Q)) continue;
-
-            // Tests 5 & 6: position of Q relative to P's plane.
-            // geo == -1: the current order (P before Q) is correct
-            // geo ==  1: must invert (Q must be drawn before P)
-            // geo ==  0: undetermined (see the "inconclusive" handling below)
-            int geo = geometric_face_relation(model, P, Q);
-
-            if (geo == -1) {
-                // Order confirmed correct: remember it so this pair is
-                // never tested again.
-                if (ordered_count < ordered_cap) {
-                    ordered[ordered_count].face1 = P;
-                    ordered[ordered_count].face2 = Q;
-                    ordered[ordered_count].next  = hash_table[h];
-                    hash_table[h] = ordered_count;
-                    s_touched_buckets[touched_count++] = h;
-                    ++ordered_count;
-                }
+            if (known)
                 continue;
+
+
+            /*
+             * ----------------------------------------------------
+             * Newell test #1: Z separation
+             * ----------------------------------------------------
+             *
+             * Already handled by the Z sweep.
+             */
+
+
+            /*
+             * ----------------------------------------------------
+             * Newell test #2: X separation
+             * ----------------------------------------------------
+             */
+            if (maxx[P] <= minx[Q] ||
+                maxx[Q] <= minx[P]) {
+
+                goto order_valid;
             }
 
-            if (geo == 1) {
-                // Unambiguous verdict in the P->Q direction: must invert.
-                goto do_move;
+
+            /*
+             * ----------------------------------------------------
+             * Newell test #3: Y separation
+             * ----------------------------------------------------
+             */
+            if (maxy[P] <= miny[Q] ||
+                maxy[Q] <= miny[P]) {
+
+                goto order_valid;
             }
 
-            // The P->Q test couldn't decide: try the opposite direction.
+
+            /*
+             * ----------------------------------------------------
+             * Newell test #4
+             * ----------------------------------------------------
+             *
+             * Q is on the appropriate side of P's plane.
+             *
+             * Only the result that PROVES the current ordering
+             * terminates the tests.
+             *
+             * The opposite result is not sufficient to reverse
+             * the faces because the infinite plane may cross the
+             * other polygon.
+             */
             {
-                int geo2 = geometric_face_relation(model, Q, P);
-                if (geo2 == -1) {
-                    // The reverse order is required.
+                int geo_pq;
+
+                geo_pq =
+                    geometric_face_relation(
+                        model, P, Q);
+
+                if (geo_pq == -1)
+                    goto order_valid;
+            }
+
+
+            /*
+             * ----------------------------------------------------
+             * Newell test #5
+             * ----------------------------------------------------
+             *
+             * Complementary plane test.
+             *
+             * Again, only the result proving P-before-Q is used.
+             */
+            {
+                int geo_qp;
+
+                geo_qp =
+                    geometric_face_relation(
+                        model, Q, P);
+
+                if (geo_qp == 1)
+                    goto order_valid;
+            }
+
+
+            /*
+             * ----------------------------------------------------
+             * Newell test #6: projected overlap
+             * ----------------------------------------------------
+             *
+             * If the projected polygons do not overlap, their
+             * relative drawing order cannot affect the image.
+             */
+            if (!projected_polygons_overlap(
+                    model, P, Q)) {
+
+                goto order_valid;
+            }
+
+
+            /*
+             * ----------------------------------------------------
+             * All Newell tests failed.
+             * ----------------------------------------------------
+             *
+             * Instead of Newell's polygon splitting mechanism,
+             * determine the actual visible order with the
+             * hierarchical ray cast.
+             */
+            {
+                int rc;
+
+                rc = ray_cast_hierarchical(
+                    model, P, Q);
+
+                if (rc > 0) {
+                    goto order_valid;
+                }
+
+                if (rc < 0) {
+
+                    /*
+                     * The same candidate has already caused one
+                     * reversal.
+                     *
+                     * A second reversal could restore the previous
+                     * relative order and cause an endless loop.
+                     */
+                    if (s_moved[c]) {
+                        goto order_unresolved;
+                    }
+
+                    /*
+                     * Allow exactly one reversal for this
+                     * candidate.
+                     */
+                    s_moved[c] = 1;
+
                     goto do_move;
                 }
+
+                /*
+                 * Ray cast is also inconclusive.
+                 *
+                 * Preserve the current order and remember it
+                 * so this pair is not repeatedly tested.
+                 */
+                goto order_unresolved;
             }
 
-            // -------------------------------------------------
-            // "Inconclusive" case: neither P->Q nor Q->P can decide
-            // (typically, the two faces genuinely intersect in 3D). As
-            // noted at the top of the file, this function does not
-            // split faces to resolve this case: the current order is
-            // simply left as-is, the pair is recorded for diagnostics
-            // (inconclusive_pairs, used by the debug inspector), and it
-            // is marked "already decided" so it won't be needlessly
-            // re-tested in later passes.
-            // -------------------------------------------------
-            if (inconclusive_pairs_count < inconclusive_pairs_capacity) {
-                inconclusive_pairs[inconclusive_pairs_count].face1 = P;
-                inconclusive_pairs[inconclusive_pairs_count].face2 = Q;
-                ++inconclusive_pairs_count;
-            }
-            if (ordered_count < ordered_cap) {
-                ordered[ordered_count].face1 = P;
-                ordered[ordered_count].face2 = Q;
-                ordered[ordered_count].next  = hash_table[h];
-                hash_table[h] = ordered_count;
-                s_touched_buckets[touched_count++] = h;
-                ++ordered_count;
-            }
-            continue;
 
-        do_move:
-            // Move Q (currently at position j) to just before P
-            // (position i): shift everything between i and j-1 one slot
-            // to the right, then place Q at position i. pos[] is kept in
-            // sync for every shifted slot so it always matches sorted[].
+            /*
+             * ----------------------------------------------------
+             * Ray cast says Q must precede P.
+             * ----------------------------------------------------
+             */
+do_move:
             {
-                int tmp = sorted[j];
-                for (int k = j; k > i; --k) {
+                int tmp;
+                int k;
+
+                tmp = sorted[j];
+
+                for (k = j; k > i; --k) {
+
                     sorted[k] = sorted[k - 1];
+
                     pos[sorted[k]] = k;
                 }
+
                 sorted[i] = tmp;
                 pos[tmp] = i;
             }
 
-            // A change happened: the do...while loop will need at least
-            // one more full pass to check that this move didn't break
-            // anything elsewhere.
+            /*
+             * Do NOT cache P-before-Q: that orientation has just
+             * been proved wrong.
+             *
+             * Also do not automatically cache Q-before-P here.
+             * Other moved faces may change which candidate pairs
+             * need to be considered during the following pass.
+             */
             changed = 1;
 
-            // Remember the now-correct reversed order (Q before P), so
-            // this pair is never tested again.
-            if (ordered_count < ordered_cap) {
-                unsigned h2 = PAIR_HASH_V2(Q, P);
-                ordered[ordered_count].face1 = Q;
-                ordered[ordered_count].face2 = P;
-                ordered[ordered_count].next  = hash_table[h2];
-                hash_table[h2] = ordered_count;
-                s_touched_buckets[touched_count++] = h2;
+            continue;
+
+
+            /*
+             * ----------------------------------------------------
+             * Current P-before-Q ordering has been validated.
+             * ----------------------------------------------------
+             */
+order_valid:
+
+            if (ordered_count < ORDERED_MAX_NS) {
+
+                unsigned hh;
+
+                hh = PAIR_HASH_NS(P, Q);
+
+                s_ordered[ordered_count].face1 = P;
+                s_ordered[ordered_count].face2 = Q;
+
+                s_ordered[ordered_count].next =
+                    s_hash[hh];
+
+                /*
+                 * Record the bucket only when it was previously
+                 * empty. This avoids overflowing s_touched[] with
+                 * duplicate bucket numbers.
+                 */
+                if (s_hash[hh] == -1 &&
+                    touched_count < ORDERED_MAX_NS) {
+
+                    s_touched[touched_count++] =
+                        (int)hh;
+                }
+
+                s_hash[hh] = ordered_count;
+
                 ++ordered_count;
             }
+
+            continue;
+
+
+            /*
+             * ----------------------------------------------------
+             * Neither Newell nor the ray cast could decide,
+             * or the same candidate requested a second reversal.
+             * ----------------------------------------------------
+             *
+             * No split and no cycle processing: preserve the
+             * current order.
+             */
+order_unresolved:
+
+            if (inconclusive_pairs != NULL &&
+                inconclusive_pairs_count <
+                inconclusive_pairs_capacity) {
+
+                inconclusive_pairs[
+                    inconclusive_pairs_count].face1 = P;
+
+                inconclusive_pairs[
+                    inconclusive_pairs_count].face2 = Q;
+
+                ++inconclusive_pairs_count;
+            }
+
+
+            /*
+             * Cache the current orientation so that an unresolved
+             * pair is not tested on every subsequent pass.
+             */
+            if (ordered_count < ORDERED_MAX_NS) {
+
+                unsigned hh;
+
+                hh = PAIR_HASH_NS(P, Q);
+
+                s_ordered[ordered_count].face1 = P;
+                s_ordered[ordered_count].face2 = Q;
+
+                s_ordered[ordered_count].next =
+                    s_hash[hh];
+
+                if (s_hash[hh] == -1 &&
+                    touched_count < ORDERED_MAX_NS) {
+
+                    s_touched[touched_count++] =
+                        (int)hh;
+                }
+
+                s_hash[hh] = ordered_count;
+
+                ++ordered_count;
+            }
+
         }
+
     } while (changed);
 
-    // -------------------------------------------------
-    // 7. Cleanup: only reset the hash-table buckets actually touched
-    //    during this call (instead of all HASH_SIZE_V2 entries), so the
-    //    table is fully back to -1 for the next call -- exactly as if
-    //    it had been entirely cleared, but at a cost proportional to the
-    //    number of pairs actually processed.
-    // -------------------------------------------------
-    for (int t = 0; t < touched_count; ++t) {
-        hash_table[s_touched_buckets[t]] = -1;
+
+    /*
+     * ------------------------------------------------------------
+     * 7. Reset only the hash buckets used during this call
+     * ------------------------------------------------------------
+     */
+    {
+        int i;
+
+        for (i = 0; i < touched_count; ++i)
+            s_hash[s_touched[i]] = -1;
     }
+
+
+#undef PAIR_HASH_NS
+#undef HASH_SIZE_NS
+#undef HASH_MASK_NS
+#undef ORDERED_MAX_NS
 }
+
+
 
 // --- Pair cache (used by painter_geoV2) ---
 static PairCache* pair_cache_create(int capacity) {
@@ -4419,260 +4752,708 @@ static int projected_polygons_overlap_old(Model3D* model, int f1, int f2) {
  * non-determinism in the original code, tied to wall-clock time rather
  * than face data.
  * ===================================================================== */
- static int projected_polygons_overlap(Model3D* model, int f1, int f2) {
+
+/*
+ * boundary_enters_polygon
+ * =======================
+ *
+ * Detect a positive-area overlap near a shared projected vertex
+ * or shared edge.
+ *
+ * The strict segment intersection test deliberately ignores:
+ *   - vertex/vertex contacts,
+ *   - vertex/edge contacts,
+ *   - collinear edges,
+ *   - shared edges.
+ *
+ * However, two polygons may share part of their boundary while
+ * their interiors still overlap. In that case, an edge leaving a
+ * common projected vertex enters the strict interior of the other
+ * polygon.
+ *
+ * Pure boundary contact is NOT considered an overlap.
+ *
+ * Returns:
+ *   1 : a source edge enters the strict interior of target_face
+ *   0 : no such penetration was found
+ */
+
+
+ static int projected_polygons_overlap(Model3D* model, int f1, int f2)
+{
     if (!model) return 0;
+
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
 
     int n1 = faces->vertex_count[f1];
     int n2 = faces->vertex_count[f2];
-    if (n1 < 3 || n2 < 3) return 0; /* degenerate face, cannot overlap */
 
-    /* instrumentation, unchanged from original */
+    if (n1 < 3 || n2 < 3)
+        return 0;
+
+    /* Instrumentation */
     overlapCheckCount++;
 
-    /* Watchdog: bail out conservatively (return "no overlap") if this pair
-     * is taking pathologically long, to avoid freezing the UI. Checked at
-     * the top of every outer-loop iteration below, exactly like the
-     * original. */
+    /*
+     * Watchdog: bail out conservatively if this pair takes
+     * pathologically long.
+     */
     long proj_start_tick = GetTick();
     const long PROJ_OVERLAP_WATCHDOG_MS = 1000;
 
-    int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
-    int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+    int minx1 = faces->minx[f1];
+    int maxx1 = faces->maxx[f1];
+    int miny1 = faces->miny[f1];
+    int maxy1 = faces->maxy[f1];
 
-    /* ---- Step 1: cheap whole-polygon AABB rejection ----
-     * If the integer bounding boxes are disjoint or only touch at an
-     * edge/point, the polygons cannot overlap. Touching-only counts as
-     * non-overlap (hence the strict <=). This is unchanged from the
-     * original and is the single cheapest filter, so it stays first. */
-    if (maxx1 <= minx2 || maxx2 <= minx1 || maxy1 <= miny2 || maxy2 <= miny1) return 0;
+    int minx2 = faces->minx[f2];
+    int maxx2 = faces->maxx[f2];
+    int miny2 = faces->miny[f2];
+    int maxy2 = faces->maxy[f2];
+
+    /*
+     * Step 1: whole-polygon AABB rejection.
+     *
+     * Touching only at an edge or point is not considered overlap.
+     */
+    if (maxx1 <= minx2 ||
+        maxx2 <= minx1 ||
+        maxy1 <= miny2 ||
+        maxy2 <= miny1)
+    {
+        return 0;
+    }
 
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
 
-    /* ---- (Old "Step 2" intentionally removed here — see the big header
-     * comment above for the full justification.) ---- */
-
-    /* ---- Precompute f2's edges once ----
-     * Build small local arrays holding, for every edge j of f2:
-     *   - its two endpoints (f2_cx/f2_cy -> f2_dx/f2_dy)
-     *   - its axis-aligned bounding box (f2_minx/f2_maxx/f2_miny/f2_maxy)
-     * These are exactly the same values the original code recomputed from
-     * scratch on every (i, j) pair inside the loop below - computing them
-     * once here and reading them back is a pure reuse optimization with
-     * zero effect on the numbers themselves.
-     *
-     * MAX_FACE_VERTICES already bounds the vertex count of any face
-     * elsewhere in the codebase, so the "happy path" below always applies
-     * in practice. The `n2 <= MAX_FACE_VERTICES` guard is defensive only:
-     * if it were ever false, we transparently fall back to recomputing
-     * f2's edge data on the fly inside the loop, i.e. exactly what the
-     * original always did - so this can never silently produce a wrong
-     * result even if that assumption is violated in the future. */
+    /*
+     * Precompute all edges of f2.
+     */
     int f2_precomputed = (n2 <= MAX_FACE_VERTICES);
-    int f2_cx[MAX_FACE_VERTICES], f2_cy[MAX_FACE_VERTICES];
-    int f2_dx[MAX_FACE_VERTICES], f2_dy[MAX_FACE_VERTICES];
-    int f2_minx[MAX_FACE_VERTICES], f2_maxx[MAX_FACE_VERTICES];
-    int f2_miny[MAX_FACE_VERTICES], f2_maxy[MAX_FACE_VERTICES];
+
+    int f2_cx[MAX_FACE_VERTICES];
+    int f2_cy[MAX_FACE_VERTICES];
+
+    int f2_dx[MAX_FACE_VERTICES];
+    int f2_dy[MAX_FACE_VERTICES];
+
+    int f2_minx[MAX_FACE_VERTICES];
+    int f2_maxx[MAX_FACE_VERTICES];
+
+    int f2_miny[MAX_FACE_VERTICES];
+    int f2_maxy[MAX_FACE_VERTICES];
 
     if (f2_precomputed) {
-        for (int j = 0; j < n2; ++j) {
-            int j2 = (j+1) % n2;
-            int vc = faces->vertex_indices_buffer[off2 + j]  - 1;
-            int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
-            int cx = vtx->x2d[vc], cy = vtx->y2d[vc];
-            int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
-            f2_cx[j] = cx; f2_cy[j] = cy;
-            f2_dx[j] = dx; f2_dy[j] = dy;
-            f2_minx[j] = cx < dx ? cx : dx; f2_maxx[j] = cx > dx ? cx : dx;
-            f2_miny[j] = cy < dy ? cy : dy; f2_maxy[j] = cy > dy ? cy : dy;
+
+        int j;
+
+        for (j = 0; j < n2; ++j) {
+
+            int j2;
+            int vc;
+            int vd;
+
+            int cx;
+            int cy;
+            int dx;
+            int dy;
+
+            j2 = (j + 1) % n2;
+
+            vc =
+                faces->vertex_indices_buffer[
+                    off2 + j] - 1;
+
+            vd =
+                faces->vertex_indices_buffer[
+                    off2 + j2] - 1;
+
+            cx = vtx->x2d[vc];
+            cy = vtx->y2d[vc];
+
+            dx = vtx->x2d[vd];
+            dy = vtx->y2d[vd];
+
+            f2_cx[j] = cx;
+            f2_cy[j] = cy;
+
+            f2_dx[j] = dx;
+            f2_dy[j] = dy;
+
+            f2_minx[j] = (cx < dx) ? cx : dx;
+            f2_maxx[j] = (cx > dx) ? cx : dx;
+
+            f2_miny[j] = (cy < dy) ? cy : dy;
+            f2_maxy[j] = (cy > dy) ? cy : dy;
         }
     }
 
-    /* ---- Edge-vs-edge proper intersection scan (formerly "Step 3") ----
-     * For every edge of f1, walk every edge of f2:
-     *   - quick per-edge AABB reject (touching-only = non-overlap, hence <=)
-     *   - if the AABBs overlap, run the real integer/fixed segment test
-     * Accept (return 1) on the very first proper intersection found. This
-     * alone is enough to detect any case of two polygons whose boundaries
-     * genuinely cross - see the header comment for why this makes the old
-     * Step 2 redundant. */
+    /*
+     * Step 2: edge-vs-edge strict intersection.
+     *
+     * segs_intersect_int() must detect only genuine crossings.
+     * Vertex contacts, shared edges and tangencies do not count.
+     */
     int candidate = 0;
-    for (int i = 0; i < n1; ++i) {
-        if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) {
-            /* watchdog triggered - conservative bail-out, same as original */
+
+    {
+        int i;
+
+        for (i = 0; i < n1; ++i) {
+
+            int i2;
+            int va;
+            int vb;
+
+            int ax;
+            int ay;
+            int bx;
+            int by;
+
+            int aminx;
+            int amaxx;
+            int aminy;
+            int amaxy;
+
+            if (GetTick() - proj_start_tick >
+                PROJ_OVERLAP_WATCHDOG_MS)
+            {
+                return 0;
+            }
+
+            i2 = (i + 1) % n1;
+
+            va =
+                faces->vertex_indices_buffer[
+                    off1 + i] - 1;
+
+            vb =
+                faces->vertex_indices_buffer[
+                    off1 + i2] - 1;
+
+            ax = vtx->x2d[va];
+            ay = vtx->y2d[va];
+
+            bx = vtx->x2d[vb];
+            by = vtx->y2d[vb];
+
+            aminx = (ax < bx) ? ax : bx;
+            amaxx = (ax > bx) ? ax : bx;
+
+            aminy = (ay < by) ? ay : by;
+            amaxy = (ay > by) ? ay : by;
+
+            {
+                int j;
+
+                for (j = 0; j < n2; ++j) {
+
+                    int cx;
+                    int cy;
+                    int dx;
+                    int dy;
+
+                    int cminx;
+                    int cmaxx;
+                    int cminy;
+                    int cmaxy;
+
+                    if (f2_precomputed) {
+
+                        cx = f2_cx[j];
+                        cy = f2_cy[j];
+
+                        dx = f2_dx[j];
+                        dy = f2_dy[j];
+
+                        cminx = f2_minx[j];
+                        cmaxx = f2_maxx[j];
+
+                        cminy = f2_miny[j];
+                        cmaxy = f2_maxy[j];
+
+                    } else {
+
+                        int j2;
+                        int vc;
+                        int vd;
+
+                        j2 = (j + 1) % n2;
+
+                        vc =
+                            faces->vertex_indices_buffer[
+                                off2 + j] - 1;
+
+                        vd =
+                            faces->vertex_indices_buffer[
+                                off2 + j2] - 1;
+
+                        cx = vtx->x2d[vc];
+                        cy = vtx->y2d[vc];
+
+                        dx = vtx->x2d[vd];
+                        dy = vtx->y2d[vd];
+
+                        cminx = (cx < dx) ? cx : dx;
+                        cmaxx = (cx > dx) ? cx : dx;
+
+                        cminy = (cy < dy) ? cy : dy;
+                        cmaxy = (cy > dy) ? cy : dy;
+                    }
+
+                    /*
+                     * Edge AABB quick rejection.
+                     */
+                    if (amaxx <= cminx ||
+                        cmaxx <= aminx ||
+                        amaxy <= cminy ||
+                        cmaxy <= aminy)
+                    {
+                        continue;
+                    }
+
+                    if (segs_intersect_int(
+                            ax, ay,
+                            bx, by,
+                            cx, cy,
+                            dx, dy))
+                    {
+                        candidate = 1;
+
+                        overlapCheckCount++;
+                        overlapSegiAccept++;
+
+                        break;
+                    }
+                }
+            }
+
+            if (candidate)
+                return 1;
+        }
+    }
+
+    /*
+     * Step 3: vertex containment.
+     *
+     * Boundary points are outside according to point_in_poly_int().
+     */
+    if (!candidate) {
+
+        int ii;
+
+        for (ii = 0; ii < n1; ++ii) {
+
+            int vid;
+            int px;
+            int py;
+
+            if (GetTick() - proj_start_tick >
+                PROJ_OVERLAP_WATCHDOG_MS)
+            {
+                return 0;
+            }
+
+            vid =
+                faces->vertex_indices_buffer[
+                    off1 + ii] - 1;
+
+            if (vid < 0 ||
+                vid >= vtx->vertex_count)
+            {
+                continue;
+            }
+
+            px = vtx->x2d[vid];
+            py = vtx->y2d[vid];
+
+            if (px < minx2 ||
+                px > maxx2 ||
+                py < miny2 ||
+                py > maxy2)
+            {
+                continue;
+            }
+
+            if (point_in_poly_int(
+                    px, py,
+                    faces, vtx,
+                    f2, n2))
+            {
+                candidate = 1;
+                break;
+            }
+        }
+    }
+
+    if (!candidate) {
+
+        int jj;
+
+        for (jj = 0; jj < n2; ++jj) {
+
+            int vid;
+            int px;
+            int py;
+
+            if (GetTick() - proj_start_tick >
+                PROJ_OVERLAP_WATCHDOG_MS)
+            {
+                return 0;
+            }
+
+            vid =
+                faces->vertex_indices_buffer[
+                    off2 + jj] - 1;
+
+            if (vid < 0 ||
+                vid >= vtx->vertex_count)
+            {
+                continue;
+            }
+
+            px = vtx->x2d[vid];
+            py = vtx->y2d[vid];
+
+            if (px < minx1 ||
+                px > maxx1 ||
+                py < miny1 ||
+                py > maxy1)
+            {
+                continue;
+            }
+
+            if (point_in_poly_int(
+                    px, py,
+                    faces, vtx,
+                    f1, n1))
+            {
+                candidate = 1;
+                break;
+            }
+        }
+    }
+
+    /*
+     * Step 4: identical polygons.
+     *
+     * IMPORTANT:
+     *
+     * Do NOT return 0 here when no strict crossing or vertex
+     * containment was found.
+     *
+     * Two projected polygons can have a positive common area
+     * without either condition being detected, particularly when
+     * they share vertices or edges.
+     *
+     * In that situation the sampling and exact clipping stages
+     * below are allowed to make the final decision.
+     */
+    if (!candidate) {
+
+        if (faces_vertices_equal(
+                faces,
+                vtx,
+                f1,
+                f2))
+        {
+            return 1;
+        }
+    }
+
+    /*
+     * Steps 5-7: sampling followed by exact clipping.
+     */
+    {
+        int oxmin;
+        int oxmax;
+        int oymin;
+        int oymax;
+
+        oxmin =
+            (minx1 > minx2) ?
+            minx1 : minx2;
+
+        oxmax =
+            (maxx1 < maxx2) ?
+            maxx1 : maxx2;
+
+        oymin =
+            (miny1 > miny2) ?
+            miny1 : miny2;
+
+        oymax =
+            (maxy1 < maxy2) ?
+            maxy1 : maxy2;
+
+        if (oxmin > oxmax ||
+            oymin > oymax)
+        {
             return 0;
         }
-        int i2 = (i+1) % n1;
-        int va = faces->vertex_indices_buffer[off1 + i] - 1;
-        int vb = faces->vertex_indices_buffer[off1 + i2] - 1;
-        int ax = vtx->x2d[va], ay = vtx->y2d[va];
-        int bx = vtx->x2d[vb], by = vtx->y2d[vb];
-        int aminx = ax < bx ? ax : bx; int amaxx = ax > bx ? ax : bx;
-        int aminy = ay < by ? ay : by; int amaxy = ay > by ? ay : by;
 
-        for (int j = 0; j < n2; ++j) {
-            int cx, cy, dx, dy;
-            int cminx, cmaxx, cminy, cmaxy;
+        /*
+         * Step 5: center of intersection bbox.
+         */
+        {
+            int cx;
+            int cy;
 
-            if (f2_precomputed) {
-                /* fast path: just read back the precomputed edge data */
-                cx = f2_cx[j]; cy = f2_cy[j];
-                dx = f2_dx[j]; dy = f2_dy[j];
-                cminx = f2_minx[j]; cmaxx = f2_maxx[j];
-                cminy = f2_miny[j]; cmaxy = f2_maxy[j];
-            } else {
-                /* defensive fallback: recompute on the fly, exactly like
-                 * the original code always did */
-                int j2 = (j+1) % n2;
-                int vc = faces->vertex_indices_buffer[off2 + j]  - 1;
-                int vd = faces->vertex_indices_buffer[off2 + j2] - 1;
-                cx = vtx->x2d[vc]; cy = vtx->y2d[vc];
-                dx = vtx->x2d[vd]; dy = vtx->y2d[vd];
-                cminx = cx < dx ? cx : dx; cmaxx = cx > dx ? cx : dx;
-                cminy = cy < dy ? cy : dy; cmaxy = cy > dy ? cy : dy;
-            }
+            cx = (oxmin + oxmax) / 2;
+            cy = (oymin + oymax) / 2;
 
-            /* per-edge AABB quick reject before the (more expensive)
-             * exact segment intersection test */
-            if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
-
-            if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) {
-                candidate = 1;
-                overlapCheckCount++; overlapSegiAccept++;
-                break; /* no need to keep scanning f2's edges for this i */
+            if (point_in_poly_int(
+                    cx, cy,
+                    faces, vtx,
+                    f1, n1) &&
+                point_in_poly_int(
+                    cx, cy,
+                    faces, vtx,
+                    f2, n2))
+            {
+                overlapSampleAccept++;
+                return 1;
             }
         }
-        if (candidate) return 1; /* early accept on proper intersection */
-    }
 
-    /* ---- Step 4: containment tests (unchanged) ----
-     * At this point no edges of f1 and f2 cross. The polygons can still
-     * overlap if one is entirely (or partially, without crossing - e.g.
-     * exact vertex coincidence handled by Step 5) inside the other. Check
-     * every vertex of f1 against f2, skipping vertices clearly outside
-     * f2's bbox, and vice versa. A vertex lying exactly on the other
-     * polygon's boundary is NOT considered inside (point_in_poly_int's
-     * convention), matching the original. */
-    if (!candidate) {
-        for (int ii = 0; ii < n1; ++ii) {
-            if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) { return 0; }
-            int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
-            if (vid < 0 || vid >= vtx->vertex_count) continue;
-            int px = vtx->x2d[vid], py = vtx->y2d[vid];
-            if (px < minx2 || px > maxx2 || py < miny2 || py > maxy2) continue;
-            if (point_in_poly_int(px, py, faces, vtx, f2, n2)) { candidate = 1; break; }
+        /*
+         * Step 6: adaptive 3 x 3 sampling.
+         */
+        {
+            int ixmin;
+            int ixmax;
+            int iymin;
+            int iymax;
+
+            int W;
+            int H;
+
+            int sample_accept;
+            int N;
+
+            int sx;
+            int sy;
+
+            ixmin = oxmin;
+            ixmax = oxmax;
+
+            iymin = oymin;
+            iymax = oymax;
+
+            W = ixmax - ixmin;
+            H = iymax - iymin;
+
+            sample_accept = 0;
+            N = 3;
+
+            for (sx = 0;
+                 sx < N;
+                 ++sx)
+            {
+                for (sy = 0;
+                     sy < N;
+                     ++sy)
+                {
+                    int tx;
+                    int ty;
+
+                    tx =
+                        ixmin +
+                        (((2 * sx + 1) * W +
+                          (2 * N - 1)) /
+                         (2 * N));
+
+                    ty =
+                        iymin +
+                        (((2 * sy + 1) * H +
+                          (2 * N - 1)) /
+                         (2 * N));
+
+                    if (point_in_poly_int(
+                            tx, ty,
+                            faces, vtx,
+                            f1, n1) &&
+                        point_in_poly_int(
+                            tx, ty,
+                            faces, vtx,
+                            f2, n2))
+                    {
+                        sample_accept = 1;
+                        break;
+                    }
+                }
+
+                if (sample_accept)
+                    break;
+            }
+
+            if (sample_accept) {
+
+                overlapSampleAccept++;
+                return 1;
+            }
         }
-    }
-    if (!candidate) {
-        for (int jj = 0; jj < n2; ++jj) {
-            if (GetTick() - proj_start_tick > PROJ_OVERLAP_WATCHDOG_MS) { return 0; }
-            int vid = faces->vertex_indices_buffer[off2 + jj] - 1;
-            if (vid < 0 || vid >= vtx->vertex_count) continue;
-            int px = vtx->x2d[vid], py = vtx->y2d[vid];
-            if (px < minx1 || px > maxx1 || py < miny1 || py > maxy1) continue;
-            if (point_in_poly_int(px, py, faces, vtx, f1, n1)) { candidate = 1; break; }
+
+        /*
+         * Step 7: exact Fixed64 Sutherland-Hodgman clipping.
+         */
+        overlapClipCalls++;
+
+        {
+            unsigned long long min_area2_fixed;
+            unsigned long long bbox_limit;
+
+            min_area2_fixed =
+                (unsigned long long)
+                (2.0 *
+                 MIN_INTERSECTION_AREA_PIXELS *
+                 (double)FIXED_SCALE *
+                 (double)FIXED_SCALE +
+                 0.5);
+
+            bbox_limit = 0;
+
+            if (!(oxmin > oxmax ||
+                  oymin > oymax))
+            {
+                unsigned long long bbox_pixels;
+                unsigned long long scale2;
+
+                bbox_pixels =
+                    (unsigned long long)
+                    (oxmax - oxmin) *
+                    (unsigned long long)
+                    (oymax - oymin);
+
+                scale2 =
+                    (unsigned long long)
+                    FIXED_SCALE *
+                    (unsigned long long)
+                    FIXED_SCALE;
+
+                bbox_limit =
+                    2ULL *
+                    bbox_pixels *
+                    scale2;
+            }
+
+            /*
+             * First clipping order:
+             * f1 clipped by f2.
+             */
+            {
+                int tx;
+                int ty;
+
+                long long a2;
+
+                int ok1;
+
+                unsigned long long area2_1;
+
+                int valid1;
+
+                tx = 0;
+                ty = 0;
+                a2 = 0;
+
+                debug_overlap_subj = f1;
+                debug_overlap_clip = f2;
+
+                ok1 =
+                    compute_intersection_centroid_ordered_fixed(
+                        model,
+                        f1,
+                        f2,
+                        &tx,
+                        &ty,
+                        &a2);
+
+                debug_overlap_subj = -1;
+                debug_overlap_clip = -1;
+
+                area2_1 =
+                    (unsigned long long)
+                    ((a2 >= 0) ?
+                     a2 : -a2);
+
+                debug_clip_fixed_area =
+                    (double)area2_1 * 0.5;
+
+                valid1 =
+                    (ok1 &&
+                     debug_clip_fixed_vcount >= 3 &&
+                     area2_1 >= min_area2_fixed &&
+                     area2_1 <= bbox_limit);
+
+                if (valid1) {
+
+                    overlapClipAccept++;
+                    return 1;
+                }
+            }
+
+            /*
+             * Second clipping order:
+             * f2 clipped by f1.
+             */
+            {
+                int tx2;
+                int ty2;
+
+                long long a22;
+
+                int ok2;
+
+                unsigned long long area2_2;
+
+                int valid2;
+
+                tx2 = 0;
+                ty2 = 0;
+                a22 = 0;
+
+                debug_overlap_subj = f2;
+                debug_overlap_clip = f1;
+
+                ok2 =
+                    compute_intersection_centroid_ordered_fixed(
+                        model,
+                        f2,
+                        f1,
+                        &tx2,
+                        &ty2,
+                        &a22);
+
+                debug_overlap_subj = -1;
+                debug_overlap_clip = -1;
+
+                area2_2 =
+                    (unsigned long long)
+                    ((a22 >= 0) ?
+                     a22 : -a22);
+
+                valid2 =
+                    (ok2 &&
+                     debug_clip_fixed_vcount >= 3 &&
+                     area2_2 >= min_area2_fixed &&
+                     area2_2 <= bbox_limit);
+
+                if (valid2) {
+
+                    overlapClipAccept++;
+                    return 1;
+                }
+            }
         }
-    }
-
-    if (!candidate) {
-        /* ---- Step 5: identical-polygon special case (unchanged) ----
-         * No edge crossing and no vertex containment found. The only
-         * remaining way these two faces can "overlap" is if their 2D
-         * projected vertex sequences are literally identical (possibly
-         * reversed - e.g. coincident/duplicate faces). Otherwise, they
-         * truly do not overlap. */
-        if (faces_vertices_equal(faces, vtx, f1, f2)) return 1;
-        return 0;
-    }
-
-    /* ---- Steps 6-9: sampling then exact clipping fallback ----
-     * A containment candidate was found (Step 4). Confirm and, more
-     * importantly, make sure the overlapping area actually clears
-     * MIN_INTERSECTION_AREA_PIXELS before accepting - a vertex can be
-     * "inside" the other polygon by a hair without the true overlap area
-     * being meaningful. */
-    int oxmin = minx1 > minx2 ? minx1 : minx2;
-    int oxmax = maxx1 < maxx2 ? maxx1 : maxx2;
-    int oymin = miny1 > miny2 ? miny1 : miny2;
-    int oymax = maxy1 < maxy2 ? maxy1 : maxy2;
-    if (oxmin > oxmax || oymin > oymax) return 0; /* integer bbox empty -> less than 1 pixel */
-
-    /* Step 7: cheap check of the intersection bbox's center pixel */
-    int cx = (oxmin + oxmax) / 2; int cy = (oymin + oymax) / 2;
-    if (point_in_poly_int(cx, cy, faces, vtx, f1, n1) && point_in_poly_int(cx, cy, faces, vtx, f2, n2)) {
-        overlapSampleAccept++;
-        return 1;
-    }
-
-    /* Step 8: adaptive 3x3 sampling around the intersection bbox interior
-     * (center point already tested above) */
-    int ixmin = oxmin, ixmax = oxmax, iymin = oymin, iymax = oymax;
-    int W = ixmax - ixmin; int H = iymax - iymin;
-    int sample_accept = 0; int N = 3;
-    for (int sx = 0; sx < N; ++sx) {
-        for (int sy = 0; sy < N; ++sy) {
-            int tx = ixmin + (((2*sx + 1) * W + (2*N - 1)) / (2*N));
-            int ty = iymin + (((2*sy + 1) * H + (2*N - 1)) / (2*N));
-            if (point_in_poly_int(tx, ty, faces, vtx, f1, n1) && point_in_poly_int(tx, ty, faces, vtx, f2, n2)) { sample_accept = 1; break; }
-        }
-        if (sample_accept) break;
-    }
-
-    if (sample_accept) {
-        overlapSampleAccept++;
-        return 1;
-    }
-
-    /* Step 9: exact clipping fallback (Sutherland-Hodgman, Fixed64), tried
-     * f1-clipped-by-f2 first, and f2-clipped-by-f1 ONLY if the first
-     * order didn't already produce a valid, large-enough intersection.
-     *
-     * use_fixed_clipping is always 1 in this codebase (see header comment,
-     * point 5), so the Fixed64 path below is the only path that can ever
-     * run; the former float-clipping fallback branch has been removed as
-     * dead code. */
-    overlapClipCalls++;
-
-    unsigned long long min_area2_fixed =
-        (unsigned long long)(2.0 * MIN_INTERSECTION_AREA_PIXELS * (double)FIXED_SCALE * (double)FIXED_SCALE + 0.5);
-    unsigned long long bbox_limit = 0;
-    if (!(oxmin > oxmax || oymin > oymax)) {
-        unsigned long long bbox_pixels = (unsigned long long)(oxmax - oxmin) * (unsigned long long)(oymax - oymin);
-        unsigned long long scale2 = (unsigned long long)FIXED_SCALE * (unsigned long long)FIXED_SCALE;
-        bbox_limit = 2ULL * bbox_pixels * scale2;
-    }
-
-    /* --- try f1 clipped by f2 first --- */
-    int tx = 0, ty = 0; long long a2 = 0;
-    debug_overlap_subj = f1; debug_overlap_clip = f2;
-    int ok1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &tx, &ty, &a2);
-    debug_overlap_subj = -1; debug_overlap_clip = -1;
-    unsigned long long area2_1 = (unsigned long long)(a2 >= 0 ? a2 : -a2);
-    debug_clip_fixed_area = (double)area2_1 * 0.5;
-
-    int valid1 = (ok1 && debug_clip_fixed_vcount >= 3 && area2_1 >= min_area2_fixed && area2_1 <= bbox_limit);
-    if (valid1) {
-        overlapClipAccept++;
-        return 1;
-    }
-
-    /* --- first order was not valid: try f2 clipped by f1 --- */
-    int tx2 = 0, ty2 = 0; long long a22 = 0;
-    debug_overlap_subj = f2; debug_overlap_clip = f1;
-    int ok2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &tx2, &ty2, &a22);
-    debug_overlap_subj = -1; debug_overlap_clip = -1;
-    unsigned long long area2_2 = (unsigned long long)(a22 >= 0 ? a22 : -a22);
-
-    int valid2 = (ok2 && debug_clip_fixed_vcount >= 3 && area2_2 >= min_area2_fixed && area2_2 <= bbox_limit);
-    if (valid2) {
-        overlapClipAccept++;
-        return 1;
     }
 
     return 0;
 }
+
+
  
 /*
  * projected_polygons_overlap_simple (legacy / simple overlap test)
@@ -5570,50 +6351,48 @@ static unsigned long long point_seg_dist2_fixed_int(int px,int py,int ax,int ay,
     }
 }
 
-static int segs_intersect_int_fixed64(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
-    long long o1 = orient_ll(x1,y1,x2,y2,x3,y3);
-    long long o2 = orient_ll(x1,y1,x2,y2,x4,y4);
-    long long o3 = orient_ll(x3,y3,x4,y4,x1,y1);
-    long long o4 = orient_ll(x3,y3,x4,y4,x2,y2);
-    /* Proper intersection only: require strict orientation differences */
-    if (!(((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0)))) return 0;
 
-    long long dx1 = x2 - x1, dy1 = y2 - y1;
-    long long dx2 = x4 - x3, dy2 = y4 - y3;
-    long long denom = dx1 * (-dy2) - dy1 * (-dx2);
-    if (denom == 0) return 0; /* numerically parallel */
+/*
+ * Return 1 only when the interiors of the two projected segments
+ * strictly cross.
+ *
+ * The following cases are NOT considered intersections:
+ *   - endpoint touching endpoint
+ *   - endpoint touching the other segment
+ *   - collinear segments
+ *   - partially or fully overlapping collinear segments
+ *
+ * This intentionally uses no pixel tolerance. The decision is based
+ * exclusively on the integer projected coordinates.
+ *
+ * A strict crossing occurs only when:
+ *   - C and D are strictly on opposite sides of AB, and
+ *   - A and B are strictly on opposite sides of CD.
+ *
+ * If any orientation is zero, the case is therefore a contact or
+ * collinear case and is not considered an overlap here.
+ */
+static int segs_intersect_int_fixed64(
+    int x1, int y1, int x2, int y2,
+    int x3, int y3, int x4, int y4)
+{
+    long long o1 = orient_ll(x1, y1, x2, y2, x3, y3);
+    long long o2 = orient_ll(x1, y1, x2, y2, x4, y4);
+    long long o3 = orient_ll(x3, y3, x4, y4, x1, y1);
+    long long o4 = orient_ll(x3, y3, x4, y4, x2, y2);
 
-    long long tnum = (long long)(x3 - x1) * (-dy2) - (long long)(y3 - y1) * (-dx2);
-
-    /* intersection point in Fixed64 */
-    Fixed64 t_fixed = ((Fixed64)tnum << FIXED_SHIFT) / (Fixed64)denom;
-    Fixed64 ix_fixed = (((Fixed64)x1) << FIXED_SHIFT) + ((t_fixed * (((Fixed64)dx1) << FIXED_SHIFT)) >> FIXED_SHIFT);
-    Fixed64 iy_fixed = (((Fixed64)y1) << FIXED_SHIFT) + ((t_fixed * (((Fixed64)dy1) << FIXED_SHIFT)) >> FIXED_SHIFT);
-
-    /* tolerance in fixed units */
-    Fixed64 tol_fixed = (Fixed64)(segs_intersect_tol_px * (double)FIXED_SCALE + 0.5);
-    unsigned long long tol2_fixed = (unsigned long long)tol_fixed * (unsigned long long)tol_fixed; /* fixed^2 */
-
-    /* distance to endpoints (in fixed units squared) */
-    long long ddx, ddy; unsigned long long dist2u;
-    ddx = (long long)ix_fixed - ((long long)x1 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y1 << FIXED_SHIFT);
-    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
-    ddx = (long long)ix_fixed - ((long long)x2 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y2 << FIXED_SHIFT);
-    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
-    ddx = (long long)ix_fixed - ((long long)x3 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y3 << FIXED_SHIFT);
-    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
-    ddx = (long long)ix_fixed - ((long long)x4 << FIXED_SHIFT); ddy = (long long)iy_fixed - ((long long)y4 << FIXED_SHIFT);
-    dist2u = (unsigned long long)ddx * (unsigned long long)ddx + (unsigned long long)ddy * (unsigned long long)ddy; if (dist2u < tol2_fixed) return 0;
-
-
-
-    if (point_seg_dist2_fixed_int(x1,y1,x3,y3,x4,y4) < tol2_fixed) return 0;
-    if (point_seg_dist2_fixed_int(x2,y2,x3,y3,x4,y4) < tol2_fixed) return 0;
-    if (point_seg_dist2_fixed_int(x3,y3,x1,y1,x2,y2) < tol2_fixed) return 0;
-    if (point_seg_dist2_fixed_int(x4,y4,x1,y1,x2,y2) < tol2_fixed) return 0;
+    if (!(((o1 > 0 && o2 < 0) ||
+           (o1 < 0 && o2 > 0)) &&
+          ((o3 > 0 && o4 < 0) ||
+           (o3 < 0 && o4 > 0))))
+    {
+        return 0;
+    }
 
     return 1;
 }
+
+
 
 /* Double-based regression helpers removed: Fixed (integer) implementations are now authoritative.
  * The old `segs_intersect_int_dbl` and associated double point/segment helpers were deleted
@@ -9620,6 +10399,7 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
     int test1state = 0, test2state = 0, test3state = 0, test4state = 0; /* 0=inconclusive, 1=passed, -1=failed */
     int c;
 
+    if (f1 < 0 || f2 < 0) {
     printf("PAIR_DEBUG: enter face index f1: ");
     fflush(stdout);
     if (scanf("%d", &f1) != 1) {
@@ -9640,6 +10420,7 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
         return 0;
     }
     while ((c = getchar()) != '\n' && c != EOF);
+    }
 
 
     printf("\n=== Geometric test (using plane equations) comparing %d vs %d ===\n", f1, f2);
