@@ -5226,3 +5226,159 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
                     int ch; while ((ch = getchar()) != '\n' && ch != EOF);
                     goto loopReDraw;
                 }
+
+
+
+
+/*
+ * test_projected_overlap_raster
+ * =============================
+ *
+ * Simple interactive test for projected polygon overlap.
+ *
+ * The user enters two face IDs. The function displays:
+ *   - projected vertices
+ *   - projected bounding boxes
+ *   - result of the current overlap test
+ *   - result of the new raster overlap test
+ *
+ * keypress() is used before returning.
+ */
+/*
+ * test_projected_overlap
+ * ======================
+ *
+ * Compare the two projected polygon overlap implementations:
+ *
+ *   1. Current overlap test at normal projection scale
+ *   2. Raster overlap test at normal projection scale
+ *   3. Current overlap test at 10x projection scale
+ *   4. Raster overlap test at 10x projection scale
+ *
+ * The original projected coordinates are restored before returning.
+ */
+
+ /*
+ * Simple interactive comparison of the projected overlap tests.
+ *
+ * Four tests are performed:
+ *
+ *   1. projected_polygons_overlap()        at normal scale
+ *   2. projected_polygons_overlap_raster() at normal scale
+ *   3. projected_polygons_overlap()        at 10x scale
+ *   4. projected_polygons_overlap_raster() at 10x scale
+ *
+ * The original projected coordinates are restored before returning.
+ */
+
+ /*
+ * Interactive overlap diagnostic.
+ *
+ * Tests the selected pair of faces using:
+ *
+ *   1. projected_polygons_overlap()        - normal projection
+ *   2. projected_polygons_overlap_raster() - normal projection
+ *   3. projected_polygons_overlap()        - 10x projection
+ *   4. projected_polygons_overlap_raster() - 10x projection
+ *
+ * projected_polygons_overlap() is instrumented separately and prints
+ * the reason when it returns OVERLAP.
+ *
+ * The original projection is always restored before returning.
+ */
+
+ static void test_projected_overlap_raster(Model3D* model)
+{
+    FaceArrays3D* faces;
+
+    int f1, f2;
+    int overlap_normal;
+    int raster_normal;
+    int overlap_zoom;
+    int raster_zoom;
+
+    Fixed32 test_scale;
+    RCHZoomPatch patch;
+
+    if (!model) {
+        printf("Invalid model.\n");
+        keypress();
+        return;
+    }
+
+    faces = &model->faces;
+
+    printf("\nFaces: ");
+
+    if (scanf("%d %d", &f1, &f2) != 2) {
+        printf("Invalid input.\n");
+        keypress();
+        return;
+    }
+
+    if (f1 < 0 || f1 >= faces->face_count ||
+        f2 < 0 || f2 >= faces->face_count)
+    {
+        printf("Invalid face ID.\n");
+        keypress();
+        return;
+    }
+
+    /*
+     * Normal projection.
+     */
+    printf("\nNORMAL:\n");
+
+    overlap_normal =
+        projected_polygons_overlap(model, f1, f2);
+
+    raster_normal =
+        projected_polygons_overlap_raster(model, f1, f2);
+
+
+    /*
+     * Temporary 10x projection.
+     */
+    test_scale =
+        FIXED_MUL_64(
+            s_global_proj_scale_fixed,
+            FLOAT_TO_FIXED(10.0f));
+
+    rch_patch_pair_at_scale(
+        model,
+        f1,
+        f2,
+        test_scale,
+        &patch);
+
+    printf("\nX10:\n");
+
+    overlap_zoom =
+        projected_polygons_overlap(model, f1, f2);
+
+    raster_zoom =
+        projected_polygons_overlap_raster(model, f1, f2);
+
+    /*
+     * Restore original projection.
+     */
+    rch_unpatch_pair(
+        model,
+        &patch,
+        f1,
+        f2);
+
+
+    /*
+     * Compact results.
+     */
+    printf("\nRESULTS:\n");
+    printf("Overlap : %d  x10:%d\n",
+           overlap_normal, overlap_zoom);
+
+    printf("Raster  : %d  x10:%d\n",
+           raster_normal, raster_zoom);
+
+    printf("\nKey...\n");
+    keypress();
+}

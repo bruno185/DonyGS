@@ -763,7 +763,19 @@ segment "main";
                 inspect_face_pair_ui(model);
                 goto loopReDraw;
 
+            case 47: // '/' - test projected overlap raster
+                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+                // test_all_projected_overlaps(model);
+                printf("Running projected overlap benchmark...\n");
+                // benchmark_projected_overlap(model, &params, 1); // Example with 10 angles
+                benchmark_projected_overlap_all(model, &params, 1); // Example with 10 angles
+                keypress();
+                goto loopReDraw;
 
+            
+                case 64: // '@' - show help (paged)
+                overlap_method = select_overlap_method(overlap_method);
+                    goto bigloop;
 
             case 27:  // ESC - quit
                 goto end;
