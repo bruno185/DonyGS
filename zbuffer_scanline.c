@@ -1036,7 +1036,11 @@ typedef struct { long x,z,sx,sz; int ya,yb,xb; } SLZEdge;
 
 static void SL_SetScale(float max_inv_z)
 {
-    if (max_inv_z > 0.0000001f) sl_zscale = SL_TARGET_MAX_CODE / max_inv_z;
+    /* Reserve headroom for the positive depth bias to avoid saturation. */
+    float max_biased_inv_z = max_inv_z + SL_Z_BIAS;
+
+    if (max_biased_inv_z > 0.0000001f)
+        sl_zscale = SL_TARGET_MAX_CODE / max_biased_inv_z;
 }
 
 static SLZWord SL_Quantize(float inv_z)
