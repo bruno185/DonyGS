@@ -2486,6 +2486,12 @@ void painter_bubble_sort(Model3D* model, int face_count)
  * visibility or intersecting faces should be rendered with the Z-buffer.
  */
 
+
+/* Targeted Newell-Sancha plane-order correction.
+ * Replace only painter_newell_sancha() in engine.c.
+ * geoV3 and shared geometric helpers remain unchanged.
+ */
+
 void painter_newell_sancha(Model3D* model, int face_count)
 {
     FaceArrays3D* faces;
@@ -3085,6 +3091,127 @@ order_unresolved:
 #undef HASH_MASK_NS
 #undef ORDERED_MAX_NS
 }
+
+/*
+ * Newell-Sancha selection/restart variant for ORCA/C.
+ * Independent of painter_geoV3() and its private buffers.
+ * No polygon splitting and no explicit cycle detection.
+ * An operation budget prevents an infinite restart sequence.
+ * Include this file AFTER dony.c, or paste the function into engine.c.
+ */
+void painter_newell_sancha_selection(Model3D* model, int face_count)
+{
+    FaceArrays3D* faces;
+    int* sorted;
+    int visible_count;
+    int fs;
+    int i;
+    int p;
+    int f2;
+    int q;
+    int geo_pq;
+    int geo_qp;
+    int rc;
+    int tmp;
+    int k;
+    int restart_count;
+    int restart_limit;
+
+    if (!model || face_count <= 0)
+        return;
+
+    faces = &model->faces;
+    sorted = faces->sorted_face_indices;
+
+    /* Keep invisible faces at the end, as the existing fast sort does. */
+    painter_newell_sancha_fast(model, face_count);
+    visible_count = face_count;
+    if (cull_back_faces) {
+        visible_count = 0;
+        for (i = 0; i < face_count; ++i) {
+            if (faces->display_flag[i])
+                ++visible_count;
+        }
+    }
+    if (visible_count < 2)
+        return;
+
+    /* Stable initial order by farthest extent, only among visible faces. */
+    sort_by_zmax(sorted, faces->z_max, visible_count);
+
+    for (fs = 0; fs < visible_count - 1; ++fs) {
+        p = sorted[fs];
+        f2 = fs + 1;
+        restart_count = 0;
+        restart_limit = visible_count;
+
+        while (f2 < visible_count) {
+            q = sorted[f2];
+
+            /* Test 1: disjoint depth intervals. */
+            if (faces->z_max[q] <= faces->z_min[p]) {
+                ++f2;
+                continue;
+            }
+
+            /* Tests 2-3: disjoint projected bounding boxes. */
+            if (faces->maxx[p] <= faces->minx[q] ||
+                faces->maxx[q] <= faces->minx[p] ||
+                faces->maxy[p] <= faces->miny[q] ||
+                faces->maxy[q] <= faces->miny[p]) {
+                ++f2;
+                continue;
+            }
+
+            /* Tests 4-5: relative positions against both face planes. */
+            geo_pq = geometric_face_relation(model, p, q);
+            geo_qp = geometric_face_relation(model, q, p);
+
+            if (geo_pq == -1 || geo_qp == 1) {
+                ++f2;
+                continue;
+            }
+
+            /* A reverse plane relation is actionable only after verifying
+               that the projected polygons actually overlap. */
+            if (!projected_polygons_overlap(model, p, q)) {
+                ++f2;
+                continue;
+            }
+
+            if (geo_pq == 1 || geo_qp == -1) {
+                rc = -1;
+            } else {
+                /* Final test: projected overlap is real, planes undecided. */
+                rc = ray_cast_hierarchical(model, p, q);
+            }
+
+            if (rc >= 0) {
+                ++f2;
+                continue;
+            }
+
+            /* Bounded selection/restart. This is not cycle detection:
+               when the budget is exhausted, keep the current order. */
+            if (restart_count >= restart_limit) {
+                ++f2;
+                continue;
+            }
+            ++restart_count;
+
+            /* Move Q immediately before P, preserving intervening order.
+               Unlike the old global pair sweep, recheck the new head. */
+            tmp = sorted[f2];
+            for (k = f2; k > fs; --k)
+                sorted[k] = sorted[k - 1];
+            sorted[fs] = tmp;
+            p = tmp;
+            f2 = fs + 1;
+        }
+    }
+}
+
+
 // --- Pair cache (used by painter_geoV2) ---
 static PairCache* pair_cache_create(int capacity) {
     PairCache* c = (PairCache*)malloc(sizeof(PairCache));
