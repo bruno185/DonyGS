@@ -819,7 +819,9 @@ segment "main";
                 keypress();
                 goto loopReDraw;
 
-
+                case 40: // '(' - show help (paged)
+                overlap_method = select_overlap_method(overlap_method);
+                goto bigloop;
 
             case 27:  // ESC - quit
                 goto end;
