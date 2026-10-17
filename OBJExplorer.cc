@@ -45,28 +45,6 @@
 
 #include "engine.c"
 
-/*
- * Test QuickDraw II initialization without startgraph().
- *
- * QDStartUp requires three 256-byte memory pages.
- * Keep the workspace allocated while QuickDraw II is active.
- */
-
-
-/*
- * Test QuickDraw II region operations.
- * QuickDraw II must already be initialized.
- *
- * Returns 1 on success, 0 on failure.
- */
-
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <types.h>
-#include <quickdraw.h>
-#include <memory.h>
-#include <misctool.h>
 
 segment "main";
     int main() {
@@ -79,7 +57,6 @@ segment "main";
         long last_process_time_end = 0;
         long last_ZB_FS_render_time = 0;
         long last_ZB_SL_render_time = 0;
-        int sort_qd_open = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
         int  oa; // Open-Apple key status
@@ -91,7 +68,6 @@ segment "main";
             destroyModel3D(model);
             return 1;
         }
-
 
     newmodel:
         {
@@ -238,29 +214,59 @@ segment "main";
 
 
     bigloop:
-        // Process model with parameters - OPTIMIZED VERSION
-        last_process_time_start = GetTick();
-        printf("Processing model...\n");
-        // in processModelFast : if Frame-only mode is active, skip face sorting and use simple painter
-        /* These sorters can use QuickDraw regions through their ray-cast
-         * fallback. The normal drawing port is opened only at loopReDraw,
-         * so provide a temporary graphics context during this sort.
+        /*
+         * Painters 3, 4 and 5 may use QuickDraw region operations during
+         * sorting. Start QuickDraw II without calling startgraph(), so the
+         * progress messages remain visible on the text screen.
+         *
+         * Shut QuickDraw down before startgraph() opens the rendering screen.
          */
-        sort_qd_open = model != NULL && model->faces.face_count > 0 &&
-            !framePolyOnly &&
-            (painter_mode == PAINTER_MODE_NEWELL_SANCHA ||
-             painter_mode == PAINTER_MODE_GEOV3 ||
-             painter_mode == PAINTER_MODE_GEO);
-        if (sort_qd_open) {
-            startgraph(mode);
+        {
+            Handle qd_dp = NULL;
+            Word qd_id = 0;
+            Word qd_err = 0;
+            int qd_started = 0;
+            int needs_qd = (painter_mode == PAINTER_MODE_NEWELL_SANCHA ||
+                            painter_mode == PAINTER_MODE_GEO ||
+                            painter_mode == PAINTER_MODE_GEOV3);
+
+            if (needs_qd && !framePolyOnly) {
+                qd_id = userid();
+                qd_dp = NewHandle(0x300L, qd_id, 0xC015, NULL);
+                qd_err = toolerror();
+                if (qd_dp == NULL || qd_err != 0) {
+                    printf("QuickDraw direct-page allocation failed: $%04X\n", qd_err);
+                    if (qd_dp != NULL) DisposeHandle(qd_dp);
+                    return 1;
+                }
+
+                QDStartUp((Word)*qd_dp, 0, mode320, qd_id);
+                qd_err = toolerror();
+                if (qd_err != 0) {
+                    printf("QDStartUp failed: $%04X\n", qd_err);
+                    DisposeHandle(qd_dp);
+                    return 1;
+                }
+                qd_started = 1;
+                shroff();
+            }
+
+            /* Exclude temporary QuickDraw startup/shutdown from sorting time. */
+            last_process_time_start = GetTick();
+            printf("Processing model...\n");
+            processModelFast(model, &params, filename);
+            last_process_time_end = GetTick();
+
+            if (qd_started) {
+                QDShutDown();
+                qd_err = toolerror();
+                DisposeHandle(qd_dp);
+                if (qd_err != 0) {
+                    printf("QDShutDown failed: $%04X\n", qd_err);
+                    return 1;
+                }
+            }
         }
-        processModelFast(model, &params, filename);
-        if (sort_qd_open) {
-            endgraph();
-            DoText();
-            sort_qd_open = 0;
-        }
-        last_process_time_end = GetTick();
 
     loopReDraw:
         {
@@ -806,20 +812,14 @@ segment "main";
 
             case 47: // '/' - test projected overlap raster
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
-
                 // test_all_projected_overlaps(model);
-                // printf("Running projected overlap benchmark...\n");
-                // // benchmark_projected_overlap(model, &params, 1); // Example with 10 angles
-                // benchmark_projected_overlap_all(model, &params, 1); // Example with 10 angles
-                // keypress();
-                test_qd_sh_all_pairs(model);
-                keypress(); // wait for user input after running the test
+                printf("Running projected overlap benchmark...\n");
+                // benchmark_projected_overlap(model, &params, 1); // Example with 10 angles
+                benchmark_projected_overlap_all(model, &params, 1); // Example with 10 angles
+                keypress();
                 goto loopReDraw;
 
-            
-                case 64: // '@' - show help (paged)
-                overlap_method = select_overlap_method(overlap_method);
-                goto bigloop;
+
 
             case 27:  // ESC - quit
                 goto end;
