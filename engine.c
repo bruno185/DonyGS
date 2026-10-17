@@ -6839,134 +6839,98 @@ int check_sort_repair(Model3D* model, int face_count) {
  * The intent is to keep the same repair strategy, but with fewer centroid
  * candidates and less per-pair overhead.
  */
-
-
-/* check_sort_repair_fast
- * ----------------------
- * Faster variant of check_sort_repair that:
- *  - uses the QuickDraw region intersection centroid (QD) as the test point,
- *  - uses ray_cast_distances() at that single point,
- *  - performs the same minimal forward-only reordering when the ray cast
- *    indicates the current sort order is incorrect.
- *
- * The intent is to keep the same repair strategy, but with fewer centroid
- * candidates and less per-pair overhead.
- */
-int check_sort_repair_fast(Model3D* model, int face_count)
-{
-    FaceArrays3D* faces;
-    int n, i, f1, f2, cx, cy, rc;
-    int *original, *result, *indegree;
-    unsigned char *edges, *used;
-    unsigned long edge_bytes, bit_index;
-    int remaining, chosen, repairs, cycles;
-    long long area2;
-    float tf1, tf2;
-
-    if (!model || face_count <= 0) return 0;
-    faces = &model->faces;
-    n = face_count;
-
-    /* One bit per ordered pair: edge a->b means a must be drawn before b. */
-    edge_bytes = ((unsigned long)n * (unsigned long)n + 7UL) / 8UL;
-    original = (int*)malloc((size_t)n * sizeof(int));
-    result = (int*)malloc((size_t)n * sizeof(int));
-    indegree = (int*)calloc((size_t)n, sizeof(int));
-    used = (unsigned char*)calloc((size_t)n, 1);
-    edges = (unsigned char*)calloc((size_t)edge_bytes, 1);
-    if (!original || !result || !indegree || !used || !edges) {
-        free(original); free(result); free(indegree);
-        free(used); free(edges);
+int check_sort_repair_fast(Model3D* model, int face_count) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (face_count <= 0) return 0;
+    startgraph(mode); /* Required for QuickDraw region operations */
+    
+    int n = face_count;
+    int *pos_of_face = (int*)malloc(sizeof(int) * n);
+    if (!pos_of_face) {
+        endgraph();
         return 0;
     }
-    memcpy(original, faces->sorted_face_indices, (size_t)n * sizeof(int));
-
-    startgraph(mode);
-    MoveTo(3,10);
-    printf("Computing repairs...");
-
-    /* Exactly one geometry pass; never recompute a face-pair relation. */
-    for (f1 = 0; f1 < n; ++f1) {
+    int relation_capacity = n + 16;
+    int relation_count = 0;
+    int (*after_relations)[2] = (int(*)[2])malloc(sizeof(int) * 2 * relation_capacity);
+    if (!after_relations) {
+        free(pos_of_face);
+        endgraph();
+        return 0;
+    }
+    MoveTo(3,10); printf("Computing repairs..."); /* Inform user that the batch test is running (prevents blank-screen confusion) */
+    
+    for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+    int repairs = 0;
+    for (int f1 = 0; f1 < n; ++f1) {
         if (faces->display_flag[f1] == 0) continue;
         if (cull_back_faces && faces->plane_d[f1] <= 0) continue;
-        for (f2 = f1 + 1; f2 < n; ++f2) {
-            int ix0, iy0, ix1, iy1;
-            int before, after;
+        for (int f2 = f1 + 1; f2 < n; ++f2) {
             if (faces->display_flag[f2] == 0) continue;
             if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
-            if (faces->z_max[f1] <= faces->z_min[f2] ||
-                faces->z_max[f2] <= faces->z_min[f1]) continue;
-            if (!compute_bbox_intersection(model, f1, f2,
-                                           &ix0, &iy0, &ix1, &iy1)) continue;
+            /* Quick Z reject: no 2D overlap is possible if depth ranges do not intersect */
+            if (faces->z_max[f1] <= faces->z_min[f2] || faces->z_max[f2] <= faces->z_min[f1]) continue;
+            /* Quick AABB reject */
+            int _ix0, _iy0, _ix1, _iy1;
+            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
+            /* Only consider true overlap (not touching) */
             if (!projected_polygons_overlap(model, f1, f2)) continue;
-            cx = cy = 0;
-            area2 = 0;
-            if (!compute_intersection_centroid_ordered_qd_fixed(
-                    model, f1, f2, &cx, &cy, &area2) || area2 == 0) continue;
-            tf1 = tf2 = 0.0f;
+            /* Use QuickDraw region centroid (fast and representative) as first attempt. */
+            int cx = 0, cy = 0;
+            long long area2 = 0;
+            int got_centroid = 0;
+            if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &cx, &cy, &area2) && area2 != 0) {
+                got_centroid = 1;
+            }
+            if (!got_centroid) continue;
+            float tf1 = 0.0f, tf2 = 0.0f;
             if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) continue;
-            rc = (tf1 < tf2) ? -1 : ((tf1 > tf2) ? 1 : 0);
+            int rc = 0;
+            if (tf1 < tf2) rc = -1;
+            else if (tf1 > tf2) rc = 1;
+            else rc = 0;
             if (rc == 0) continue;
-            /* Farther face first, closer face last. */
-            before = (rc == -1) ? f2 : f1;
-            after  = (rc == -1) ? f1 : f2;
-            bit_index = (unsigned long)before * (unsigned long)n + (unsigned long)after;
-            if (!(edges[bit_index >> 3] & (unsigned char)(1U << (bit_index & 7)))) {
-                edges[bit_index >> 3] |= (unsigned char)(1U << (bit_index & 7));
-                ++indegree[after];
-            }
-        }
-    }
-
-    /* Stable topological ordering: prefer the original order on ties.
-       On a cycle, retain the earliest remaining face to guarantee termination. */
-    cycles = 0;
-    for (remaining = 0; remaining < n; ++remaining) {
-        chosen = -1;
-        for (i = 0; i < n; ++i) {
-            int candidate = original[i];
-            if (!used[candidate] && indegree[candidate] == 0) {
-                chosen = candidate;
-                break;
-            }
-        }
-        if (chosen < 0) {
-            ++cycles;
-            for (i = 0; i < n; ++i) {
-                if (!used[original[i]]) {
-                    chosen = original[i];
-                    break;
+            int closer = (rc == -1) ? f1 : f2;
+            int other  = (rc == -1) ? f2 : f1;
+            int pclos = pos_of_face[closer];
+            int pother = pos_of_face[other];
+            if (pclos <= pother) {
+                int tmp = faces->sorted_face_indices[pclos];
+                if (pclos < pother) {
+                    memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
+                    faces->sorted_face_indices[pother] = tmp;
+                    for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
+                    ++repairs;
+                    // Record required relation A after B and enforce all relations.
+                    if (relation_count >= relation_capacity) {
+                        int new_cap = relation_capacity * 2;
+                        int (*tmp_rel)[2] = (int(*)[2])realloc(after_relations, sizeof(int) * 2 * new_cap);
+                        if (tmp_rel) {
+                            after_relations = tmp_rel;
+                            relation_capacity = new_cap;
+                        }
+                    }
+                    if (relation_count < relation_capacity) {
+                        after_relations[relation_count][0] = closer;
+                        after_relations[relation_count][1] = other;
+                        relation_count++;
+                    }
+                    enforce_mandatory_after_relations(model, n, pos_of_face, relation_count, after_relations);
                 }
             }
         }
-        result[remaining] = chosen;
-        used[chosen] = 1;
-        for (i = 0; i < n; ++i) {
-            bit_index = (unsigned long)chosen * (unsigned long)n + (unsigned long)i;
-            if (!used[i] && (edges[bit_index >> 3] &
-                             (unsigned char)(1U << (bit_index & 7)))) {
-                --indegree[i];
-            }
-        }
     }
-
-    repairs = 0;
-    for (i = 0; i < n; ++i) {
-        if (original[i] != result[i]) ++repairs;
-        faces->sorted_face_indices[i] = result[i];
-    }
-    free(original); free(result); free(indegree);
-    free(used); free(edges);
-    MoveTo(3,20);
-    printf("Repair: moved positions=%d, cycle breaks=%d\n", repairs, cycles);
+    free(pos_of_face);
+    free(after_relations);
+    MoveTo(3,20); 
+    printf("Repairs done: repairs=%d\n", repairs); /* Inform user that repairs are done */
     printf("Press any key to continue...\n");
     keypress();
     endgraph();
-    DoText();
+    DoText(); /* Return to text mode */
     return repairs;
 }
-
-
 
 /* Interactive inspector: single UI to run the full diagnostic battery on a face pair.
  * - Displays model in wireframe and highlights f1 (green) and f2 (orange) with face numbers.

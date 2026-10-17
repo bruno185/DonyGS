@@ -5602,3 +5602,183 @@ cleanup:
         keypress(); // wait for user input before starting the test
         test_qd_text_mode();
         keypress(); // wait for user input after QuickDraw II test
+
+
+
+// -------------------------
+/* check_sort_repair_fast
+ * ----------------------
+ * Faster variant of check_sort_repair that:
+ *  - uses the QuickDraw region intersection centroid (QD) as the test point,
+ *  - uses ray_cast_distances() at that single point,
+ *  - performs the same minimal forward-only reordering when the ray cast
+ *    indicates the current sort order is incorrect.
+ *
+ * The intent is to keep the same repair strategy, but with fewer centroid
+ * candidates and less per-pair overhead.
+ */
+
+/* Fast repair using QuickDraw intersection centroid. */
+int check_sort_repair_fast(Model3D* model, int face_count)
+{
+    FaceArrays3D* faces;
+    int n;
+    int* pos_of_face;
+    int (*after_relations)[2];
+    int relation_capacity;
+    int relation_count = 0;
+    int repairs = 0;
+    int f1, f2, i;
+
+    if (!model || face_count <= 0)
+        return 0;
+
+    faces = &model->faces;
+    n = face_count;
+
+    startgraph(mode);
+
+    pos_of_face = (int*)malloc(sizeof(int) * n);
+    if (!pos_of_face) {
+        endgraph();
+        return 0;
+    }
+
+    relation_capacity = n + 16;
+    after_relations = (int(*)[2])malloc(
+        sizeof(int) * 2 * relation_capacity
+    );
+
+    if (!after_relations) {
+        free(pos_of_face);
+        endgraph();
+        return 0;
+    }
+
+    MoveTo(3, 10);
+    printf("Computing repairs...");
+
+    for (i = 0; i < n; ++i)
+        pos_of_face[faces->sorted_face_indices[i]] = i;
+
+    for (f1 = 0; f1 < n; ++f1) {
+        if (faces->display_flag[f1] == 0)
+            continue;
+
+        if (cull_back_faces && faces->plane_d[f1] <= 0)
+            continue;
+
+        for (f2 = f1 + 1; f2 < n; ++f2) {
+            int ix0, iy0, ix1, iy1;
+            int cx = 0, cy = 0;
+            long long area2 = 0;
+            float tf1 = 0.0f, tf2 = 0.0f;
+            int rc;
+            int closer, other;
+            int pclos, pother;
+
+            if (faces->display_flag[f2] == 0)
+                continue;
+
+            if (cull_back_faces && faces->plane_d[f2] <= 0)
+                continue;
+
+            if (faces->z_max[f1] <= faces->z_min[f2] ||
+                faces->z_max[f2] <= faces->z_min[f1])
+                continue;
+
+            if (!compute_bbox_intersection(
+                    model, f1, f2,
+                    &ix0, &iy0, &ix1, &iy1))
+                continue;
+
+            if (!projected_polygons_overlap(model, f1, f2))
+                continue;
+
+            if (!compute_intersection_centroid_ordered_qd_fixed(
+                    model, f1, f2, &cx, &cy, &area2) ||
+                area2 == 0)
+                continue;
+
+            if (!ray_cast_distances(
+                    model, f1, f2, cx, cy, &tf1, &tf2))
+                continue;
+
+            if (tf1 < tf2)
+                rc = -1;
+            else if (tf1 > tf2)
+                rc = 1;
+            else
+                rc = 0;
+
+            if (rc == 0)
+                continue;
+
+            closer = (rc == -1) ? f1 : f2;
+            other  = (rc == -1) ? f2 : f1;
+
+            pclos = pos_of_face[closer];
+            pother = pos_of_face[other];
+
+            if (pclos < pother) {
+                int tmp = faces->sorted_face_indices[pclos];
+                int k;
+
+                memmove(
+                    &faces->sorted_face_indices[pclos],
+                    &faces->sorted_face_indices[pclos + 1],
+                    sizeof(int) * (pother - pclos)
+                );
+
+                faces->sorted_face_indices[pother] = tmp;
+
+                for (k = pclos; k <= pother; ++k)
+                    pos_of_face[
+                        faces->sorted_face_indices[k]
+                    ] = k;
+
+                ++repairs;
+
+                if (relation_count >= relation_capacity) {
+                    int new_cap = relation_capacity * 2;
+                    int (*tmp_rel)[2];
+
+                    tmp_rel = (int(*)[2])realloc(
+                        after_relations,
+                        sizeof(int) * 2 * new_cap
+                    );
+
+                    if (tmp_rel) {
+                        after_relations = tmp_rel;
+                        relation_capacity = new_cap;
+                    }
+                }
+
+                if (relation_count < relation_capacity) {
+                    after_relations[relation_count][0] = closer;
+                    after_relations[relation_count][1] = other;
+                    ++relation_count;
+                }
+
+                enforce_mandatory_after_relations(
+                    model, n, pos_of_face,
+                    relation_count, after_relations
+                );
+            }
+        }
+    }
+
+    free(pos_of_face);
+    free(after_relations);
+
+    MoveTo(3, 20);
+    printf("Repairs done: repairs=%d\n", repairs);
+    printf("Press any key to continue...\n");
+    keypress();
+
+    endgraph();
+    DoText();
+
+    return repairs;
+}
+
