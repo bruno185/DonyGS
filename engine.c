@@ -7181,6 +7181,10 @@ static void inspect_face_pair_ui(Model3D* model) {
         } else if (key == 'F' || key == 'f') { /* dump current diagnostic to file */
             dump_compare_results_to_file(&r, f1, f2);
         } else if (key == 32) { /* SPACE -> compact textual summary (80x24) + optional verbose */
+            int details_qx0 = 0, details_qy0 = 0;
+            int details_qx1 = 0, details_qy1 = 0;
+            int details_have_qd_rect = 0;
+            long long details_qarea2 = 0;
             /* restore QuickDraw and enter text-mode */
             framePolyOnly = old_frame;
             for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
@@ -7220,6 +7224,15 @@ static void inspect_face_pair_ui(Model3D* model) {
             if (r_zoom) free(r_zoom);
             if (patch) free(patch);
         }
+            /* Cache the QD rectangle while the graphics port is still valid.
+             * Text-mode output must not rebuild regions after endgraph().
+             * The x10 diagnostic above has already restored the original scale.
+             */
+            if (r.qd_centroid_ok) {
+                details_have_qd_rect = compute_intersection_region_bbox(
+                    model, f1, f2, &details_qx0, &details_qy0,
+                    &details_qx1, &details_qy1, &details_qarea2);
+            }
             endgraph(); 
             DoText();
             // now in text mode
@@ -7341,8 +7354,10 @@ static void inspect_face_pair_ui(Model3D* model) {
             } else printf("\n2) SH KO rect=none");
             /* 3) Centroid QD (single line) - use region bbox when available; fallback to AABB; prefix OK/KO */
             if (r.qd_centroid_ok) {
-                int qx0=0,qy0=0,qx1=0,qy1=0; long long qarea2=0; float qf1=0.0f, qf2=0.0f;
-                int have_qd_rect = compute_intersection_region_bbox(model, f1, f2, &qx0, &qy0, &qx1, &qy1, &qarea2);
+                int qx0 = details_qx0, qy0 = details_qy0;
+                int qx1 = details_qx1, qy1 = details_qy1;
+                float qf1 = 0.0f, qf2 = 0.0f;
+                int have_qd_rect = details_have_qd_rect;
                 if (!have_qd_rect && r.bbox_ok) { qx0 = r.bbox_ix0; qy0 = r.bbox_iy0; qx1 = r.bbox_ix1; qy1 = r.bbox_iy1; have_qd_rect = 1; }
                 if (have_qd_rect) printf("\n3) QD OK rect=%d,%d-%d,%d center=%d,%d  ", qx0, qy0, qx1, qy1, r.qd_cx, r.qd_cy);
                 else printf("\n3) QD KO rect=none center=%d,%d  ", r.qd_cx, r.qd_cy);

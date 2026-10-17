@@ -45,6 +45,28 @@
 
 #include "engine.c"
 
+/*
+ * Test QuickDraw II initialization without startgraph().
+ *
+ * QDStartUp requires three 256-byte memory pages.
+ * Keep the workspace allocated while QuickDraw II is active.
+ */
+
+
+/*
+ * Test QuickDraw II region operations.
+ * QuickDraw II must already be initialized.
+ *
+ * Returns 1 on success, 0 on failure.
+ */
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <types.h>
+#include <quickdraw.h>
+#include <memory.h>
+#include <misctool.h>
 
 segment "main";
     int main() {
@@ -57,6 +79,7 @@ segment "main";
         long last_process_time_end = 0;
         long last_ZB_FS_render_time = 0;
         long last_ZB_SL_render_time = 0;
+        int sort_qd_open = 0;
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
         int  oa; // Open-Apple key status
@@ -68,6 +91,7 @@ segment "main";
             destroyModel3D(model);
             return 1;
         }
+
 
     newmodel:
         {
@@ -218,7 +242,24 @@ segment "main";
         last_process_time_start = GetTick();
         printf("Processing model...\n");
         // in processModelFast : if Frame-only mode is active, skip face sorting and use simple painter
+        /* These sorters can use QuickDraw regions through their ray-cast
+         * fallback. The normal drawing port is opened only at loopReDraw,
+         * so provide a temporary graphics context during this sort.
+         */
+        sort_qd_open = model != NULL && model->faces.face_count > 0 &&
+            !framePolyOnly &&
+            (painter_mode == PAINTER_MODE_NEWELL_SANCHA ||
+             painter_mode == PAINTER_MODE_GEOV3 ||
+             painter_mode == PAINTER_MODE_GEO);
+        if (sort_qd_open) {
+            startgraph(mode);
+        }
         processModelFast(model, &params, filename);
+        if (sort_qd_open) {
+            endgraph();
+            DoText();
+            sort_qd_open = 0;
+        }
         last_process_time_end = GetTick();
 
     loopReDraw:

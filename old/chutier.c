@@ -5382,3 +5382,223 @@ void painter_geoV2GOOD(Model3D* model, int face_count) {
     printf("\nKey...\n");
     keypress();
 }
+
+
+
+
+#define QD_DP_ATTRIBUTES 0xC015
+
+/*
+ * Create a polygonal region using QuickDraw II.
+ * The last point is connected to the first point.
+ */
+static RegionHndl test_make_poly(const Point *pts, int n)
+{
+    RegionHndl r;
+    int i;
+
+    r = NewRgn();
+    if (toolerror() || r == NULL)
+        return NULL;
+
+    OpenRgn();
+    if (toolerror())
+        goto failed;
+
+    MoveTo(pts[0].h, pts[0].v);
+    for (i = 1; i < n; ++i)
+        LineTo(pts[i].h, pts[i].v);
+
+    LineTo(pts[0].h, pts[0].v);
+    CloseRgn(r);
+
+    if (toolerror())
+        goto failed;
+
+    return r;
+
+failed:
+    DisposeRgn(r);
+    return NULL;
+}
+
+/*
+ * Test whether two polygonal regions overlap.
+ *
+ * expected: 1 = overlap, 0 = no overlap.
+ * Returns 1 on success, 0 on failure.
+ */
+static int test_poly_pair(const Point *a, int na,
+                          const Point *b, int nb,
+                          int expected)
+{
+    RegionHndl ra, rb, ri;
+    Word err;
+    int actual;
+    int ok;
+
+    ra = NULL;
+    rb = NULL;
+    ri = NULL;
+    ok = 0;
+
+    ra = test_make_poly(a, na);
+    if (ra == NULL)
+        goto cleanup;
+
+    rb = test_make_poly(b, nb);
+    if (rb == NULL)
+        goto cleanup;
+
+    ri = NewRgn();
+    err = toolerror();
+    if (err || ri == NULL)
+        goto cleanup;
+
+    SectRgn(ra, rb, ri);
+    err = toolerror();
+    if (err)
+        goto cleanup;
+
+    actual = !EmptyRgn(ri);
+    err = toolerror();
+    if (err)
+        goto cleanup;
+
+    ok = (actual == expected);
+
+cleanup:
+    if (ri != NULL)
+        DisposeRgn(ri);
+    if (rb != NULL)
+        DisposeRgn(rb);
+    if (ra != NULL)
+        DisposeRgn(ra);
+
+    return ok;
+}
+
+void test_qd_text_mode(void)
+{
+    Word myID, err;
+    Handle dp;
+    int started;
+    int ok1, ok2, ok3, ok4;
+
+    /*
+     * Two overlapping convex polygons.
+     */
+    Point square1[4] = {
+        {10, 10}, {10, 90},
+        {90, 90}, {90, 10}
+    };
+
+    Point square2[4] = {
+        {50, 50}, {50, 130},
+        {130, 130}, {130, 50}
+    };
+
+    /*
+     * A distant polygon.
+     */
+    Point distant[4] = {
+        {150, 200}, {150, 250},
+        {190, 250}, {190, 200}
+    };
+
+    /*
+     * Concave U-shaped polygon.
+     *
+     * Coordinates are (v, h) in the Point structure.
+     */
+    Point concave[8] = {
+        {20, 20}, {20, 160},
+        {140, 160}, {140, 120},
+        {60, 120}, {60, 60},
+        {140, 60}, {140, 20}
+    };
+
+    /*
+     * Rectangle intersecting the left arm of the U.
+     */
+    Point arm[4] = {
+        {70, 30}, {70, 50},
+        {100, 50}, {100, 30}
+    };
+
+    /*
+     * Rectangle inside the empty part of the U.
+     */
+    Point hole[4] = {
+        {80, 80}, {80, 100},
+        {110, 100}, {110, 80}
+    };
+
+    myID = userid();
+    dp = NULL;
+    started = 0;
+
+    printf("\nQD polygon test - text mode\n");
+    printf("User ID: $%04X\n", myID);
+
+    dp = NewHandle(0x300L, myID,
+                   QD_DP_ATTRIBUTES, NULL);
+
+    err = toolerror();
+    printf("NewHandle: $%04X\n", err);
+
+    if (err || dp == NULL)
+        return;
+
+    QDStartUp((Word)*dp, 0, mode320, myID);
+    GrafOff();
+    err = toolerror();
+    printf("QDStartUp: $%04X\n", err);
+
+    if (err)
+        goto cleanup;
+
+    started = 1;
+
+    ok1 = test_poly_pair(square1, 4,
+                         square2, 4, 1);
+    printf("Convex overlap: %s\n",
+           ok1 ? "PASS" : "FAIL");
+
+    ok2 = test_poly_pair(square1, 4,
+                         distant, 4, 0);
+    printf("Convex separated: %s\n",
+           ok2 ? "PASS" : "FAIL");
+
+    ok3 = test_poly_pair(concave, 8,
+                         arm, 4, 1);
+    printf("Concave overlap: %s\n",
+           ok3 ? "PASS" : "FAIL");
+
+    ok4 = test_poly_pair(concave, 8,
+                         hole, 4, 0);
+    printf("Concave empty area: %s\n",
+           ok4 ? "PASS" : "FAIL");
+
+    printf("Overall: %s\n",
+           (ok1 && ok2 && ok3 && ok4)
+           ? "PASS" : "FAIL");
+
+cleanup:
+    if (started) {
+        QDShutDown();
+        printf("QDShutDown: $%04X\n",
+               toolerror());
+    }
+
+    DisposeHandle(dp);
+    printf("DisposeHandle: $%04X\n",
+           toolerror());
+
+    printf("Text mode still active.\n");
+}
+
+        printf("Starting QuickDraw II test...\n");
+        keypress(); // wait for user input before starting the test
+        test_qd_text_mode();
+        keypress(); // wait for user input after QuickDraw II test
