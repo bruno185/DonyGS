@@ -806,17 +806,20 @@ segment "main";
 
             case 47: // '/' - test projected overlap raster
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
+
                 // test_all_projected_overlaps(model);
-                printf("Running projected overlap benchmark...\n");
-                // benchmark_projected_overlap(model, &params, 1); // Example with 10 angles
-                benchmark_projected_overlap_all(model, &params, 1); // Example with 10 angles
-                keypress();
+                // printf("Running projected overlap benchmark...\n");
+                // // benchmark_projected_overlap(model, &params, 1); // Example with 10 angles
+                // benchmark_projected_overlap_all(model, &params, 1); // Example with 10 angles
+                // keypress();
+                test_qd_sh_all_pairs(model);
+                keypress(); // wait for user input after running the test
                 goto loopReDraw;
 
             
                 case 64: // '@' - show help (paged)
                 overlap_method = select_overlap_method(overlap_method);
-                    goto bigloop;
+                goto bigloop;
 
             case 27:  // ESC - quit
                 goto end;

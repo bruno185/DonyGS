@@ -240,7 +240,7 @@ static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1
 }
 
 
-static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
+static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2, double* shared_work) {
     /* Robust integer implementation for diagnostics and fixed-area comparisons.
      * - Clips `subj` by `clip` using Sutherland–Hodgman (double intermediates).
      * - Produces integer output vertices (rounded), computes signed raw area2
@@ -260,14 +260,32 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
     }
     /* Watchdog and iteration-cap disabled for repro testing (temporary). */
     /* Gather integer input polygons (screen coords) */
-    int *sx = (int*)malloc(sizeof(int) * sn);
-    int *sy = (int*)malloc(sizeof(int) * sn);
-    int *cx = (int*)malloc(sizeof(int) * cn);
-    int *cy = (int*)malloc(sizeof(int) * cn);
-    if (!sx || !sy || !cx || !cy) {
-        if (sx) free(sx); if (sy) free(sy); if (cx) free(cx); if (cy) free(cy);
-        debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0; return 0;
+    /* One allocation per call, double-aligned for ORCA/C floating point access.
+     * The integer arrays occupy the tail of the same allocation. */
+    double *work_storage;
+    int *input_storage, *output_storage;
+    int *sx, *sy, *cx, *cy;
+    double *buf_x1, *buf_y1, *buf_x2, *buf_y2;
+    int *out_px, *out_py;
+    long work_bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX);
+    long integer_bytes = (long)sizeof(int) * (2L * sn + 2L * cn + 2L * DEBUG_CLIP_MAX);
+    work_storage = shared_work ? shared_work : (double*)malloc(work_bytes + integer_bytes);
+    if (!work_storage) {
+        debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0;
+        debug_clip_fixed_area = 0.0; *out_area2 = 0; return 0;
     }
+    input_storage = (int*)((char*)work_storage + work_bytes);
+    output_storage = input_storage + 2 * sn + 2 * cn;
+    sx = input_storage;
+    sy = sx + sn;
+    cx = sy + sn;
+    cy = cx + cn;
+    buf_x1 = work_storage;
+    buf_y1 = buf_x1 + DEBUG_CLIP_MAX;
+    buf_x2 = buf_y1 + DEBUG_CLIP_MAX;
+    buf_y2 = buf_x2 + DEBUG_CLIP_MAX;
+    out_px = output_storage;
+    out_py = out_px + DEBUG_CLIP_MAX;
     for (int i = 0; i < sn; ++i) {
         int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[subj] + i] - 1;
         sx[i] = vtx->x2d[vi]; sy[i] = vtx->y2d[vi];
@@ -280,9 +298,30 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
      * regardless of the input vertex order. If signed area < 0, reverse vertex order. */
     {
         long long area2_subj = 0;
-        for (int i = 0; i < sn; ++i) {
-            int j = (i + 1) % sn;
-            area2_subj += (long long)sx[i] * (long long)sy[j] - (long long)sx[j] * (long long)sy[i];
+        int fast_subj = (sn <= 64);
+        int wi;
+        if (fast_subj) {
+            for (wi = 0; wi < sn; ++wi) {
+                if (sx[wi] < 0 || sx[wi] > 319 || sy[wi] < 0 || sy[wi] > 199) {
+                    fast_subj = 0; break;
+                }
+            }
+        }
+        if (fast_subj) {
+            long sum = 0;
+            int prev = sn - 1;
+            for (wi = 0; wi < sn; ++wi) {
+                sum += (long)sx[prev] * sy[wi] - (long)sx[wi] * sy[prev];
+                prev = wi;
+            }
+            area2_subj = (long long)sum;
+        } else {
+            int prev = sn - 1;
+            for (wi = 0; wi < sn; ++wi) {
+                area2_subj += (long long)sx[prev] * (long long)sy[wi]
+                            - (long long)sx[wi] * (long long)sy[prev];
+                prev = wi;
+            }
         }
         /* record signed subject area for repro pair */
         if (area2_subj < 0) {
@@ -293,9 +332,29 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
             }
         }
         long long area2_clip = 0;
-        for (int i = 0; i < cn; ++i) {
-            int j = (i + 1) % cn;
-            area2_clip += (long long)cx[i] * (long long)cy[j] - (long long)cx[j] * (long long)cy[i];
+        int fast_clip = (cn <= 64);
+        if (fast_clip) {
+            for (wi = 0; wi < cn; ++wi) {
+                if (cx[wi] < 0 || cx[wi] > 319 || cy[wi] < 0 || cy[wi] > 199) {
+                    fast_clip = 0; break;
+                }
+            }
+        }
+        if (fast_clip) {
+            long sum = 0;
+            int prev = cn - 1;
+            for (wi = 0; wi < cn; ++wi) {
+                sum += (long)cx[prev] * cy[wi] - (long)cx[wi] * cy[prev];
+                prev = wi;
+            }
+            area2_clip = (long long)sum;
+        } else {
+            int prev = cn - 1;
+            for (wi = 0; wi < cn; ++wi) {
+                area2_clip += (long long)cx[prev] * (long long)cy[wi]
+                            - (long long)cx[wi] * (long long)cy[prev];
+                prev = wi;
+            }
         }
         if (area2_clip < 0) {
             /* reverse clip arrays in-place */
@@ -318,63 +377,71 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
             fflush(dlog);
         }
     }
-    /* Working buffers on heap to avoid stack exhaustion for large polygons */
-    double *buf_x1 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
-    double *buf_y1 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
-    double *buf_x2 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
-    double *buf_y2 = (double*)malloc(sizeof(double) * DEBUG_CLIP_MAX);
-    int *out_px = (int*)malloc(sizeof(int) * DEBUG_CLIP_MAX);
-    int *out_py = (int*)malloc(sizeof(int) * DEBUG_CLIP_MAX);
-    if (!buf_x1 || !buf_y1 || !buf_x2 || !buf_y2 || !out_px || !out_py) {
-        free(sx); free(sy); free(cx); free(cy);
-        if (buf_x1) free(buf_x1); if (buf_y1) free(buf_y1); if (buf_x2) free(buf_x2); if (buf_y2) free(buf_y2);
-        if (out_px) free(out_px); if (out_py) free(out_py);
-        debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0; return 0;
-    }
     int cur_n = sn;
     for (int i = 0; i < cur_n && i < DEBUG_CLIP_MAX; ++i) {
         buf_x1[i] = (double)sx[i]; buf_y1[i] = (double)sy[i];
     }
-    /* Sutherland–Hodgman: clip against each edge of `clip` */
+    /* Sutherland-Hodgman: each vertex side is evaluated once per clip edge. */
     for (int ci = 0; ci < cn && cur_n > 0; ++ci) {
-        /* SH outer-loop entry trace for repro pair */
-        int ci2 = (ci + 1) % cn;
-        double cx1d = (double)cx[ci], cy1d = (double)cy[ci];
-        double cx2d = (double)cx[ci2], cy2d = (double)cy[ci2];
+        int ci2 = ci + 1;
+        double cx1d, cy1d, ex, ey;
+        double sx1d, sy1d, side1;
+        int inside1;
         int out_n_tmp = 0;
-        for (int si = 0; si < cur_n; ++si) {
-            int sj = (si + 1) % cur_n;
-            double sx1d = buf_x1[si], sy1d = buf_y1[si];
-            double sx2d = buf_x1[sj], sy2d = buf_y1[sj];
-            double side1 = (cx2d - cx1d) * (sy1d - cy1d) - (cy2d - cy1d) * (sx1d - cx1d);
-            double side2 = (cx2d - cx1d) * (sy2d - cy1d) - (cy2d - cy1d) * (sx2d - cx1d);
-            int inside1 = (side1 >= 0.0);
-            int inside2 = (side2 >= 0.0);
+        int si;
+        if (ci2 == cn) ci2 = 0;
+        cx1d = (double)cx[ci]; cy1d = (double)cy[ci];
+        ex = (double)cx[ci2] - cx1d;
+        ey = (double)cy[ci2] - cy1d;
+        sx1d = buf_x1[0]; sy1d = buf_y1[0];
+        side1 = ex * (sy1d - cy1d) - ey * (sx1d - cx1d);
+        inside1 = (side1 >= 0.0);
+        for (si = 0; si < cur_n; ++si) {
+            int sj = si + 1;
+            double sx2d, sy2d, side2;
+            int inside2;
+            if (sj == cur_n) sj = 0;
+            sx2d = buf_x1[sj]; sy2d = buf_y1[sj];
+            side2 = ex * (sy2d - cy1d) - ey * (sx2d - cx1d);
+            inside2 = (side2 >= 0.0);
             if (inside1 && inside2) {
-                if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = sx2d; buf_y2[out_n_tmp] = sy2d; out_n_tmp++; }
-            } else if (inside1 && !inside2) {
+                if (out_n_tmp < DEBUG_CLIP_MAX) {
+                    buf_x2[out_n_tmp] = sx2d;
+                    buf_y2[out_n_tmp] = sy2d;
+                    out_n_tmp++;
+                }
+            } else if (inside1 != inside2) {
                 double dx = sx2d - sx1d, dy = sy2d - sy1d;
-                double ex = cx2d - cx1d, ey = cy2d - cy1d;
-                /* denom = cross(segment, clipEdge) */
                 double denom = dx * ey - dy * ex;
                 double t = 0.0;
-                if (fabs(denom) > 1e-12) t = ((cx1d - sx1d) * ey - (cy1d - sy1d) * ex) / denom;
-                double ix = sx1d + t * dx; double iy = sy1d + t * dy;
-                if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = ix; buf_y2[out_n_tmp] = iy; out_n_tmp++; }
-            } else if (!inside1 && inside2) {
-                double dx = sx2d - sx1d, dy = sy2d - sy1d;
-                double ex = cx2d - cx1d, ey = cy2d - cy1d;
-                /* denom = cross(segment, clipEdge) */
-                double denom = dx * ey - dy * ex;
-                double t = 0.0;
-                if (fabs(denom) > 1e-12) t = ((cx1d - sx1d) * ey - (cy1d - sy1d) * ex) / denom;
-                double ix = sx1d + t * dx; double iy = sy1d + t * dy;
-                if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = ix; buf_y2[out_n_tmp] = iy; out_n_tmp++; }
-                if (out_n_tmp < DEBUG_CLIP_MAX) { buf_x2[out_n_tmp] = sx2d; buf_y2[out_n_tmp] = sy2d; out_n_tmp++; }
+                double ix, iy;
+                if (fabs(denom) > 1e-12)
+                    t = ((cx1d - sx1d) * ey - (cy1d - sy1d) * ex) / denom;
+                ix = sx1d + t * dx;
+                iy = sy1d + t * dy;
+                if (out_n_tmp < DEBUG_CLIP_MAX) {
+                    buf_x2[out_n_tmp] = ix;
+                    buf_y2[out_n_tmp] = iy;
+                    out_n_tmp++;
+                }
+                if (inside2 && out_n_tmp < DEBUG_CLIP_MAX) {
+                    buf_x2[out_n_tmp] = sx2d;
+                    buf_y2[out_n_tmp] = sy2d;
+                    out_n_tmp++;
+                }
             }
+            sx1d = sx2d;
+            sy1d = sy2d;
+            side1 = side2;
+            inside1 = inside2;
         }
         cur_n = out_n_tmp;
-        for (int k = 0; k < cur_n; ++k) { buf_x1[k] = buf_x2[k]; buf_y1[k] = buf_y2[k]; }
+        /* Swap input/output buffers instead of copying vertices. */
+        {
+            double *tmp;
+            tmp = buf_x1; buf_x1 = buf_x2; buf_x2 = tmp;
+            tmp = buf_y1; buf_y1 = buf_y2; buf_y2 = tmp;
+        }
         if (dlog) {
             fprintf(dlog, "after clip edge %d -> vertex_count=%d\n", ci, cur_n);
             for (int kk = 0; kk < cur_n; ++kk) fprintf(dlog, "  %.6f %.6f\n", buf_x1[kk], buf_y1[kk]);
@@ -390,7 +457,16 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
         if (final_n >= 2) {
             int x1 = out_px[final_n-2], y1 = out_py[final_n-2];
             int x2 = out_px[final_n-1], y2 = out_py[final_n-1];
-            long long cross = (long long)(x2 - x1) * (long long)(py - y1) - (long long)(y2 - y1) * (long long)(px - x1);
+            long long cross;
+            if (x1 >= 0 && x1 <= 319 && x2 >= 0 && x2 <= 319 && px >= 0 && px <= 319 &&
+                y1 >= 0 && y1 <= 199 && y2 >= 0 && y2 <= 199 && py >= 0 && py <= 199) {
+                long cross32 = ((long)x2 - x1) * ((long)py - y1)
+                             - ((long)y2 - y1) * ((long)px - x1);
+                cross = (long long)cross32;
+            } else {
+                cross = (long long)(x2 - x1) * (long long)(py - y1)
+                      - (long long)(y2 - y1) * (long long)(px - x1);
+            }
             if (cross == 0) { out_px[final_n-1] = px; out_py[final_n-1] = py; continue; }
         }
         if (final_n < DEBUG_CLIP_MAX) { out_px[final_n] = px; out_py[final_n] = py; final_n++; }
@@ -399,8 +475,7 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
     if (final_n < 3) {
         debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0;
         if (dlog) { fprintf(dlog, "final_n < 3 -> no polygon\n"); fclose(dlog); }
-        free(sx); free(sy); free(cx); free(cy);
-        free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
+        if (!shared_work) free(work_storage);
         return 0;
     }
     /* Copy to debug buffers */
@@ -412,24 +487,58 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
         for (int i = 0; i < final_n; ++i) fprintf(dlog, "%d %d\n", out_px[i], out_py[i]);
         fflush(dlog);
     }
-    /* Compute signed raw area2 and centroid numerators */
+    /* Fast path: all rounded vertices are on the 320x200 screen.
+     * With at most 32 vertices, each centroid numerator is bounded by
+     * 32 * (2*319) * (319*199), which fits in signed 32-bit long.
+     * Keep the original 64-bit path for every other case. */
     long long raw_area2_signed = 0;
     long long cx_num = 0, cy_num = 0;
-    for (int i = 0; i < final_n; ++i) {
-        int j = (i + 1) % final_n;
-        long long xi = (long long)out_px[i], yi = (long long)out_py[i];
-        long long xj = (long long)out_px[j], yj = (long long)out_py[j];
-        long long cross = xi * yj - yi * xj;
-        raw_area2_signed += cross;
-        cx_num += (xi + xj) * cross;
-        cy_num += (yi + yj) * cross;
+    {
+        int fast32 = (final_n <= 32);
+        int i;
+        if (fast32) {
+            for (i = 0; i < final_n; ++i) {
+                if (out_px[i] < 0 || out_px[i] > 319 ||
+                    out_py[i] < 0 || out_py[i] > 199) {
+                    fast32 = 0;
+                    break;
+                }
+            }
+        }
+        if (fast32) {
+            long area32 = 0, cx32 = 0, cy32 = 0;
+            int j = final_n - 1;
+            for (i = 0; i < final_n; ++i) {
+                long cross32 = (long)out_px[j] * out_py[i]
+                             - (long)out_py[j] * out_px[i];
+                area32 += cross32;
+                cx32 += ((long)out_px[j] + out_px[i]) * cross32;
+                cy32 += ((long)out_py[j] + out_py[i]) * cross32;
+                j = i;
+            }
+            raw_area2_signed = (long long)area32;
+            cx_num = (long long)cx32;
+            cy_num = (long long)cy32;
+        } else {
+            int j = final_n - 1;
+            for (i = 0; i < final_n; ++i) {
+                long long xi = (long long)out_px[j];
+                long long yi = (long long)out_py[j];
+                long long xj = (long long)out_px[i];
+                long long yj = (long long)out_py[i];
+                long long cross = xi * yj - yi * xj;
+                raw_area2_signed += cross;
+                cx_num += (xi + xj) * cross;
+                cy_num += (yi + yj) * cross;
+                j = i;
+            }
+        }
     }
     if (raw_area2_signed == 0) {
         debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0;
         if (dlog) { fprintf(dlog, "raw_area2_signed == 0 -> degenerate polygon\n"); fflush(dlog); }
         if (outx) *outx = out_px[0]; if (outy) *outy = out_py[0];
-        free(sx); free(sy); free(cx); free(cy);
-        free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
+        if (!shared_work) free(work_storage);
         if (dlog) fclose(dlog);
         return 1;
     }
@@ -443,14 +552,40 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
     long long numer_y = cy_num;
     long long denom = 3 * raw_area2_signed;
     if (denom < 0) { denom = -denom; numer_x = -numer_x; numer_y = -numer_y; }
-    long long cx_i = (numer_x >= 0) ? (numer_x + denom/2) / denom : -(( -numer_x + denom/2) / denom);
-    long long cy_i = (numer_y >= 0) ? (numer_y + denom/2) / denom : -(( -numer_y + denom/2) / denom);
+    long long cx_i, cy_i;
+    if (denom <= 2147483647LL &&
+        numer_x >= -2147483647LL && numer_x <= 2147483647LL &&
+        numer_y >= -2147483647LL && numer_y <= 2147483647LL) {
+        long d32 = (long)denom;
+        long nx32 = (long)numer_x;
+        long ny32 = (long)numer_y;
+        long half32 = d32 / 2;
+        /* Do not overflow signed long during rounding. */
+        if ((nx32 >= 0 ? nx32 : -nx32) <= 2147483647L - half32 &&
+            (ny32 >= 0 ? ny32 : -ny32) <= 2147483647L - half32) {
+            long x32 = (nx32 >= 0) ? (nx32 + half32) / d32
+                                   : -((-nx32 + half32) / d32);
+            long y32 = (ny32 >= 0) ? (ny32 + half32) / d32
+                                   : -((-ny32 + half32) / d32);
+            cx_i = (long long)x32;
+            cy_i = (long long)y32;
+        } else {
+            cx_i = (numer_x >= 0) ? (numer_x + denom/2) / denom : -((-numer_x + denom/2) / denom);
+            cy_i = (numer_y >= 0) ? (numer_y + denom/2) / denom : -((-numer_y + denom/2) / denom);
+        }
+    } else {
+        cx_i = (numer_x >= 0) ? (numer_x + denom/2) / denom : -((-numer_x + denom/2) / denom);
+        cy_i = (numer_y >= 0) ? (numer_y + denom/2) / denom : -((-numer_y + denom/2) / denom);
+    }
     if (outx) *outx = (int)cx_i; if (outy) *outy = (int)cy_i;
     /* Return raw area2 in pixel^2 (absolute value of signed raw_area2). */
     if (out_area2) *out_area2 = (long long)abs_raw;
-    free(sx); free(sy); free(cx); free(cy);
-    free(buf_x1); free(buf_y1); free(buf_x2); free(buf_y2); free(out_px); free(out_py);
+    if (!shared_work) free(work_storage);
     return 1;
+}
+/* Standalone entry point: keep existing callers and allocation behavior. */
+static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
+    return compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, NULL);
 }
 /* Try both clipping orders: call compute_intersection_centroid_ordered_fixed(subj,clip)
  * and if it produces fewer than 3 output vertices, try compute_intersection_centroid_ordered_fixed(clip,subj).
@@ -459,12 +594,41 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
 static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2, int* out_fallback) {
     if (!model || out_area2 == NULL) return 0;
     if (out_fallback) *out_fallback = 0;
+    /* Allocate the clipping workspace once, including for a reversed retry.
+     * Both orders require exactly the same total storage. */
+    {
+        FaceArrays3D* f = &model->faces;
+        int sn, cn;
+        long bytes;
+        double* shared_work;
+        int res, res2;
+        if (subj < 0 || clip < 0 || subj >= f->face_count || clip >= f->face_count) return 0;
+        sn = f->vertex_count[subj];
+        cn = f->vertex_count[clip];
+        if (sn < 3 || cn < 3) {
+            debug_clip_fixed_vcount = 0;
+            debug_clip_raw_area2 = 0;
+            debug_clip_fixed_area = 0.0;
+            return 0;
+        }
+        bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX)
+              + (long)sizeof(int) * (2L * sn + 2L * cn + 2L * DEBUG_CLIP_MAX);
+        shared_work = (double*)malloc(bytes);
+        if (!shared_work) {
+            debug_clip_fixed_vcount = 0;
+            debug_clip_raw_area2 = 0;
+            debug_clip_fixed_area = 0.0;
+            *out_area2 = 0;
+            return 0;
+        }
     /* Try primary order first */
-    int res = compute_intersection_centroid_ordered_fixed(model, subj, clip, outx, outy, out_area2);
-    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; return res; }
+    res = compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, shared_work);
+    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; free(shared_work); return res; }
     /* Try reversed order */
-    int res2 = compute_intersection_centroid_ordered_fixed(model, clip, subj, outx, outy, out_area2);
-    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; return res2; }
+    res2 = compute_intersection_centroid_ordered_fixed_work(model, clip, subj, outx, outy, out_area2, shared_work);
+    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; free(shared_work); return res2; }
+    free(shared_work);
+    }
     /* No drawable clipped polygon found in either order — perform bbox/sample fallback
      * (mirror the inspector behavior): find a sample point inside the integer
      * intersection bbox that lies inside both polygons; otherwise use bbox center.
@@ -626,12 +790,12 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
         if (*ix0 <= *ix1 && *iy0 <= *iy1) {
             if (out_area2) *out_area2 = (long long)((*ix1 - *ix0) * (*iy1 - *iy0));
             /* Paint region for visual confirmation (apply current pan so visual matches overlays) */
-            PenState ps_dbg; GetPenState(&ps_dbg); SetSolidPenPat(COL_YELLOW);
-            /* shift the QuickDraw region by the global pan so PaintRgn draws at the
-               same position as the other overlays which apply `pan_dx/pan_dy` at
-               render time */
-            OffsetRgn(r3, pan_dx, pan_dy);
-            PaintRgn(r3); SetPenState(&ps_dbg);
+            // PenState ps_dbg; GetPenState(&ps_dbg); SetSolidPenPat(COL_YELLOW);
+            // /* shift the QuickDraw region by the global pan so PaintRgn draws at the
+            //    same position as the other overlays which apply `pan_dx/pan_dy` at
+            //    render time */
+            // OffsetRgn(r3, pan_dx, pan_dy);
+            // PaintRgn(r3); SetPenState(&ps_dbg);
             HUnlock((Handle)r3);
             DisposeRgn(r1); DisposeRgn(r2); DisposeRgn(r3);
             return 1;

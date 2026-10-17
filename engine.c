@@ -6,6 +6,7 @@
 #include "zbuffer_scanline.c"
 #include "zbuffer_fullscreen.c"
 #include "zbuffer_fullscreen_offscreen.c"
+#include "test_qd_sh_all_pairs.c"
 
 segment "model_loading";
 // ================================================================================
@@ -4582,32 +4583,50 @@ static void rch_unpatch_pair(Model3D* model, RCHZoomPatch* p, int f1, int f2) {
     s_global_proj_scale_fixed = p->saved_scale;
 }
 /* ----------------------------------------------------------------------
- * Original decision logic, UNCHANGED, just renamed.
- * This is exactly the previous body of ray_cast_hierarchical(): try the
- * QuickDraw region centroid first, then the Sutherland-Hodgman centroid,
- * then fall back to the bbox-intersection center. Whatever coordinates
- * happen to be in vtx->x2d/y2d and faces->minx/maxx/... at the time this
- * runs are what it will use — it has no knowledge of the zoom patch
- * wrapped around it.
+ * Hierarchical face-depth comparison.
+ *
+ * Try the Sutherland-Hodgman intersection centroid first, then the
+ * QuickDraw region representative point, and finally the center of
+ * the intersection bounding box.
+ *
+ * Each method provides a screen-space point for ray_cast_at().
+ * Return immediately when the relative depth order is determined.
+ * If a method fails or produces an indeterminate result, try the next.
+ *
+ * Return 0 if none of the methods can determine the face order.
+ *
+ * This function uses the current projected coordinates and face
+ * bounding boxes, without knowledge of any external zoom adjustment.
  * ---------------------------------------------------------------------- */
-static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2) {
+static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)
+{
+    int cx = 0, cy = 0;
+    long long area2 = 0;
+    int rc = 0;
+    int fallback = 0;
+
     if (!model) return 0;
-    int cx = 0, cy = 0; long long area2 = 0; int rc = 0; int fallback = 0;
-    /* 1) Prefer QuickDraw region centroid (most representative for complex overlaps) */
-    if (compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &cx, &cy, &area2) && area2 != 0) {
+
+    /* 1) Try the Sutherland-Hodgman intersection centroid. */
+    if (compute_intersection_centroid_ordered_fixed_tryboth(
+            model, f1, f2, &cx, &cy, &area2, &fallback) && area2 != 0) {
         rc = ray_cast_at(model, f1, f2, cx, cy);
         if (rc != 0) return rc;
     }
-    /* 2) Try Sutherland–Hodgman centroid */
-    area2 = 0; fallback = 0;
-    if (compute_intersection_centroid_ordered_fixed_tryboth(model, f1, f2, &cx, &cy, &area2, &fallback) && area2 != 0) {
+
+    /* 2) Try the QuickDraw region representative point. */
+    area2 = 0;
+    if (compute_intersection_centroid_ordered_qd_fixed(
+            model, f1, f2, &cx, &cy, &area2) && area2 != 0) {
         rc = ray_cast_at(model, f1, f2, cx, cy);
         if (rc != 0) return rc;
     }
-    /* 3) Fallback to bbox center */
+
+    /* 3) Fall back to the intersection bounding-box center. */
     if (compute_bbox_intersection_center(model, f1, f2, &cx, &cy)) {
         return ray_cast_at(model, f1, f2, cx, cy);
     }
+
     return 0;
 }
 /* ----------------------------------------------------------------------
