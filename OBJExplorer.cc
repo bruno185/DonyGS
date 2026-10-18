@@ -48,7 +48,7 @@
 
 segment "main";
     int main() {
-        Model3D* model;
+        Model3D* model = NULL;
         ObserverParams params;
         char filename[100];
         // char input[50];
@@ -94,6 +94,8 @@ segment "main";
             printf("Error: Unable to allocate memory for 3D model\n");
             printf("Press any key to quit...\n");
             keypress();
+            ZBuffer_Shutdown();
+            Offscreen_Shutdown();
             return 1;
         }
 
@@ -131,12 +133,16 @@ segment "main";
                 // EOF or input error - exit gracefully
                 printf("\nInput error or EOF. Exiting.\n");
                 destroyModel3D(model);
+                ZBuffer_Shutdown();
+                Offscreen_Shutdown();
                 return 1;
             }
 
             if (filename[0] == '\0') {
                 printf("No filename entered. Exiting.\n");
                 destroyModel3D(model);
+                ZBuffer_Shutdown();
+                Offscreen_Shutdown();
                 return 0; // Exit program when user presses ENTER with empty filename
             }
 
@@ -158,6 +164,8 @@ segment "main";
                             printf("Error: Unable to allocate memory for 3D model after failed load. Exiting.\n");
                             printf("Press any key to quit...\n");
                             keypress();
+                            ZBuffer_Shutdown();
+                            Offscreen_Shutdown();
                             return 1;
                         }
                         if (loadModel3D(model, filename_ext) >= 0) {
@@ -175,6 +183,8 @@ segment "main";
                         printf("Error: Unable to allocate memory for 3D model after failed load. Exiting.\n");
                         printf("Press any key to quit...\n");
                         keypress();
+                        ZBuffer_Shutdown();
+                        Offscreen_Shutdown();
                         return 1;
                     }
                     continue;
@@ -237,6 +247,9 @@ segment "main";
                 if (qd_dp == NULL || qd_err != 0) {
                     printf("QuickDraw direct-page allocation failed: $%04X\n", qd_err);
                     if (qd_dp != NULL) DisposeHandle(qd_dp);
+                    destroyModel3D(model);
+                    ZBuffer_Shutdown();
+                    Offscreen_Shutdown();
                     return 1;
                 }
 
@@ -245,6 +258,9 @@ segment "main";
                 if (qd_err != 0) {
                     printf("QDStartUp failed: $%04X\n", qd_err);
                     DisposeHandle(qd_dp);
+                    destroyModel3D(model);
+                    ZBuffer_Shutdown();
+                    Offscreen_Shutdown();
                     return 1;
                 }
                 qd_started = 1;
@@ -263,6 +279,9 @@ segment "main";
                 DisposeHandle(qd_dp);
                 if (qd_err != 0) {
                     printf("QDShutDown failed: $%04X\n", qd_err);
+                    destroyModel3D(model);
+                    ZBuffer_Shutdown();
+                    Offscreen_Shutdown();
                     return 1;
                 }
             }

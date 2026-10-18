@@ -1,30 +1,20 @@
-/* zbuffer_fullscreen_v2.h
- *
- * Full-screen 16-bit Z-buffer for Apple IIGS (320x200, SHR mode) — V2.
- *
- * Border strategy (V2, revised):
- *   Borders are produced *during* the fill scan conversion, not by a
- *   second geometric edge-stroke pass (that approach caused thick /
- *   missing / dotted lines depending on diagonal direction).
- *
- *   For each horizontal span of a face:
- *     - leftmost  pixel  → frameColor
- *     - rightmost pixel  → frameColor
- *     - if the span lies on the face's miny or maxy scanline,
- *       every pixel of the span → frameColor  (top / bottom edges)
- *     - all other pixels → fillColor
- *
- *   Depth test is the same for fill and border pixels, so hidden
- *   borders stay hidden and visible borders are exactly 1 pixel thick
- *   and aligned with the rasterised interior.
- *
- * Precision warning, encoding and scale policy unchanged from V1.
- */
-
+/* Full-screen Z-buffer V5: coherent fill + depth-tested Bresenham borders. */
 
 #ifndef ZBUFFER_FULLSCREEN_H
 #define ZBUFFER_FULLSCREEN_H
 
+
+/* Fill and border use the same depth plane.  No slope tolerance is needed.
+ * Default 0 rejects every strictly farther edge.  Keep 0 for hidden-line tests.
+ */
+#ifndef ZBUFFER_BORDER_TOLERANCE
+#define ZBUFFER_BORDER_TOLERANCE 0
+#endif
+
+/* Optional borrowed per-side mask, indexed like vertex_indices_buffer.
+ * 0 hides a side; nonzero draws it. NULL restores all sides.
+ */
+void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count);
 
 #define ZBUF_WIDTH       320
 #define ZBUF_HEIGHT      200

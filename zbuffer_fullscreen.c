@@ -1,46 +1,31 @@
-/* zbuffer_fullscreen.c
- *
- * Full-screen 16-bit Z-buffer + scanline renderer (V3), drawing straight into
- * the SHR screen ($E1:2000, 320 mode).
- *
- * DEPTH ENCODING
- *   Every vertex gets inv_z = 1/z.  inv_z is linear in screen space, so it can be
- *   interpolated along edges and spans with plain additions.  It is quantised to
- *   a 16-bit code
- *       zq = 0xFFFF - round(inv_z * scale)
- *   SMALLER zq = CLOSER, and 0xFFFF means "empty" (nothing drawn yet).  "scale" is
- *   recomputed every frame from the largest inv_z so the whole 16-bit range is used.
- *
- * Z-BUFFER MEMORY
- *   320 x 200 words, 640 bytes per row, stored in two consecutive 64 KB banks that
- *   start on a bank boundary: row y begins at base + y * 640.  One row (row 102)
- *   therefore straddles the two banks; any code that walks a row must carry into
- *   the bank byte (the assembler routines use [dp],y for that).
- *
- * FRAME PIPELINE  (ZBuffer_RenderCore)
- *   1. per vertex   1/z, scale, quantise            -> vzq[]
- *   2. per face     visibility, colours, edge set-up in 12-bit fixed point
- *   3. counting sort of the faces by first visible scanline
- *   4. per scanline activate the faces that start here, advance their edges,
- *                   sort the intersections, pair them up into spans
- *   5. per span     left pixel + interior + right pixel are written by
- *                   ZBuffer_SpanRun (assembler) with a strict "closer wins" test;
- *                   gap bridges join the span ends of consecutive scanlines
- *
- * BORDERS
- *   frameColor on the left end of a span and, on true silhouettes only, on the
- *   right end; frameColor on the whole span on the first and last scanline of a
- *   face; fillColor elsewhere.  Between two consecutive scanlines the span ends are
- *   joined by a bridge so that shallow diagonals are solid instead of dotted.  A
- *   bridge NEVER writes a closer depth (that punched holes through other surfaces);
- *   it only reinforces pixels that already belong to the same surface.  Border and
- *   fill pixels are painted only when strictly closer.
- *
- * USAGE
- *   ZBuffer_Init() once at start-up, ZBuffer_Shutdown() on exit, then
- *   renderModelFullscreenZBuffer() for each model.
+/* Memory-lifetime correction: all renderer-owned allocations are released
+ * by ZBuffer_Shutdown; repeated Init is idempotent; partial allocations and
+ * target size_t overflow are handled. Header and rendering arithmetic unchanged.
  */
-
+/* FULLSCREEN-ONLY COCKPIT GUARD, based on the validated no-bleed V5.
+ * Only border visibility changes: when a face-plane sample is strictly closer
+ * than the existing surface, the geometric edge depth must also pass Z.
+ * Fill, span assembly, allocation and shared header are unchanged.
+ * Adds integer interpolation along borders; no extra full-screen buffer.
+ * This is a targeted improvement, not a general hidden-line guarantee.
+ */
+/* zbuffer_fullscreen.c -- V5 correction: inward fill + shared depth plane.
+ * Apple IIGS / ORCA C / 65816, SHR 320x200.
+ *
+ * Coverage: keep subpixel edge intersections; ceil the left fill boundary and
+ * floor the right boundary.  Nearest-pixel Bresenham outlines surround this
+ * interior.  This removes the asymmetric negative-offset rounding of V4.
+ *
+ * Visibility: fill AND stroke evaluate one quantised depth plane at the actual
+ * raster pixel.  No slope-dependent depth tolerance is needed.  Farther edges
+ * are rejected by default, including edges just behind cockpit surfaces.
+ * Planar faces are assumed.  Degenerate projected faces use constant depth.
+ *
+ * The assembler span writer, Z allocation, adaptive scale, optional side flags
+ * and public render entry points are retained.  Per-face float plane setup
+ * replaces per-edge Z slope setup and per-span Z divisions.  No extra full-screen
+ * buffer is allocated.  FramePoly and Bresenham tie rules can still differ.
+ */
 
 segment "ZBUF";
 #include "zbuffer_fullscreen.h"
@@ -52,6 +37,7 @@ FarWordPtr zbuf_row[ZBUF_HEIGHT];
 
 static Handle  zbuf_handle = NULL;
 static int     zbuf_bank_lo = 0;     /* the two banks holding the Z-buffer */
+static void ZBFS_FreeScratch(void);
 static int     zbuf_bank_hi = 0;
 
 
@@ -70,8 +56,12 @@ int ZBuffer_Init(void)
     ULONG32 aligned;
     int     y;
 
+    /* Re-entering Init when loading another model must not lose the old handle. */
+    if (zbuf_handle != NULL) return 1;
     zbuf_handle = NewHandle(ZBUF_ALLOC_SIZE, userid(), attrFixed, 0L);
     if (toolerror() || zbuf_handle == NULL) {
+        if (zbuf_handle != NULL) DisposeHandle(zbuf_handle);
+        zbuf_handle = NULL;
         return 0;
     }
 
@@ -91,12 +81,20 @@ int ZBuffer_Init(void)
 }
 
 
+/* Safe after partial initialization and safe to call more than once.
+ * Edge flags are borrowed: forget the pointer, never free caller-owned memory.
+ */
 void ZBuffer_Shutdown(void)
 {
+    int y;
+    ZBFS_FreeScratch();
+    ZBuffer_SetEdgeFlags(NULL, 0UL);
     if (zbuf_handle != NULL) {
         DisposeHandle(zbuf_handle);
         zbuf_handle = NULL;
     }
+    for (y = 0; y < ZBUF_HEIGHT; y++) zbuf_row[y] = NULL;
+    zbuf_bank_lo = zbuf_bank_hi = 0;
 }
 
 
@@ -376,147 +374,29 @@ zsr_done:
 
 
 /* ====================================================================
- * Gap bridges between the span ends of consecutive scanlines
- *
- * Everything below is integer after the endpoint quantisation.  A bridge runs
- * only when the span end moved by more than one pixel between two scanlines.
- * ==================================================================== */
-
-/* The span of the previous scanline for one face (used to bridge the gaps). */
-typedef struct {
-    int     valid;
-    int     y;
-    int     x0, x1;
-    UWORD16 zq0, zq1;
-} ZBufSpanPrev;
-
-
-/* Integer-Z bridge between two already-quantised endpoints. */
-/* Bridge plot: NEVER write a closer Z (that punched through other
- * surfaces and caused occlusion leaks).  Only paint colour when the
- * buffer depth already matches ours (pixel is on this surface). */
-static void ZBuffer_PlotBridge(int sx, int sy, UWORD16 zq, int color)
-{
-    FarWordPtr row;
-    UWORD16 cur;
-
-    if ((unsigned)sx >= (unsigned)ZBUF_WIDTH ||
-        (unsigned)sy >= (unsigned)ZBUF_HEIGHT)
-        return;
-
-    row = zbuf_row[sy];
-    cur = row[sx];
-    /* identical depth -> on-surface outline reinforce */
-    if (zq == cur)
-        drawPixel(sx, sy, color);
-    /* allow 1 LSB quantisation tolerance on the FARTHER side only */
-    else if (zq > cur && (int)zq - (int)cur <= 1)
-        drawPixel(sx, sy, color);
-    /* zq < cur would be closer -> skip (would be a leak) */
-}
-
-
-static void ZBuffer_BridgeBorderZQ(int x0, int y0, UWORD16 zq0,
-                                   int x1, int y1, UWORD16 zq1,
-                                   int color)
-{
-    int dx = x1 - x0;
-    int dy = y1 - y0;
-    int adx = (dx >= 0) ? dx : -dx;
-    int ady = (dy >= 0) ? dy : -dy;
-    int steps, i, x, y;
-    long z_acc, z_step;
-
-    if (dx == 0 && dy == 0) {
-        ZBuffer_PlotBridge(x0 + pan_dx, y0 + pan_dy, zq0, color);
-        return;
-    }
-
-    steps = (adx > ady) ? adx : ady;
-    if (steps <= 0) return;
-
-    z_acc  = ((long)zq0 << 16) + 0x8000L;
-    z_step = (((long)zq1 - (long)zq0) << 16) / steps;
-
-    if (adx >= ady) {
-        int y_step = (dy >= 0) ? 1 : -1;
-        int err = adx / 2;
-        x = x0;
-        y = y0;
-        for (i = 0; i <= steps; i++) {
-            ZBuffer_PlotBridge(x + pan_dx, y + pan_dy,
-                               (UWORD16)(z_acc >> 16), color);
-            if (i == steps) break;
-            z_acc += z_step;
-            if (dx >= 0) x++; else x--;
-            err -= ady;
-            if (err < 0) { y += y_step; err += adx; }
-        }
-    } else {
-        int x_step = (dx >= 0) ? 1 : -1;
-        int err = ady / 2;
-        x = x0;
-        y = y0;
-        for (i = 0; i <= steps; i++) {
-            ZBuffer_PlotBridge(x + pan_dx, y + pan_dy,
-                               (UWORD16)(z_acc >> 16), color);
-            if (i == steps) break;
-            z_acc += z_step;
-            if (dy >= 0) y++; else y--;
-            err -= adx;
-            if (err < 0) { x += x_step; err += ady; }
-        }
-    }
-}
-
-
-/* ====================================================================
  * Fixed-point edge walking and span painting
  * ==================================================================== */
 
-#define ZB_FRAC      12
-#define ZB_ROUND     0x800L          /* 1 << (ZB_FRAC - 1): the +0.5 of a rounding */
 #define ZB_Z_BIAS    0.0005f         /* inv_z bias that pulls "biased" faces closer */
 #define ZB_SHR_BASE  0xE12000UL      /* SHR screen memory */
 
 
 /* One intersection of a scanline with the polygon: pixel x and its depth code. */
 typedef struct {
-    int     x;
-    UWORD16 zq;
+    long x;                 /* absolute model x, 12 fraction bits */
 } ZbHit;
 
 
-/* One polygon edge, walked from its upper end to its lower end, one row at a time.
- *
- *   x, z   current position, in 12-bit fixed point:
- *            x = offset from xb (the x of the edge's first vertex)
- *            z = zq code
- *          The +0.5 rounding is already included, so reading a value needs no
- *          extra add.
- *   sx, sz change per scanline (dx/dy and dzq/dy, 12-bit fixed point)
- *   ya, yb the edge is active on rows ya <= y < yb
- *   xb     x of the edge's first vertex
- *
- * Because the state is advanced once per visited row, an edge costs two long
- * additions per scanline and no division. */
+/* One polygon edge, walked top to bottom. x is a subpixel offset from xb,
+ * sx is dx/dy, both with 12 fraction bits and NO baked-in rounding. The edge
+ * participates on ya <= y < yb. Depth comes from the face plane, not this edge.
+ */
 typedef struct {
-    long x, z;
-    long sx, sz;
+    long x;
+    long sx;
     int  ya, yb;
     int  xb;
 } ZbEdge;
-
-
-/* zq at abscissa x by linear interpolation between (xa, za) and (xb, zb).
- * Only used for spans cut by the horizontal clipping. */
-static UWORD16 ZBuffer_LerpZ(UWORD16 za, UWORD16 zb, int xa, int xb, int x)
-{
-    long num;
-    if (xb == xa) return za;
-    num = ((long)zb - (long)za) * (long)(x - xa);
-    return (UWORD16)((long)za + num / (long)(xb - xa));
-}
 
 
 /* ------------------------------------------------------------------------
@@ -812,111 +692,283 @@ static void ZBuffer_SpanRun(void)
 }
 
 
-/* Paints the span x0..x1 (already clipped) of scanline y.
- *
- *   zq0, zq_end         depth codes at x0 and x1
- *   fillColor           colour of the interior
- *   frameColor          colour of the borders
- *   whole_span_is_border  1 on the first / last scanline of a face: the whole span
- *                       is drawn in frameColor
- *   prev                span of the previous scanline of the same face (bridges)
- *   z_nudge_lsbs        number of LSBs subtracted from zq (pulls a face closer) */
-static void ZBuffer_PaintSpanZ(int x0, int x1, int y, int screenY,
-                               UWORD16 zq0, UWORD16 zq_end,
-                               int fillColor, int frameColor,
-                               int whole_span_is_border,
-                               ZBufSpanPrev *prev,
-                               int z_nudge_lsbs)
+/* A single quantised depth plane is shared by a face's fill and outline.
+ * Coordinates refer to SCREEN pixels, including pan.  Coefficients use 12
+ * fraction bits; all per-pixel arithmetic is integer.  Unsigned accumulators
+ * intentionally wrap at 32 bits, so cancellation in plane evaluation is safe.
+ */
+typedef struct {
+    long gx, gy;
+    long x, y;
+    UWORD16 z;
+} ZbPlane;
+
+static float* zbfs_inv_z = NULL;
+static UWORD16* zbfs_vzq = NULL;
+static UWORD16* zbfs_vzq_b = NULL;
+static int zbfs_vert_capacity = 0;
+
+static int* zbfs_face_start = NULL;          /* first scanline of the face (relative to y_lo), -1 = skipped */
+static int* zbfs_face_sorted = NULL;         /* faces sorted by first scanline (counting sort)               */
+static int* zbfs_face_active = NULL;         /* faces crossing the current scanline, ascending face index    */
+static unsigned char* zbfs_face_fill = NULL;
+static unsigned char* zbfs_face_frame = NULL;
+static unsigned char* zbfs_face_nudge = NULL;
+static ZbPlane *zbfs_face_plane = NULL;
+static int zbfs_face_capacity = 0;
+
+static ZbEdge* zbfs_edge_buf = NULL;
+static int zbfs_edge_capacity = 0;
+
+
+static void ZBFS_FreeFaces(void)
 {
-    int nsteps, sx0, sxr, silhouette_r, n, interiorColor;
-    UWORD16 zr;
-    long z_acc, z_step_16;
+    if (zbfs_face_start) free(zbfs_face_start);
+    if (zbfs_face_sorted) free(zbfs_face_sorted);
+    if (zbfs_face_active) free(zbfs_face_active);
+    if (zbfs_face_fill) free(zbfs_face_fill);
+    if (zbfs_face_frame) free(zbfs_face_frame);
+    if (zbfs_face_nudge) free(zbfs_face_nudge);
+    if (zbfs_face_plane) free(zbfs_face_plane);
+    zbfs_face_start = zbfs_face_sorted = zbfs_face_active = NULL;
+    zbfs_face_fill = zbfs_face_frame = zbfs_face_nudge = NULL;
+    zbfs_face_plane = NULL;
+    zbfs_face_capacity = 0;
+}
 
+static void ZBFS_FreeVertices(void)
+{
+    if (zbfs_inv_z) free(zbfs_inv_z);
+    if (zbfs_vzq) free(zbfs_vzq);
+    if (zbfs_vzq_b) free(zbfs_vzq_b);
+    zbfs_inv_z = NULL;
+    zbfs_vzq = zbfs_vzq_b = NULL;
+    zbfs_vert_capacity = 0;
+}
+
+static void ZBFS_FreeEdges(void)
+{
+    if (zbfs_edge_buf) free(zbfs_edge_buf);
+    zbfs_edge_buf = NULL;
+    zbfs_edge_capacity = 0;
+}
+
+static void ZBFS_FreeScratch(void)
+{
+    ZBFS_FreeFaces();
+    ZBFS_FreeVertices();
+    ZBFS_FreeEdges();
+}
+
+/* Check BEFORE multiplying: size_t may be only 16 bits on the GS. */
+static int ZBFS_SizeFits(int count, size_t element_size)
+{
+    return count > 0 && (unsigned long)count <=
+           (unsigned long)((size_t)-1) / (unsigned long)element_size;
+}
+
+static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx,
+                             FaceArrays3D *faces, int f, UWORD16 *zsrc,
+                             int nudge)
+{
+    int n, off, a, b, c, k;
+    float ax, ay, az, bx, by, bz, det, gx, gy;
+    off = faces->vertex_indices_ptr[f];
+    n = faces->vertex_count[f];
+    a = faces->vertex_indices_buffer[off] - 1;
+    p->x = (long)vtx->x2d[a] + (long)pan_dx;
+    p->y = (long)vtx->y2d[a] + (long)pan_dy;
+    p->z = (zsrc[a] > (UWORD16)nudge) ? (UWORD16)(zsrc[a] - nudge) : 0;
+    p->gx = p->gy = 0L;
+    for (k = 1; k + 1 < n; k++) {
+        b = faces->vertex_indices_buffer[off + k] - 1;
+        c = faces->vertex_indices_buffer[off + k + 1] - 1;
+        ax = (float)vtx->x2d[b] - (float)vtx->x2d[a];
+        ay = (float)vtx->y2d[b] - (float)vtx->y2d[a];
+        az = (float)zsrc[b] - (float)zsrc[a];
+        bx = (float)vtx->x2d[c] - (float)vtx->x2d[a];
+        by = (float)vtx->y2d[c] - (float)vtx->y2d[a];
+        bz = (float)zsrc[c] - (float)zsrc[a];
+        det = ax * by - ay * bx;
+        if (det == 0.0f) continue;
+        gx = ((az * by - ay * bz) / det) * 4096.0f;
+        gy = ((ax * bz - az * bx) / det) * 4096.0f;
+        /* Guard conversion for pathological projected planes. */
+        if (gx > 2147483000.0f) gx = 2147483000.0f;
+        if (gx < -2147483000.0f) gx = -2147483000.0f;
+        if (gy > 2147483000.0f) gy = 2147483000.0f;
+        if (gy < -2147483000.0f) gy = -2147483000.0f;
+        p->gx = (long)((gx < 0.0f) ? gx - 0.5f : gx + 0.5f);
+        p->gy = (long)((gy < 0.0f) ? gy - 0.5f : gy + 0.5f);
+        return;
+    }
+}
+
+static unsigned long ZBuffer_PlaneAt(ZbPlane *p, long x, long y)
+{
+    return (((unsigned long)p->z << 12) +
+            (unsigned long)p->gx * (unsigned long)(x - p->x) +
+            (unsigned long)p->gy * (unsigned long)(y - p->y)) & 0xFFFFFFFFUL;
+}
+
+static UWORD16 ZBuffer_PlaneCode(unsigned long z)
+{
+    z = (z + 0x800UL) & 0xFFFFFFFFUL;
+    if (z & 0x80000000UL) return 0;
+    z >>= 12;
+    return (z > 65535UL) ? ZBUF_FAR_VALUE : (UWORD16)z;
+}
+
+/* Fill at the ACTUAL raster pixel positions, using the same depth plane as
+ * the final stroke.  The assembler span writer is unchanged.  Its 16.16 step
+ * is derived exactly from our 12-bit coefficient: no division per span and
+ * no disagreement caused by interpolating between rounded edge positions.
+ */
+static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY,
+                               int fillColor, ZbPlane *plane)
+{
+    int sx0, nsteps;
+    unsigned long raw;
     if (x0 > x1) return;
-
-    /* Depth nudge: a smaller zq is closer.  Saturates at 0. */
-    if (z_nudge_lsbs > 0) {
-        if (zq0 > (UWORD16)z_nudge_lsbs) zq0 = (UWORD16)(zq0 - (UWORD16)z_nudge_lsbs);
-        else zq0 = 0;
-        if (zq_end > (UWORD16)z_nudge_lsbs) zq_end = (UWORD16)(zq_end - (UWORD16)z_nudge_lsbs);
-        else zq_end = 0;
+    sx0 = x0 + pan_dx;
+    raw = ZBuffer_PlaneAt(plane, (long)sx0, (long)screenY);
+    zb_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
+    zb_p_pptr = ZB_SHR_BASE + (unsigned long)screenY * 160UL +
+                (unsigned long)(sx0 >> 1);
+    zb_p_odd = sx0 & 1;
+    zb_p_zl = ZBuffer_PlaneCode(raw);
+    zb_p_cl = fillColor;
+    zb_p_mode = 0;
+    if (x0 != x1) {
+        nsteps = x1 - x0;
+        zb_p_zstep = (long)(((unsigned long)plane->gx << 4) & 0xFFFFFFFFUL);
+        zb_p_zacc = (long)(((raw << 4) + 0x8000UL) & 0xFFFFFFFFUL);
+        zb_p_zr = ZBuffer_PlaneCode(raw +
+                      (unsigned long)plane->gx * (unsigned long)nsteps);
+        zb_p_n = nsteps - 1;
+        zb_p_ci = fillColor;
+        zb_p_cr = fillColor;
+        zb_p_mode = 1;
     }
+    ZBuffer_SpanRun();
+}
 
-    sx0 = x0 + pan_dx;      /* screen column of the left pixel */
 
-    if (x0 == x1) {
-        /* One-pixel span: just the left pixel, in frameColor. */
-        zq_end = zq0;
-        zb_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
-        zb_p_pptr = ZB_SHR_BASE + (unsigned long)screenY * 160UL + (unsigned long)(sx0 >> 1);
-        zb_p_odd  = sx0 & 1;
-        zb_p_zl   = zq0;
-        zb_p_cl   = frameColor;
-        zb_p_mode = 0;
-        ZBuffer_SpanRun();
-    } else {
-        nsteps    = x1 - x0;
+/* Optional flags use the same flat indexing as vertex_indices_buffer:
+ * entry off+k controls vertex k -> vertex (k+1)%n of that face.
+ * NULL means every original polygon edge.  The caller owns this array and
+ * must reset it with (NULL, 0UL) before freeing it or changing model layout.
+ * Entries beyond count default to enabled.
+ */
+static const unsigned char *zb_edge_flags = NULL;
+static unsigned long zb_edge_flag_count = 0UL;
 
-        /* Depth step per pixel in 16.16, so intermediate depths stay faithful to the
-         * two endpoints (a plain integer step drifted and let far faces leak).  The
-         * accumulator starts with +0.5 so the high word is a rounded value. */
-        z_step_16 = (((long)zq_end - (long)zq0) << 16) / nsteps;
-        z_acc     = ((long)zq0 << 16) + 0x8000L;
-        n         = nsteps - 1;           /* interior pixels */
+void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count)
+{
+    zb_edge_flags = flags;
+    zb_edge_flag_count = count;
+}
 
-        /* Right end: it gets frameColor only on a true silhouette.  If the pixel to
-         * the right already holds a depth that is not clearly farther than ours (within
-         * 1 LSB, or closer), the surface continues there, so the end is just fill.  An
-         * empty neighbour, or one clearly farther, means we are on the silhouette.  The
-         * pixels drawn below only touch columns < sxr, so reading the neighbour first
-         * gives the same answer as reading it afterwards. */
-        sxr = x1 + pan_dx;
-        silhouette_r = 1;
-        if (sxr + 1 < ZBUF_WIDTH) {
-            zr = zbuf_row[screenY][sxr + 1];
-            if (zr != ZBUF_FAR_VALUE && (int)zq_end - (int)zr >= -1)
-                silhouette_r = 0;
-        }
-        interiorColor = whole_span_is_border ? frameColor : fillColor;
 
-        zb_p_zptr  = (unsigned long)(zbuf_row[screenY] + sx0);
-        zb_p_pptr  = ZB_SHR_BASE + (unsigned long)screenY * 160UL + (unsigned long)(sx0 >> 1);
-        zb_p_odd   = sx0 & 1;
-        zb_p_zl    = zq0;
-        zb_p_zr    = zq_end;
-        zb_p_zacc  = z_acc;
-        zb_p_zstep = z_step_16;
-        zb_p_n     = n;
-        zb_p_cl    = frameColor;
-        zb_p_ci    = interiorColor;
-        zb_p_cr    = (silhouette_r || whole_span_is_border) ? frameColor : fillColor;
-        zb_p_mode  = 1;
-        ZBuffer_SpanRun();
+/* No slope-dependent tolerance: fill and stroke now evaluate the SAME plane
+ * at the SAME pixel.  Equal depth is visible; a farther edge is rejected.
+ * A line pixel outside fill coverage updates depth only when strictly closer.
+ */
+static void ZBuffer_PlotEdge(int x, int y, UWORD16 zq,
+                              UWORD16 edge_zq, int color)
+{
+    FarWordPtr row;
+    UWORD16 cur;
+    if ((unsigned)x >= (unsigned)ZBUF_WIDTH ||
+        (unsigned)y >= (unsigned)ZBUF_HEIGHT || zq == ZBUF_FAR_VALUE)
+        return;
+    row = zbuf_row[y];
+    cur = row[x];
+    if (zq > cur) return;
+    /* A plane extrapolated to an off-edge raster pixel can appear closer
+     * than an unrelated surface. Require the geometric edge itself to pass
+     * Z too. Equality with the face plane already stored by the fill is kept:
+     * this preserves the face's own visible one-pixel outline.
+     * No slope tolerance, neighbour sampling, or owner buffer is introduced.
+     */
+    if (cur != ZBUF_FAR_VALUE && zq < cur && edge_zq > cur) return;
+    if (zq < cur) row[x] = zq;
+    drawPixel(x, y, color);
+}
+
+
+/* Canonical Bresenham stroke.  Major-axis clipping retains the original
+ * line phase.  Depth follows the face plane with additions for major/minor
+ * coordinate steps, instead of interpolating depth along an ideal line that
+ * does not pass through the actual raster pixel centres.
+ */
+static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0,
+                             int x1, int y1, UWORD16 edge_z1,
+                             int color, ZbPlane *plane)
+{
+    long dx, dy, major, minor, first, last, i;
+    long u0, v0, v, ulimit, vstep, rem;
+    unsigned long numerator, raw, zmajor, zminor, magnitude;
+    long ez, erem, ewhole, epart, esign, delta;
+    UWORD16 ztmp;
+    int steep, tmp;
+    dx = (long)x1 - (long)x0;
+    dy = (long)y1 - (long)y0;
+    if (dx < 0L) dx = -dx;
+    if (dy < 0L) dy = -dy;
+    steep = (dy > dx);
+    if ((steep && y0 > y1) || (!steep && x0 > x1)) {
+        tmp = x0; x0 = x1; x1 = tmp;
+        tmp = y0; y0 = y1; y1 = tmp;
+        ztmp = edge_z0; edge_z0 = edge_z1; edge_z1 = ztmp;
     }
-
-    /* Bridge only real gaps (span end moved by more than one pixel since the previous
-     * scanline); integer Z - cheap. */
-    if (prev != NULL && prev->valid && prev->y == y - 1) {
-        int dxl = prev->x0 - x0;
-        int dxr = prev->x1 - x1;
-        if (dxl < 0) dxl = -dxl;
-        if (dxr < 0) dxr = -dxr;
-        if (dxl > 1)
-            ZBuffer_BridgeBorderZQ(prev->x0, prev->y, prev->zq0,
-                                   x0, y, zq0, frameColor);
-        if (dxr > 1)
-            ZBuffer_BridgeBorderZQ(prev->x1, prev->y, prev->zq1,
-                                   x1, y, zq_end, frameColor);
+    u0 = steep ? (long)y0 : (long)x0;
+    v0 = steep ? (long)x0 : (long)y0;
+    major = steep ? dy : dx;
+    minor = steep ? dx : dy;
+    ulimit = steep ? ZBUF_HEIGHT - 1L : ZBUF_WIDTH - 1L;
+    vstep = ((steep ? x1 : y1) < v0) ? -1L : 1L;
+    if (major == 0L) {
+        ZBuffer_PlotEdge(x0, y0,
+                         ZBuffer_PlaneCode(ZBuffer_PlaneAt(plane, x0, y0)),
+                         (edge_z0 < edge_z1) ? edge_z0 : edge_z1, color);
+        return;
     }
-
-    /* Remember this span for the next scanline. */
-    if (prev != NULL) {
-        prev->valid = 1;
-        prev->y   = y;
-        prev->x0  = x0;
-        prev->x1  = x1;
-        prev->zq0 = zq0;
-        prev->zq1 = zq_end;
+    first = (u0 < 0L) ? -u0 : 0L;
+    last = major;
+    if (u0 + last > ulimit) last = ulimit - u0;
+    if (first > last) return;
+    numerator = (unsigned long)first * (unsigned long)minor +
+                (unsigned long)(major / 2L);
+    v = v0 + vstep * (long)(numerator / (unsigned long)major);
+    rem = (long)(numerator % (unsigned long)major);
+    raw = steep ? ZBuffer_PlaneAt(plane, v, u0 + first) :
+                  ZBuffer_PlaneAt(plane, u0 + first, v);
+    zmajor = (unsigned long)(steep ? plane->gy : plane->gx);
+    zminor = (unsigned long)(steep ? plane->gx : plane->gy);
+    if (vstep < 0L) zminor = 0UL - zminor;
+    /* Independently interpolate quantised 1/z along the original edge.
+     * Quotient/remainder stepping is exact and fits 32-bit arithmetic.
+     */
+    delta = (long)edge_z1 - (long)edge_z0;
+    esign = (delta < 0L) ? -1L : 1L;
+    magnitude = (unsigned long)((delta < 0L) ? -delta : delta);
+    ewhole = (long)(magnitude / (unsigned long)major);
+    epart = (long)(magnitude % (unsigned long)major);
+    numerator = (unsigned long)first * magnitude + (unsigned long)(major / 2L);
+    ez = (long)edge_z0 + esign * (long)(numerator / (unsigned long)major);
+    erem = (long)(numerator % (unsigned long)major);
+    for (i = first; i <= last; i++) {
+        if (steep)
+            ZBuffer_PlotEdge((int)v, (int)(u0 + i), ZBuffer_PlaneCode(raw), (UWORD16)ez, color);
+        else
+            ZBuffer_PlotEdge((int)(u0 + i), (int)v, ZBuffer_PlaneCode(raw), (UWORD16)ez, color);
+        ez += esign * ewhole;
+        erem += epart;
+        if (erem >= major) { erem -= major; ez += esign; }
+        raw += zmajor;
+        rem += minor;
+        if (rem >= major) { rem -= major; v += vstep; raw += zminor; }
     }
 }
 
@@ -936,8 +988,8 @@ static void ZBuffer_PaintSpanZ(int x0, int x1, int y, int screenY,
 /* Shared renderer for the "fast" (biased = 0) and "biased" (biased = 1) variants.
  *
  * biased = 1 is used when back faces are not culled: faces with plane_d > 0 are
- * pulled slightly closer (inv_z + ZB_Z_BIAS, then 2 more LSBs of zq in
- * ZBuffer_PaintSpanZ) so that they win depth ties against coplanar or nearly
+ * pulled slightly closer (inv_z + ZB_Z_BIAS, then 2 more LSBs in
+ * the shared depth plane) so that they win depth ties against coplanar or nearly
  * coplanar faces instead of z-fighting. */
 static void ZBuffer_RenderCore(Model3D* model, int biased)
 {
@@ -952,88 +1004,76 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
     ZbEdge* ed;
     ZbHit hits[MAX_SPAN_INTERSECTIONS];
 
-    static float* inv_z = NULL;
-    static UWORD16* vzq = NULL;
-    static UWORD16* vzq_b = NULL;
-    static int vert_capacity = 0;
-
-    static ZBufSpanPrev* span_prev = NULL;
-    static int* face_start = NULL;          /* first scanline of the face (relative to y_lo), -1 = skipped */
-    static int* face_sorted = NULL;         /* faces sorted by first scanline (counting sort)               */
-    static int* face_active = NULL;         /* faces crossing the current scanline, ascending face index    */
-    static unsigned char* face_fill = NULL;
-    static unsigned char* face_frame = NULL;
-    static unsigned char* face_nudge = NULL;
-    static int face_capacity = 0;
-
-    static ZbEdge* edge_buf = NULL;
-    static int edge_capacity = 0;
-
     /* counting-sort tables: bucket[r] .. bucket[r+1]-1 = faces starting at row r */
     static int bucket[ZBUF_HEIGHT + 1];
     static int bucket_cur[ZBUF_HEIGHT + 1];
 
-    /* ---- scratch buffers: they only ever grow, so after the first frame there is no malloc ---- */
-    if (face_capacity < fcount) {
-        if (span_prev)    free(span_prev);
-        if (face_start)   free(face_start);
-        if (face_sorted)  free(face_sorted);
-        if (face_active)  free(face_active);
-        if (face_fill)    free(face_fill);
-        if (face_frame)   free(face_frame);
-        if (face_nudge)   free(face_nudge);
-        span_prev   = (ZBufSpanPrev*)malloc(fcount * sizeof(ZBufSpanPrev));
-        face_start  = (int*)malloc(fcount * sizeof(int));
-        face_sorted = (int*)malloc(fcount * sizeof(int));
-        face_active = (int*)malloc(fcount * sizeof(int));
-        face_fill   = (unsigned char*)malloc(fcount);
-        face_frame  = (unsigned char*)malloc(fcount);
-        face_nudge  = (unsigned char*)malloc(fcount);
-        face_capacity = (span_prev && face_start && face_sorted && face_active &&
-                         face_fill && face_frame && face_nudge) ? fcount : 0;
-    }
-    if (vert_capacity < vcount) {
-        if (inv_z) free(inv_z);
-        if (vzq)   free(vzq);
-        if (vzq_b) free(vzq_b);
-        inv_z = (float*)malloc(vcount * sizeof(float));
-        vzq   = (UWORD16*)malloc(vcount * sizeof(UWORD16));
-        vzq_b = (UWORD16*)malloc(vcount * sizeof(UWORD16));
-        vert_capacity = (inv_z && vzq && vzq_b) ? vcount : 0;
-    }
+    /* Scratch memory is reused between frames and freed by Shutdown.
+     * A failed growth attempt frees every partial allocation of that group.
+     */
+    if (!ZBFS_SizeFits(vcount, sizeof(float)) ||
+        !ZBFS_SizeFits(vcount, sizeof(UWORD16)) ||
+        !ZBFS_SizeFits(fcount, sizeof(int)) ||
+        !ZBFS_SizeFits(fcount, sizeof(ZbPlane))) return;
     total_edges = 0;
     for (f = 0; f < fcount; f++) {
-        end = faces->vertex_indices_ptr[f] + faces->vertex_count[f];
+        long edge_end = (long)faces->vertex_indices_ptr[f] +
+                        (long)faces->vertex_count[f];
+        if (faces->vertex_indices_ptr[f] < 0 || faces->vertex_count[f] < 0 ||
+            edge_end > 32767L) return;
+        end = (int)edge_end;
         if (end > total_edges) total_edges = end;
     }
-    if (edge_capacity < total_edges) {
-        if (edge_buf) free(edge_buf);
-        edge_buf = (ZbEdge*)malloc((size_t)total_edges * sizeof(ZbEdge));
-        edge_capacity = edge_buf ? total_edges : 0;
+    if (!ZBFS_SizeFits(total_edges, sizeof(ZbEdge))) return;
+    if (zbfs_face_capacity < fcount) {
+        ZBFS_FreeFaces();
+        zbfs_face_start = (int*)malloc((size_t)fcount * sizeof(int));
+        zbfs_face_sorted = (int*)malloc((size_t)fcount * sizeof(int));
+        zbfs_face_active = (int*)malloc((size_t)fcount * sizeof(int));
+        zbfs_face_fill = (unsigned char*)malloc((size_t)fcount);
+        zbfs_face_frame = (unsigned char*)malloc((size_t)fcount);
+        zbfs_face_nudge = (unsigned char*)malloc((size_t)fcount);
+        zbfs_face_plane = (ZbPlane*)malloc((size_t)fcount * sizeof(ZbPlane));
+        if (!zbfs_face_start || !zbfs_face_sorted || !zbfs_face_active ||
+            !zbfs_face_fill || !zbfs_face_frame || !zbfs_face_nudge || !zbfs_face_plane) {
+            ZBFS_FreeFaces(); return;
+        }
+        zbfs_face_capacity = fcount;
     }
-    if (face_capacity < fcount || vert_capacity < vcount || edge_capacity < total_edges)
-        return;
-
-    /* No previous span yet for any face (used for the gap bridges). */
-    for (f = 0; f < fcount; f++) span_prev[f].valid = 0;
+    if (zbfs_vert_capacity < vcount) {
+        ZBFS_FreeVertices();
+        zbfs_inv_z = (float*)malloc((size_t)vcount * sizeof(float));
+        zbfs_vzq = (UWORD16*)malloc((size_t)vcount * sizeof(UWORD16));
+        zbfs_vzq_b = (UWORD16*)malloc((size_t)vcount * sizeof(UWORD16));
+        if (!zbfs_inv_z || !zbfs_vzq || !zbfs_vzq_b) {
+            ZBFS_FreeVertices(); return;
+        }
+        zbfs_vert_capacity = vcount;
+    }
+    if (zbfs_edge_capacity < total_edges) {
+        ZBFS_FreeEdges();
+        zbfs_edge_buf = (ZbEdge*)malloc((size_t)total_edges * sizeof(ZbEdge));
+        if (!zbfs_edge_buf) return;
+        zbfs_edge_capacity = total_edges;
+    }
 
     /* ---- PER VERTEX, once per frame -------------------------------------
-     * inv_z = 1/z is linear in screen space.  The scale that maps inv_z to the
-     * 16-bit range is chosen from the largest inv_z of this frame, then every
+     * zbfs_inv_z = 1/z is linear in screen space.  The scale that maps zbfs_inv_z to the
+     * 16-bit range is chosen from the largest zbfs_inv_z of this frame, then every
      * vertex is quantised ONCE (zq: smaller = closer).  Everything after this
-     * point is integer: edges and spans only interpolate zq. */
+     * point, each face receives a depth plane; raster loops use integers only. */
     frame_max_inv_z = 0.0f;
     for (i = 0; i < vcount; i++) {
         float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
-        inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
-        if (inv_z[i] > frame_max_inv_z) frame_max_inv_z = inv_z[i];
+        zbfs_inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
+        if (zbfs_inv_z[i] > frame_max_inv_z) frame_max_inv_z = zbfs_inv_z[i];
     }
     ZBuffer_SetScaleForFrame(frame_max_inv_z);
 
     for (i = 0; i < vcount; i++) {
-        /* vzq_b is the "pulled closer" copy used by faces with plane_d > 0 (biased only). */
-        vzq[i]   = ZBuffer_QuantizeInvZ(inv_z[i]);
-        vzq_b[i] = biased ? ZBuffer_QuantizeInvZ(inv_z[i] + ZB_Z_BIAS) : vzq[i];
+        /* zbfs_vzq_b is the "pulled closer" copy used by faces with plane_d > 0 (biased only). */
+        zbfs_vzq[i]   = ZBuffer_QuantizeInvZ(zbfs_inv_z[i]);
+        zbfs_vzq_b[i] = biased ? ZBuffer_QuantizeInvZ(zbfs_inv_z[i] + ZB_Z_BIAS) : zbfs_vzq[i];
     }
 
     SetPenMode(0);
@@ -1058,7 +1098,7 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         int n, offt, fmin, fmax, fill;
         UWORD16* zsrc;
 
-        face_start[f] = -1;
+        zbfs_face_start[f] = -1;
         if (!faces->display_flag[f]) continue;
         n = faces->vertex_count[f];
         if (n < 3) continue;
@@ -1069,17 +1109,18 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         /* First scanline we will actually visit: faces that start above the
          * window are activated on its first row. */
         b = ((fmin > y_lo) ? fmin : y_lo) - y_lo;
-        face_start[f] = b;
+        zbfs_face_start[f] = b;
         bucket[b + 1]++;       /* histogram of start rows (shifted by one for the prefix sum) */
 
         fill = getFaceFillColor(f);
-        face_fill[f]  = (unsigned char)fill;
-        face_frame[f] = (unsigned char)getFaceFrameColor(f, fill);
-        face_nudge[f] = (unsigned char)((biased && faces->plane_d[f] > 0) ? 2 : 0);
+        zbfs_face_fill[f]  = (unsigned char)fill;
+        zbfs_face_frame[f] = (unsigned char)getFaceFrameColor(f, fill);
+        zbfs_face_nudge[f] = (unsigned char)((biased && faces->plane_d[f] > 0) ? 2 : 0);
 
         offt = faces->vertex_indices_ptr[f];
-        zsrc = (biased && faces->plane_d[f] > 0) ? vzq_b : vzq;
-        ed = edge_buf + offt;
+        zsrc = (biased && faces->plane_d[f] > 0) ? zbfs_vzq_b : zbfs_vzq;
+        ZBuffer_SetPlane(&zbfs_face_plane[f], vtx, faces, f, zsrc, zbfs_face_nudge[f]);
+        ed = zbfs_edge_buf + offt;
 
         for (k = 0; k < n; k++, ed++) {
             int k2 = (k + 1 < n) ? (k + 1) : 0;
@@ -1089,39 +1130,35 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
             int y2 = vtx->y2d[vid2];
             int dy = y2 - y1;
             int ya, yb, xs;
-            long zs, ex, ez, sx, sz, skip;
+            long ex, sx, skip;
 
             if (dy == 0) {
                 ed->ya = 32767; ed->yb = 32767;      /* horizontal edge: never active */
-                ed->x = 0L; ed->z = 0L; ed->sx = 0L; ed->sz = 0L;
+                ed->x = 0L; ed->sx = 0L;
                 continue;
             }
 
-            /* Slopes per scanline in 12-bit fixed point (dx/dy and dzq/dy). */
+            /* Subpixel x slope per scanline (12 fraction bits). */
             sx = (((long)vtx->x2d[vid2] - (long)vtx->x2d[vid1]) * 4096L) / (long)dy;
-            sz = (((long)zsrc[vid2] - (long)zsrc[vid1]) * 4096L) / (long)dy;
 
             /* The edge is walked from its upper end downwards.  x is stored as an
              * offset from xb (= x of vertex 1), so for dy < 0 the starting offset
              * is x(v2) - x(v1) and the slopes stay valid (dx/dy changes sign with dy). */
-            if (dy > 0) { ya = y1; yb = y2; xs = 0;                                        zs = (long)zsrc[vid1]; }
-            else        { ya = y2; yb = y1; xs = vtx->x2d[vid2] - vtx->x2d[vid1];          zs = (long)zsrc[vid2]; }
+            if (dy > 0) { ya = y1; yb = y2; xs = 0; }
+            else        { ya = y2; yb = y1; xs = vtx->x2d[vid2] - vtx->x2d[vid1]; }
 
             ex = (long)xs * 4096L;
-            ez = zs * 4096L;
 
             /* Edge starts above the visible window: jump straight to the first visible row. */
             if (ya < y_lo && yb > y_lo) {
                 skip = (long)(y_lo - ya);
                 ex += sx * skip;
-                ez += sz * skip;
             }
 
             ed->ya = ya;  ed->yb = yb;
             ed->xb = vtx->x2d[vid1];
-            ed->x  = ex + ZB_ROUND;     /* the +0.5 rounding is baked in once, here */
-            ed->z  = ez + ZB_ROUND;
-            ed->sx = sx;  ed->sz = sz;
+            ed->x  = ex;               /* keep the subpixel intersection until span pairing */
+            ed->sx = sx;
         }
     }
 
@@ -1130,8 +1167,8 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
     for (b = 0; b < ZBUF_HEIGHT; b++) bucket[b + 1] += bucket[b];
     for (b = 0; b <= ZBUF_HEIGHT; b++) bucket_cur[b] = bucket[b];
     for (f = 0; f < fcount; f++) {
-        b = face_start[f];
-        if (b >= 0) face_sorted[bucket_cur[b]++] = f;
+        b = zbfs_face_start[f];
+        if (b >= 0) zbfs_face_sorted[bucket_cur[b]++] = f;
     }
 
     /* ---- MAIN LOOP: one scanline at a time ---------------------------------
@@ -1146,45 +1183,40 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
          * ascending face index (insertion sort) so that depth ties are resolved in the
          * same order as a plain loop over all faces. */
         for (si = bucket[row]; si < bucket[row + 1]; si++) {
-            int nf = face_sorted[si];
+            int nf = zbfs_face_sorted[si];
             int pos = active_count;
-            while (pos > 0 && face_active[pos - 1] > nf) {
-                face_active[pos] = face_active[pos - 1];
+            while (pos > 0 && zbfs_face_active[pos - 1] > nf) {
+                zbfs_face_active[pos] = zbfs_face_active[pos - 1];
                 pos--;
             }
-            face_active[pos] = nf;
+            zbfs_face_active[pos] = nf;
             active_count++;
         }
 
         keep = 0;
         for (ai = 0; ai < active_count; ai++) {
             int n, offt, hit_count;
-            int fillColor, frameColor, on_top_or_bottom, nudge;
+            int fillColor;
 
-            f = face_active[ai];
+            f = zbfs_face_active[ai];
             if (faces->maxy[f] < y) continue;      /* face finished: dropped from the list */
-            face_active[keep++] = f;
+            zbfs_face_active[keep++] = f;
 
             n = faces->vertex_count[f];
             offt = faces->vertex_indices_ptr[f];
             hit_count = 0;
 
             /* Intersect the scanline with the polygon: every edge active on row y gives
-             * one hit (x, zq); the edge state is then advanced by one row. */
-            ed = edge_buf + offt;
+             * one subpixel x hit; advance the edge state by one row. */
+            ed = zbfs_edge_buf + offt;
             for (k = 0; k < n; k++, ed++) {
                 if (y < ed->ya || y >= ed->yb) continue;
                 if (hit_count < MAX_SPAN_INTERSECTIONS) {
-                    /* Fixed-point -> pixel: truncate toward zero (like the (int)(v + 0.5f)
-                     * of the original float code), added to the edge's base x. */
-                    long t = ed->x;
-                    hits[hit_count].x  = ed->xb + ((t >= 0L) ? (int)(t >> ZB_FRAC) : -(int)((-t) >> ZB_FRAC));
-                    hits[hit_count].zq = (UWORD16)(ed->z >> ZB_FRAC);
+                    hits[hit_count].x = (long)ed->xb * 4096L + ed->x;
                     hit_count++;
                 }
                 /* advance even when the hit table is full, to keep the edge in step */
                 ed->x += ed->sx;
-                ed->z += ed->sz;
             }
 
             if (hit_count < 2) continue;
@@ -1209,40 +1241,77 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
                 }
             }
 
-            fillColor  = face_fill[f];
-            frameColor = face_frame[f];
-            nudge      = face_nudge[f];
-            on_top_or_bottom = (y == faces->miny[f] || y == faces->maxy[f]);
+            fillColor  = zbfs_face_fill[f];
 
             /* Consecutive hit pairs are the inside spans of the polygon (even-odd rule).
-             * Clip each span to the window; zq at a clipped end is interpolated. */
+             * Round inward, clip, and sample depth at the chosen raster pixels. */
             {
                 int p;
                 for (p = 0; p + 1 < hit_count; p += 2) {
-                    int xa = hits[p].x;
-                    int xb = hits[p + 1].x;
-                    UWORD16 zqa = hits[p].zq;
-                    UWORD16 zqb = hits[p + 1].zq;
+                    long left = hits[p].x;
+                    long right = hits[p + 1].x;
+                    long xa, xb;
                     int x0, x1;
-                    UWORD16 zq0, zq1;
-
-                    if (xa > xb) continue;
-                    if (xb < clip_x_min || xa > clip_x_max) continue;
-
-                    x0 = xa;  x1 = xb;
-                    zq0 = zqa; zq1 = zqb;
-
-                    if (x0 < clip_x_min) { zq0 = ZBuffer_LerpZ(zqa, zqb, xa, xb, clip_x_min); x0 = clip_x_min; }
-                    if (x1 > clip_x_max) { zq1 = ZBuffer_LerpZ(zqa, zqb, xa, xb, clip_x_max); x1 = clip_x_max; }
-                    if (x0 > x1) continue;
-
-                    ZBuffer_PaintSpanZ(x0, x1, y, screenY, zq0, zq1,
-                                       fillColor, frameColor, on_top_or_bottom,
-                                       &span_prev[f], nudge);
+                    /* Mathematical ceil(left) and floor(right), including
+                     * negative coordinates.  Fill never extends outside the
+                     * continuous polygon boundary; the nearest-pixel outline
+                     * surrounds this interior on either side.
+                     */
+                    xa = (left >= 0L) ? ((left + 4095L) >> 12) :
+                                         -((-left) >> 12);
+                    xb = (right >= 0L) ? (right >> 12) :
+                                          -((-right + 4095L) >> 12);
+                    if (xa > xb || xb < (long)clip_x_min ||
+                        xa > (long)clip_x_max) continue;
+                    x0 = (xa < (long)clip_x_min) ? clip_x_min : (int)xa;
+                    x1 = (xb > (long)clip_x_max) ? clip_x_max : (int)xb;
+                    ZBuffer_PaintSpanZ(x0, x1, screenY, fillColor, &zbfs_face_plane[f]);
                 }
             }
         }
         active_count = keep;
+    }
+
+    /* All surfaces are now in the Z-buffer.  Stroke original polygon sides,
+     * including horizontal sides and bottom sides omitted by half-open fills.
+     * Use exactly the same biased vertex depths and nudge as the fill pass.
+     */
+    for (f = 0; f < fcount; f++) {
+        int n, offt, color, nudge;
+        UWORD16 *zsrc;
+        if (zbfs_face_start[f] < 0) continue;
+        n = faces->vertex_count[f];
+        offt = faces->vertex_indices_ptr[f];
+        color = zbfs_face_frame[f];
+        nudge = zbfs_face_nudge[f];
+        zsrc = (biased && faces->plane_d[f] > 0) ? zbfs_vzq_b : zbfs_vzq;
+        for (k = 0; k < n; k++) {
+            int k2, vid1, vid2;
+            long sx0, sy0, sx1, sy1;
+            unsigned long entry;
+            UWORD16 z0, z1;
+            entry = (unsigned long)offt + (unsigned long)k;
+            if (zb_edge_flags != NULL && entry < zb_edge_flag_count &&
+                zb_edge_flags[entry] == 0) continue;
+            k2 = (k + 1 < n) ? k + 1 : 0;
+            vid1 = faces->vertex_indices_buffer[offt + k] - 1;
+            vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
+            sx0 = (long)vtx->x2d[vid1] + (long)pan_dx;
+            sy0 = (long)vtx->y2d[vid1] + (long)pan_dy;
+            sx1 = (long)vtx->x2d[vid2] + (long)pan_dx;
+            sy1 = (long)vtx->y2d[vid2] + (long)pan_dy;
+            /* The rest of the renderer uses signed 16-bit projected positions.
+             * Reject unrepresentable panned edges before narrowing to int.
+             */
+            if (sx0 < -32768L || sx0 > 32767L ||
+                sy0 < -32768L || sy0 > 32767L ||
+                sx1 < -32768L || sx1 > 32767L ||
+                sy1 < -32768L || sy1 > 32767L) continue;
+            z0 = (zsrc[vid1] > (UWORD16)nudge) ? (UWORD16)(zsrc[vid1] - nudge) : 0;
+            z1 = (zsrc[vid2] > (UWORD16)nudge) ? (UWORD16)(zsrc[vid2] - nudge) : 0;
+            ZBuffer_DrawEdge((int)sx0, (int)sy0, z0,
+                             (int)sx1, (int)sy1, z1, color, &zbfs_face_plane[f]);
+        }
     }
 }
 

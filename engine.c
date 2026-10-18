@@ -2267,6 +2267,7 @@ void painter_bubble_sort_old(Model3D* model, int face_count) {
         free(ordered_pairs);
     }  
 }
+
 void painter_bubble_sort(Model3D* model, int face_count)
 {
     // Early exit for trivial cases
@@ -2464,6 +2465,8 @@ void painter_bubble_sort(Model3D* model, int face_count)
     free(ordered);
     free(hash_table);
 }
+
+
 /*
  * painter_newell_sancha
  * =====================
@@ -4356,6 +4359,7 @@ static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, fl
     return 1;
 }
 /* Ray cast at explicit screen coordinate (cx,cy) in projected 2D coords */
+
 static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
     float tf1 = 0.0f, tf2 = 0.0f;
     if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) return 0;
@@ -4363,6 +4367,7 @@ static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
     else if (tf1 < tf2) return -1; /* f1 is closer than f2 */
     else return 0;
 }
+
 /* Hierarchical ray-cast: prefer QD centroid, then SH centroid, then bbox center */
 /* ============================================================================
  *  ray_cast_hierarchical — artificial x n zoom patch (self-contained)
