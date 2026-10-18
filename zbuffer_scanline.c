@@ -117,6 +117,30 @@ done:
     }
 }
 
+/* Clear SHR rows 0..11 immediately before drawing the model.
+ * 12 rows * 160 bytes = 1920 bytes at $E1:2000. Absolute long stores
+ * are independent of DBR; A, X and processor flags are preserved.
+ */
+static void SL_ClearTop12Lines(void)
+{
+    asm {
+        php
+        rep #0x30
+        pha
+        phx
+        lda #0
+        ldx #0x077E
+    sl_ct12_loop:
+        sta >0xE12000,x
+        dex
+        dex
+        bpl sl_ct12_loop
+        plx
+        pla
+        plp
+    }
+}
+
 void renderModelScanlineZBuffer_old (Model3D* model) {
     VertexArrays3D* vtx = &model->vertices;
     FaceArrays3D* faces = &model->faces;
@@ -149,6 +173,7 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
     SetPenMode(0);
     applyPalette(palette);
 
+    SL_ClearTop12Lines();
     for (y = 0; y < SCREEN_HEIGHT; y++) {
         int screenY = y + pan_dy;
         if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
@@ -303,6 +328,7 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
     int clip_x_min = -pan_dx;
     int clip_x_max = SCREEN_WIDTH - 1 - pan_dx;
 
+    SL_ClearTop12Lines();
     for (y = 0; y < SCREEN_HEIGHT; y++) {
         int screenY = y + pan_dy;
         if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
@@ -499,6 +525,7 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
     int clip_x_min = -pan_dx;
     int clip_x_max = SCREEN_WIDTH - 1 - pan_dx;
 
+    SL_ClearTop12Lines();
     for (y = 0; y < SCREEN_HEIGHT; y++) {
         int screenY = y + pan_dy;
         if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
@@ -849,6 +876,7 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
     applyPalette(palette);
 
     active_count = 0;
+    SL_ClearTop12Lines();
     for (y = y_lo; y <= y_hi; y++) {
         int screenY = y + pan_dy;
         int row = y - y_lo;
@@ -1556,6 +1584,7 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
      * Only faces crossing the scanline are visited (active list), instead of
      * testing every face on every row. */
     active_count = 0;
+    SL_ClearTop12Lines();
     for (y = y_lo; y <= y_hi; y++) {
         int screenY = y + pan_dy;
         int row = y - y_lo;

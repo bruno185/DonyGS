@@ -1,3 +1,4 @@
+
 /* Memory-lifetime correction: all renderer-owned allocations are released
  * by ZBuffer_Shutdown; repeated Init is idempotent; partial allocations and
  * target size_t overflow are handled. Header and rendering arithmetic unchanged.
@@ -985,6 +986,31 @@ static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0,
  *  - spans are written by a single assembler call.
  * ==================================================================== */
 
+/* Clear SHR rows 0..11 (12 * 160 = 1920 bytes) to palette colour 0.
+ * Absolute long stores target bank $E1 independently of DBR.
+ * Preserve the accumulator, X and processor flags; D and Y are untouched.
+ */
+static void ZBFS_ClearTop12Lines(void)
+{
+    asm {
+        php
+        rep #0x30
+        pha
+        phx
+        lda #0
+        ldx #0x077E
+    zbfs_ct12_loop:
+        sta >0xE12000,x
+        dex
+        dex
+        bpl zbfs_ct12_loop
+        plx
+        pla
+        plp
+    }
+}
+
+
 /* Shared renderer for the "fast" (biased = 0) and "biased" (biased = 1) variants.
  *
  * biased = 1 is used when back faces are not culled: faces with plane_d > 0 are
@@ -1170,6 +1196,12 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         b = zbfs_face_start[f];
         if (b >= 0) zbfs_face_sorted[bucket_cur[b]++] = f;
     }
+
+    /* Keep the status text visible throughout allocation, depth clearing,
+     * face setup and sorting. Erase it only when screen drawing is about to
+     * start. This shared path covers both fast and biased fullscreen modes.
+     */
+    ZBFS_ClearTop12Lines();
 
     /* ---- MAIN LOOP: one scanline at a time ---------------------------------
      * Only faces crossing the scanline are visited (active list), instead of
