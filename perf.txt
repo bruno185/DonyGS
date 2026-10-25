@@ -130,6 +130,11 @@ C :
 gros model :
 129  / 127
 
+other03 : 
+306 (tri par tas) => pas assez intéressant.
+317 (qsort) 
+
+
 
 
 
