@@ -559,7 +559,6 @@ void renderModelScanlineZBuffer(Model3D* model);
 void drawPixel(int x, int y, int color);
 
 // Divers
-void debug_two_faces(Model3D* model, int f1, int f2);
 void DoColor(void);
 void DoText(void);
 static void show_help_pager(void);
