@@ -8,6 +8,71 @@
 #include "dony_scan_asm.c"
 #endif
 
+/* Ray-cast cycle guard: track unordered face pairs, not individual faces.
+ * Each selection pass can perform at most nf permutations, so nf entries
+ * suffice for all ray-cast swaps. Hash collisions use exact-key chaining;
+ * they never suppress an unrelated pair. Separate arrays stay small on IIGS.
+ */
+#define DONY_RAY_PAIR_BUCKETS 256
+typedef struct {
+    unsigned int *first, *second, *next;
+    unsigned int heads[DONY_RAY_PAIR_BUCKETS];
+    unsigned int stamps[DONY_RAY_PAIR_BUCKETS];
+    int capacity;
+    unsigned int count;
+} DonyRayPairs;
+
+static int dony_ray_pairs_reserve(DonyRayPairs *cache, int nf)
+{
+    unsigned int *a, *b, *next;
+    if (nf <= cache->capacity) return 1;
+    a = (unsigned int*)malloc((size_t)nf * sizeof(unsigned int));
+    b = (unsigned int*)malloc((size_t)nf * sizeof(unsigned int));
+    next = (unsigned int*)malloc((size_t)nf * sizeof(unsigned int));
+    if (!a || !b || !next) {
+        free(a); free(b); free(next);
+        return 0;
+    }
+    free(cache->first); free(cache->second); free(cache->next);
+    cache->first = a; cache->second = b; cache->next = next;
+    cache->capacity = nf;
+    cache->count = 0;
+    memset(cache->stamps, 0, sizeof(cache->stamps));
+    return 1;
+}
+
+static int dony_ray_pair_seen(DonyRayPairs *cache, int p, int q,
+                              unsigned int generation)
+{
+    unsigned int a = (unsigned int)((p < q) ? p : q);
+    unsigned int b = (unsigned int)((p < q) ? q : p);
+    unsigned int bucket = ((a * 33U) ^ b) & (DONY_RAY_PAIR_BUCKETS - 1);
+    unsigned int entry;
+    if (cache->stamps[bucket] != generation) return 0;
+    entry = cache->heads[bucket];
+    while (entry) {
+        unsigned int i = entry - 1;
+        if (cache->first[i] == a && cache->second[i] == b) return 1;
+        entry = cache->next[i];
+    }
+    return 0;
+}
+
+static void dony_ray_pair_record(DonyRayPairs *cache, int p, int q,
+                                 unsigned int generation)
+{
+    unsigned int a = (unsigned int)((p < q) ? p : q);
+    unsigned int b = (unsigned int)((p < q) ? q : p);
+    unsigned int bucket = ((a * 33U) ^ b) & (DONY_RAY_PAIR_BUCKETS - 1);
+    unsigned int i = cache->count++;
+    /* Caller checks the nf permutation limit before recording a new swap. */
+    cache->first[i] = a;
+    cache->second[i] = b;
+    cache->next[i] = (cache->stamps[bucket] == generation) ? cache->heads[bucket] : 0;
+    cache->heads[bucket] = i + 1;
+    cache->stamps[bucket] = generation;
+}
+
 /* Stable insertion sort by descending z_max. */
 static void sort_by_zmax(int* sorted, Fixed32* z_max, int nf)
 {
@@ -32,7 +97,7 @@ void painter_geoV3(Model3D* model, int face_count)
     int* sorted = faces->sorted_face_indices;
 
     static unsigned int* dd_flag = NULL;
-    static unsigned int* dd_flag_raycast = NULL;
+    static DonyRayPairs ray_pairs;
     static int allocated = 0;
     static unsigned int generation = 0;
 
@@ -49,12 +114,10 @@ void painter_geoV3(Model3D* model, int face_count)
 
     if (face_count > allocated) {
         free(dd_flag);
-        free(dd_flag_raycast);
 
         dd_flag = (unsigned int*)calloc((size_t)face_count, sizeof(unsigned int));
-        dd_flag_raycast = (unsigned int*)calloc((size_t)face_count, sizeof(unsigned int));
 
-        if (!dd_flag || !dd_flag_raycast) {
+        if (!dd_flag || !dony_ray_pairs_reserve(&ray_pairs, face_count)) {
             fprintf(stderr, "painter_geoV3: allocation failed\n");
             exit(1);
         }
@@ -92,10 +155,11 @@ void painter_geoV3(Model3D* model, int face_count)
         ++generation;
         if (generation == 0) {
             memset(dd_flag, 0, (size_t)allocated * sizeof(unsigned int));
-            memset(dd_flag_raycast, 0, (size_t)allocated * sizeof(unsigned int));
+            memset(ray_pairs.stamps, 0, sizeof(ray_pairs.stamps));
             generation = 1;
         }
 
+        ray_pairs.count = 0; /* Previous pass entries are hidden by generation. */
         p = sorted[fs];
         f2 = fs + 1;
         permutes_this_pass = 0;
@@ -220,7 +284,7 @@ do_split_giveup:
              * Face splitting is replaced by a projected-overlap test
              * followed, when necessary, by hierarchical ray casting.
              */
-            if (dd_flag_raycast[q] != generation &&
+            if (!dony_ray_pair_seen(&ray_pairs, p, q, generation) &&
                 projected_polygons_overlap(model, p, q)) {
                 int rc;
 
@@ -233,6 +297,8 @@ do_split_giveup:
                     if (++permutes_this_pass > face_count)
                         goto skip_q;
 
+                    dony_ray_pair_record(&ray_pairs, p, q, generation);
+
                     {
                         int tmp = sorted[fs];
                         sorted[fs] = sorted[f2];
@@ -240,7 +306,7 @@ do_split_giveup:
                     }
 
                     dd_flag[p] = generation;
-                    dd_flag_raycast[p] = generation;
+
 
                     p = sorted[fs];
                     f2 = fs + 1;

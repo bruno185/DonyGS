@@ -71,6 +71,8 @@ err : b 207, 230
 ----------------------
 alt-U : pb à 110°
 
+5 : erreur avec h216, v15
+
 ----------------------
 Perfs GEOV3 :
 Assembleur / C / Assembleur #pragma optimize 7 / C #pragma optimize 7
@@ -109,7 +111,7 @@ Assembleur :
 2 : 122
 3 : 217
 4 : 102
-5 : 170 / 158 / 152 / 152 / 148 / 146
+5 : 170 / 158 / 152 / 152 / 148 / 146 / 186 / 204
 6 : 153 / 149
 7 : 228 / 223
 

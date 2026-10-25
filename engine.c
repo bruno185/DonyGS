@@ -373,6 +373,7 @@ Model3D* createModel3D(void) {
 
 void destroyModel3D(Model3D* model) {
     if (model != NULL) {
+        fractional_projection_cache_release(model);
         // Free all vertex arrays
         if (model->vertices.x) free(model->vertices.x);
         if (model->vertices.y) free(model->vertices.y);
@@ -1395,6 +1396,7 @@ static int add_vertex(Model3D* model, Fixed32 x, Fixed32 y, Fixed32 z) {
     vtx->x[idx]  = x;
     vtx->y[idx]  = y;
     vtx->z[idx]  = z;
+    fractional_projection_cache_invalidate(model);
     vtx->xo[idx] = 0;
     vtx->yo[idx] = 0;
     vtx->zo[idx] = 0;
@@ -1611,6 +1613,7 @@ segment "painter_core";
  *   for trig functions to avoid function call overhead. 100% Fixed32 loop with no conversions for maximum speed.
  */
 void processModelFast(Model3D* model, ObserverParams* params, const char* filename) {
+    fractional_projection_cache_invalidate(model);
     int i;
     Fixed32 cos_h, sin_h, cos_v, sin_v, cos_w, sin_w;
     Fixed32 x, y, z, zo, xo, yo;
@@ -4481,6 +4484,36 @@ static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
     else return 0;
 }
 
+/* Fractional screen point: retain subpixel precision through deprojection
+ * and plane intersection. Integer diagnostic entry points remain unchanged.
+ */
+static int ray_cast_at_fractional(Model3D *model, int f1, int f2,
+                                  double cx, double cy)
+{
+    FaceArrays3D *faces;
+    double scale, dx, dy, denominator1, denominator2, t1, t2;
+    if (!model) return 0;
+    faces = &model->faces;
+    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
+    scale = (double)s_global_proj_scale_fixed / (double)FIXED_SCALE;
+    if (scale <= 0.0) return 0;
+    dx = (cx - (double)CENTRE_X) / scale;
+    dy = ((double)CENTRE_Y - cy) / scale;
+    denominator1 = FIXED64_TO_FLOAT(faces->plane_a[f1]) * dx
+                 + FIXED64_TO_FLOAT(faces->plane_b[f1]) * dy
+                 + FIXED64_TO_FLOAT(faces->plane_c[f1]);
+    if (fabs(denominator1) < 1e-6) return 0;
+    denominator2 = FIXED64_TO_FLOAT(faces->plane_a[f2]) * dx
+                 + FIXED64_TO_FLOAT(faces->plane_b[f2]) * dy
+                 + FIXED64_TO_FLOAT(faces->plane_c[f2]);
+    if (fabs(denominator2) < 1e-6) return 0;
+    t1 = -FIXED64_TO_FLOAT(faces->plane_d[f1]) / denominator1;
+    t2 = -FIXED64_TO_FLOAT(faces->plane_d[f2]) / denominator2;
+    if (t1 > t2) return 1;  /* f1 is farther: f2 must be drawn later. */
+    if (t1 < t2) return -1;
+    return 0;
+}
+
 /* Hierarchical ray-cast: prefer QD centroid, then SH centroid, then bbox center */
 /* ============================================================================
  *  ray_cast_hierarchical — artificial x n zoom patch (self-contained)
@@ -4724,6 +4757,18 @@ static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)
     int fallback = 0;
 
     if (!model) return 0;
+
+    /* Prefer the unrounded SH contour and centroid for the ordering ray.
+     * Retain the existing integer/QuickDraw/bbox fallbacks if unavailable.
+     */
+    {
+        double fx, fy, fractional_area2;
+        if (compute_intersection_centroid_fractional_tryboth(
+                model, f1, f2, &fx, &fy, &fractional_area2)) {
+            rc = ray_cast_at_fractional(model, f1, f2, fx, fy);
+            if (rc != 0) return rc;
+        }
+    }
 
     /* 1) Try the Sutherland-Hodgman intersection centroid. */
     if (compute_intersection_centroid_ordered_fixed_tryboth(

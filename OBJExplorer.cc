@@ -847,9 +847,6 @@ segment "main";
                 goto end;
             
 
-            
-                
-
 
                 
             default:  // All other keys - redraw

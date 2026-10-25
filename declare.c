@@ -596,3 +596,12 @@ void dumpSortedFaceIndices(Model3D* model, const char* txt_filename);
 // Shading
 void computeOrientationShading(Model3D* model);
 
+
+/* Subpixel SH/raycast ordering path; integer diagnostic interfaces are retained. */
+static int compute_intersection_centroid_fractional_tryboth(Model3D *model,
+        int subj, int clip, double *outx, double *outy, double *out_area2);
+static int ray_cast_at_fractional(Model3D *model, int f1, int f2, double cx, double cy);
+
+/* Invalidate after observer-coordinate changes; scale-only zooms reuse ratios. */
+static void fractional_projection_cache_invalidate(Model3D *model);
+static void fractional_projection_cache_release(Model3D *model);

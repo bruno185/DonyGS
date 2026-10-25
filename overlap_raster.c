@@ -86,6 +86,85 @@
  */
 
 
+/* Lazy normalized-projection cache. Ratios xo/zo and yo/zo are independent
+ * of projection scale, including the temporary hierarchical x10 zoom.
+ * Small heap blocks avoid a single large allocation on the IIGS; only vertices
+ * actually used by fractional clipping are cached. No arrays live on the stack.
+ */
+#define FRACTIONAL_CACHE_BLOCK_SIZE 256
+#define FRACTIONAL_CACHE_BLOCKS ((MAX_VERTICES + FRACTIONAL_CACHE_BLOCK_SIZE - 1) / FRACTIONAL_CACHE_BLOCK_SIZE)
+typedef struct {
+    double x[FRACTIONAL_CACHE_BLOCK_SIZE];
+    double y[FRACTIONAL_CACHE_BLOCK_SIZE];
+    unsigned int stamp[FRACTIONAL_CACHE_BLOCK_SIZE];
+} FractionalProjectionBlock;
+static FractionalProjectionBlock *fractional_cache[FRACTIONAL_CACHE_BLOCKS];
+static unsigned int fractional_cache_failed[FRACTIONAL_CACHE_BLOCKS];
+static unsigned int fractional_cache_generation = 0;
+static Model3D *fractional_cache_owner = NULL;
+
+static void fractional_projection_cache_invalidate(Model3D *model)
+{
+    int i;
+    fractional_cache_owner = model;
+    ++fractional_cache_generation;
+    if (fractional_cache_generation == 0) {
+        for (i = 0; i < FRACTIONAL_CACHE_BLOCKS; ++i) {
+            if (fractional_cache[i]) memset(fractional_cache[i]->stamp, 0,
+                                           sizeof(fractional_cache[i]->stamp));
+        }
+        memset(fractional_cache_failed, 0, sizeof(fractional_cache_failed));
+        fractional_cache_generation = 1;
+    }
+}
+
+static void fractional_projection_cache_release(Model3D *model)
+{
+    int i;
+    if (fractional_cache_owner != model) return;
+    for (i = 0; i < FRACTIONAL_CACHE_BLOCKS; ++i) {
+        free(fractional_cache[i]);
+        fractional_cache[i] = NULL;
+    }
+    memset(fractional_cache_failed, 0, sizeof(fractional_cache_failed));
+    fractional_cache_owner = NULL;
+    fractional_cache_generation = 0;
+}
+
+static void fractional_projection_cached(Model3D *model, int v, double scale,
+                                          double *outx, double *outy)
+{
+    VertexArrays3D *vtx = &model->vertices;
+    FractionalProjectionBlock *block = NULL;
+    double x, y;
+    int block_index, slot;
+    if (fractional_cache_owner != model) fractional_projection_cache_invalidate(model);
+    if (v >= 0 && v < MAX_VERTICES) {
+        block_index = v / FRACTIONAL_CACHE_BLOCK_SIZE;
+        slot = v % FRACTIONAL_CACHE_BLOCK_SIZE;
+        block = fractional_cache[block_index];
+        if (!block && fractional_cache_failed[block_index] != fractional_cache_generation) {
+            block = (FractionalProjectionBlock*)calloc(1, sizeof(FractionalProjectionBlock));
+            fractional_cache[block_index] = block;
+            if (!block) fractional_cache_failed[block_index] = fractional_cache_generation;
+        }
+    }
+    if (block) {
+        if (block->stamp[slot] != fractional_cache_generation) {
+            block->x[slot] = (double)vtx->xo[v] / (double)vtx->zo[v];
+            block->y[slot] = (double)vtx->yo[v] / (double)vtx->zo[v];
+            block->stamp[slot] = fractional_cache_generation;
+        }
+        x = block->x[slot]; y = block->y[slot];
+    } else {
+        /* Allocation failure is nonfatal: retain full subpixel precision. */
+        x = (double)vtx->xo[v] / (double)vtx->zo[v];
+        y = (double)vtx->yo[v] / (double)vtx->zo[v];
+    }
+    *outx = (double)CENTRE_X + scale * x;
+    *outy = (double)CENTRE_Y - scale * y;
+}
+
 /* Geometric helpers relocated from engine.c without changing their bodies. */
 /* Compute center of intersection of two faces' projected axis-aligned bboxes.
  * Returns 1 and writes (*outx,*outy) on success, 0 if no intersection or invalid ids.
@@ -240,7 +319,7 @@ static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1
 }
 
 
-static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2, double* shared_work) {
+static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2, double* shared_work, double* fractional_x, double* fractional_y, double* fractional_area2) {
     /* Robust integer implementation for diagnostics and fixed-area comparisons.
      * - Clips `subj` by `clip` using Sutherland–Hodgman (double intermediates).
      * - Produces integer output vertices (rounded), computes signed raw area2
@@ -263,11 +342,14 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     /* One allocation per call, double-aligned for ORCA/C floating point access.
      * The integer arrays occupy the tail of the same allocation. */
     double *work_storage;
+    double *precise_sx, *precise_sy, *precise_cx, *precise_cy;
+    int fractional = (fractional_x && fractional_y && fractional_area2);
     int *input_storage, *output_storage;
     int *sx, *sy, *cx, *cy;
     double *buf_x1, *buf_y1, *buf_x2, *buf_y2;
     int *out_px, *out_py;
-    long work_bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX);
+    long work_bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX
+                    + (fractional ? (2L * sn + 2L * cn) : 0L));
     long integer_bytes = (long)sizeof(int) * (2L * sn + 2L * cn + 2L * DEBUG_CLIP_MAX);
     work_storage = shared_work ? shared_work : (double*)malloc(work_bytes + integer_bytes);
     if (!work_storage) {
@@ -286,6 +368,10 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     buf_y2 = buf_x2 + DEBUG_CLIP_MAX;
     out_px = output_storage;
     out_py = out_px + DEBUG_CLIP_MAX;
+    precise_sx = work_storage + 4L * DEBUG_CLIP_MAX;
+    precise_sy = precise_sx + sn;
+    precise_cx = precise_sy + sn;
+    precise_cy = precise_cx + cn;
     for (int i = 0; i < sn; ++i) {
         int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[subj] + i] - 1;
         sx[i] = vtx->x2d[vi]; sy[i] = vtx->y2d[vi];
@@ -294,9 +380,70 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[clip] + i] - 1;
         cx[i] = vtx->x2d[vi]; cy[i] = vtx->y2d[vi];
     }
+    /* The ordering path must not inherit integer projection error, even at
+     * the temporary x10 scale. Project observer coordinates directly into
+     * double arrays; only integer diagnostics use the cached screen vertices.
+     */
+    if (fractional) {
+        double scale = (double)s_global_proj_scale_fixed / (double)FIXED_SCALE;
+        double subject_area2 = 0.0, clip_area2 = 0.0;
+        int i, prev;
+        if (scale <= 0.0) {
+            *fractional_area2 = 0.0;
+            if (!shared_work) free(work_storage);
+            return 0;
+        }
+        for (i = 0; i < sn + cn; ++i) {
+            int is_subject = (i < sn);
+            int k = is_subject ? i : i - sn;
+            int face = is_subject ? subj : clip;
+            int v = faces->vertex_indices_buffer[faces->vertex_indices_ptr[face] + k] - 1;
+            double z = (double)vtx->zo[v];
+            double *px = is_subject ? precise_sx : precise_cx;
+            double *py = is_subject ? precise_sy : precise_cy;
+            if (z <= 0.0) {
+                *fractional_area2 = 0.0;
+                if (!shared_work) free(work_storage);
+                return 0;
+            }
+            fractional_projection_cached(model, v, scale, &px[k], &py[k]);
+        }
+        /* Translate the shoelace sums to avoid large off-screen products. */
+        prev = sn - 1;
+        for (i = 0; i < sn; ++i) {
+            subject_area2 += (precise_sx[prev] - precise_sx[0]) * (precise_sy[i] - precise_sy[0])
+                           - (precise_sx[i] - precise_sx[0]) * (precise_sy[prev] - precise_sy[0]);
+            prev = i;
+        }
+        prev = cn - 1;
+        for (i = 0; i < cn; ++i) {
+            clip_area2 += (precise_cx[prev] - precise_cx[0]) * (precise_cy[i] - precise_cy[0])
+                        - (precise_cx[i] - precise_cx[0]) * (precise_cy[prev] - precise_cy[0]);
+            prev = i;
+        }
+        if (fabs(subject_area2) <= 1e-12 || fabs(clip_area2) <= 1e-12) {
+            *fractional_area2 = 0.0;
+            if (!shared_work) free(work_storage);
+            return 0;
+        }
+        if (subject_area2 < 0.0) {
+            for (i = 0; i < sn / 2; ++i) {
+                int j = sn - 1 - i;
+                double t = precise_sx[i]; precise_sx[i] = precise_sx[j]; precise_sx[j] = t;
+                t = precise_sy[i]; precise_sy[i] = precise_sy[j]; precise_sy[j] = t;
+            }
+        }
+        if (clip_area2 < 0.0) {
+            for (i = 0; i < cn / 2; ++i) {
+                int j = cn - 1 - i;
+                double t = precise_cx[i]; precise_cx[i] = precise_cx[j]; precise_cx[j] = t;
+                t = precise_cy[i]; precise_cy[i] = precise_cy[j]; precise_cy[j] = t;
+            }
+        }
+    }
     /* Normalize winding: ensure both polygons use CCW orientation so SH is deterministic
      * regardless of the input vertex order. If signed area < 0, reverse vertex order. */
-    {
+    if (!fractional) {
         long long area2_subj = 0;
         int fast_subj = (sn <= 64);
         int wi;
@@ -379,7 +526,8 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     }
     int cur_n = sn;
     for (int i = 0; i < cur_n && i < DEBUG_CLIP_MAX; ++i) {
-        buf_x1[i] = (double)sx[i]; buf_y1[i] = (double)sy[i];
+        buf_x1[i] = fractional ? precise_sx[i] : (double)sx[i];
+        buf_y1[i] = fractional ? precise_sy[i] : (double)sy[i];
     }
     /* Sutherland-Hodgman: each vertex side is evaluated once per clip edge. */
     for (int ci = 0; ci < cn && cur_n > 0; ++ci) {
@@ -390,9 +538,10 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         int out_n_tmp = 0;
         int si;
         if (ci2 == cn) ci2 = 0;
-        cx1d = (double)cx[ci]; cy1d = (double)cy[ci];
-        ex = (double)cx[ci2] - cx1d;
-        ey = (double)cy[ci2] - cy1d;
+        cx1d = fractional ? precise_cx[ci] : (double)cx[ci];
+        cy1d = fractional ? precise_cy[ci] : (double)cy[ci];
+        ex = (fractional ? precise_cx[ci2] : (double)cx[ci2]) - cx1d;
+        ey = (fractional ? precise_cy[ci2] : (double)cy[ci2]) - cy1d;
         sx1d = buf_x1[0]; sy1d = buf_y1[0];
         side1 = ex * (sy1d - cy1d) - ey * (sx1d - cx1d);
         inside1 = (side1 >= 0.0);
@@ -448,6 +597,45 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             fflush(dlog);
         }
     }
+    /* Ordering path: compute directly on the unrounded clipping result.
+     * Translate to the first vertex before accumulating area/centroid terms,
+     * reducing cancellation when a narrow intersection lies far off-screen.
+     * Integer diagnostic callers retain the original rounding path below.
+     */
+    if (fractional_x && fractional_y && fractional_area2) {
+        double area2 = 0.0, nx = 0.0, ny = 0.0;
+        double ox, oy;
+        int i, prev;
+        *fractional_area2 = 0.0;
+        if (cur_n < 3) {
+            if (dlog) fclose(dlog);
+            if (!shared_work) free(work_storage);
+            return 0;
+        }
+        ox = buf_x1[0]; oy = buf_y1[0];
+        prev = cur_n - 1;
+        for (i = 0; i < cur_n; ++i) {
+            double x0 = buf_x1[prev] - ox, y0 = buf_y1[prev] - oy;
+            double x1 = buf_x1[i] - ox, y1 = buf_y1[i] - oy;
+            double cross = x0 * y1 - x1 * y0;
+            area2 += cross;
+            nx += (x0 + x1) * cross;
+            ny += (y0 + y1) * cross;
+            prev = i;
+        }
+        if (fabs(area2) <= 1e-12) {
+            if (dlog) fclose(dlog);
+            if (!shared_work) free(work_storage);
+            return 0; /* Shared edge/point or numerically degenerate contour. */
+        }
+        *fractional_x = ox + nx / (3.0 * area2);
+        *fractional_y = oy + ny / (3.0 * area2);
+        *fractional_area2 = fabs(area2);
+        if (dlog) fclose(dlog);
+        if (!shared_work) free(work_storage);
+        return 1;
+    }
+
     /* Round and remove duplicate/colinear vertices into out_px/out_py */
     int final_n = 0;
     for (int i = 0; i < cur_n; ++i) {
@@ -585,8 +773,39 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
 }
 /* Standalone entry point: keep existing callers and allocation behavior. */
 static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
-    return compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, NULL);
+    return compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, NULL, NULL, NULL, NULL);
 }
+/* Fractional centroid for face ordering. No pixel rounding or minimum
+ * pixel-area threshold: any nondegenerate SH intersection can select a ray.
+ * Unlike the integer diagnostic helper, failure does not invent a bbox point.
+ */
+static int compute_intersection_centroid_fractional_tryboth(Model3D *model,
+        int subj, int clip, double *outx, double *outy, double *out_area2)
+{
+    FaceArrays3D *faces;
+    double *work;
+    long bytes;
+    long long ignored_area2 = 0;
+    int sn, cn, ok;
+    if (!outx || !outy || !out_area2) return 0;
+    *out_area2 = 0.0;
+    if (!model) return 0;
+    faces = &model->faces;
+    if (subj < 0 || clip < 0 || subj >= faces->face_count || clip >= faces->face_count) return 0;
+    sn = faces->vertex_count[subj]; cn = faces->vertex_count[clip];
+    if (sn < 3 || cn < 3 || sn > DEBUG_CLIP_MAX || cn > DEBUG_CLIP_MAX) return 0;
+    bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX + 2L * sn + 2L * cn)
+          + (long)sizeof(int) * (2L * sn + 2L * cn + 2L * DEBUG_CLIP_MAX);
+    work = (double*)malloc(bytes);
+    if (!work) return 0;
+    ok = compute_intersection_centroid_ordered_fixed_work(model, subj, clip,
+             NULL, NULL, &ignored_area2, work, outx, outy, out_area2);
+    if (!ok) ok = compute_intersection_centroid_ordered_fixed_work(model, clip, subj,
+             NULL, NULL, &ignored_area2, work, outx, outy, out_area2);
+    free(work);
+    return ok;
+}
+
 /* Try both clipping orders: call compute_intersection_centroid_ordered_fixed(subj,clip)
  * and if it produces fewer than 3 output vertices, try compute_intersection_centroid_ordered_fixed(clip,subj).
  * This keeps existing callers intact and provides a single-call fallback for UI/diagnostic use.
@@ -622,10 +841,10 @@ static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, i
             return 0;
         }
     /* Try primary order first */
-    res = compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, shared_work);
+    res = compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, shared_work, NULL, NULL, NULL);
     if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; free(shared_work); return res; }
     /* Try reversed order */
-    res2 = compute_intersection_centroid_ordered_fixed_work(model, clip, subj, outx, outy, out_area2, shared_work);
+    res2 = compute_intersection_centroid_ordered_fixed_work(model, clip, subj, outx, outy, out_area2, shared_work, NULL, NULL, NULL);
     if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; free(shared_work); return res2; }
     free(shared_work);
     }
