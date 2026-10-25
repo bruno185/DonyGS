@@ -106,6 +106,7 @@ static Model3D *fractional_cache_owner = NULL;
 static void fractional_projection_cache_invalidate(Model3D *model)
 {
     int i;
+    ordering_cache_invalidate(model);
     fractional_cache_owner = model;
     ++fractional_cache_generation;
     if (fractional_cache_generation == 0) {
@@ -121,6 +122,7 @@ static void fractional_projection_cache_invalidate(Model3D *model)
 static void fractional_projection_cache_release(Model3D *model)
 {
     int i;
+    ordering_cache_release(model);
     if (fractional_cache_owner != model) return;
     for (i = 0; i < FRACTIONAL_CACHE_BLOCKS; ++i) {
         free(fractional_cache[i]);
@@ -163,6 +165,78 @@ static void fractional_projection_cached(Model3D *model, int v, double scale,
     }
     *outx = (double)CENTRE_X + scale * x;
     *outy = (double)CENTRE_Y - scale * y;
+}
+
+/* Gather and normalize a fractional face once, then reuse its exact doubles.
+ * The signed-area sum and reversal order match the uncached SH path. Copying
+ * into the caller's workspace also protects subject data when clip aliases its
+ * direct-mapped slot. Allocation failure only disables reuse, never precision.
+ */
+static int fractional_face_gather(Model3D *model,int face,int n,double scale,
+                                   double *px,double *py,
+                                   double **edge_x,double **edge_y)
+{
+    FaceArrays3D *faces=&model->faces;
+    VertexArrays3D *vtx=&model->vertices;
+    OrderContour *entry;
+    OrderWinding *winding;
+    double area2=0.0;
+    int i,prev,offset=faces->vertex_indices_ptr[face];
+    *edge_x=*edge_y=NULL;
+    if(fractional_cache_owner!=model)fractional_projection_cache_invalidate(model);
+    entry=&order_contours[(unsigned int)face & (ORDER_CONTOUR_SLOTS-1)];
+    if(n<=ORDER_CONTOUR_MAX_VERTICES && entry->generation==order_cache_generation &&
+       entry->face==face && entry->count==n && entry->scale==s_global_proj_scale_fixed){
+        memcpy(px,entry->data,n*sizeof(double));
+        memcpy(py,entry->data+entry->capacity,n*sizeof(double));
+        *edge_x=entry->data+2*entry->capacity;
+        *edge_y=entry->data+3*entry->capacity;
+        return 1;
+    }
+    for(i=0;i<n;++i){
+        int v=faces->vertex_indices_buffer[offset+i]-1;
+        if(vtx->zo[v]<=0)return 0;
+        fractional_projection_cached(model,v,scale,&px[i],&py[i]);
+    }
+    winding=ordering_winding_slot(model,face);
+    if(ordering_winding_hit(winding,face,s_global_proj_scale_fixed))area2=winding->area2;
+    else {
+        prev=n-1;
+        for(i=0;i<n;++i){
+            area2+=(px[prev]-px[0])*(py[i]-py[0])
+                  -(px[i]-px[0])*(py[prev]-py[0]);
+            prev=i;
+        }
+        ordering_winding_store(winding,face,s_global_proj_scale_fixed,area2);
+    }
+    if(fabs(area2)<=1e-12)return 0;
+    if(area2<0.0){
+        for(i=0;i<n/2;++i){
+            int j=n-1-i;
+            double t=px[i];px[i]=px[j];px[j]=t;
+            t=py[i];py[i]=py[j];py[j]=t;
+        }
+    }
+    if(n>ORDER_CONTOUR_MAX_VERTICES)return 1;
+    if(entry->capacity<n){
+        double *grown=NULL;
+        if(entry->failed_generation!=order_cache_generation)
+            grown=(double*)malloc((size_t)n*4*sizeof(double));
+        if(!grown){entry->failed_generation=order_cache_generation;return 1;}
+        free(entry->data);entry->data=grown;entry->capacity=n;
+    }
+    memcpy(entry->data,px,n*sizeof(double));
+    memcpy(entry->data+entry->capacity,py,n*sizeof(double));
+    *edge_x=entry->data+2*entry->capacity;
+    *edge_y=entry->data+3*entry->capacity;
+    for(i=0;i<n;++i){
+        int next=i+1;if(next==n)next=0;
+        (*edge_x)[i]=px[next]-px[i];
+        (*edge_y)[i]=py[next]-py[i];
+    }
+    entry->face=face;entry->count=n;entry->scale=s_global_proj_scale_fixed;
+    entry->generation=order_cache_generation;
+    return 1;
 }
 
 /* Geometric helpers relocated from engine.c without changing their bodies. */
@@ -220,12 +294,16 @@ static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const
     return inside;
 }
 
-static long long orient_ll(long long ax,long long ay,long long bx,long long by,long long cx,long long cy) {
-    return (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);
+/* Screen inputs are signed 16-bit; widened differences need at most 17 bits.
+ * Exact 32x32 assembly products replace general 64-bit multiplication.
+ */
+static long long orient_ll(int ax,int ay,int bx,int by,int cx,int cy) {
+    return fixed_product32_fast((long)bx-ax,(long)cy-ay)
+         - fixed_product32_fast((long)by-ay,(long)cx-ax);
 }
-static int on_seg_ll(long long ax,long long ay,long long bx,long long by,long long cx,long long cy) {
-    if (( (ax<=cx && cx<=bx) || (bx<=cx && cx<=ax) ) && ((ay<=cy && cy<=by) || (by<=cy && cy<=ay))) return 1;
-    return 0;
+static int on_seg_ll(int ax,int ay,int bx,int by,int cx,int cy) {
+    return ((ax<=cx && cx<=bx)||(bx<=cx && cx<=ax)) &&
+           ((ay<=cy && cy<=by)||(by<=cy && cy<=ay));
 }
 
 
@@ -253,37 +331,46 @@ static int segs_intersect_int_fixed64(
     int x1, int y1, int x2, int y2,
     int x3, int y3, int x4, int y4)
 {
-    long long o1 = orient_ll(x1, y1, x2, y2, x3, y3);
-    long long o2 = orient_ll(x1, y1, x2, y2, x4, y4);
-    long long o3 = orient_ll(x3, y3, x4, y4, x1, y1);
-    long long o4 = orient_ll(x3, y3, x4, y4, x2, y2);
-    if (!(((o1 > 0 && o2 < 0) ||
-           (o1 < 0 && o2 > 0)) &&
-          ((o3 > 0 && o4 < 0) ||
-           (o3 < 0 && o4 > 0))))
-    {
-        return 0;
-    }
-    return 1;
+    long long o1 = orient_ll(x1,y1,x2,y2,x3,y3);
+    long long o2 = orient_ll(x1,y1,x2,y2,x4,y4);
+    long long o3,o4;
+    /* Two points on the same side already disprove a strict crossing. */
+    if(!((o1>0 && o2<0)||(o1<0 && o2>0)))return 0;
+    o3=orient_ll(x3,y3,x4,y4,x1,y1);
+    o4=orient_ll(x3,y3,x4,y4,x2,y2);
+    return (o3>0 && o4<0)||(o3<0 && o4>0);
 }
 
 static int segs_intersect_int(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
     return segs_intersect_int_fixed64(x1,y1,x2,y2,x3,y3,x4,y4);
 }
 static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* vtx, int f, int n) {
-    int cnt = 0; int off = faces->vertex_indices_ptr[f];
-    for (int i = 0; i < n; ++i) {
-        int j = (i+1)%n;
-        int vi = faces->vertex_indices_buffer[off + i] - 1;
-        int vj = faces->vertex_indices_buffer[off + j] - 1;
-        int xi = vtx->x2d[vi], yi = vtx->y2d[vi];
-        int xj = vtx->x2d[vj], yj = vtx->y2d[vj];
-        /* If the point lies exactly on the edge, consider it OUTSIDE (no overlap).
-         * Use orient==0 + on-segment test to detect boundary points. */
-        if (orient_ll(xi, yi, xj, yj, px, py) == 0 && on_seg_ll(xi, yi, xj, yj, px, py)) return 0;
-        if (((yi > py) != (yj > py)) && (px < (long long)(xj - xi) * (py - yi) / (yj - yi) + xi)) cnt++;
+    int cnt=0,off=faces->vertex_indices_ptr[f];
+    int i,vi,xi,yi;
+    if(n<=0)return 0;
+    vi=faces->vertex_indices_buffer[off]-1;
+    xi=vtx->x2d[vi];yi=vtx->y2d[vi];
+    for(i=0;i<n;++i){
+        int next=i+1,vj,xj,yj;
+        if(next==n)next=0;
+        vj=faces->vertex_indices_buffer[off+next]-1;
+        xj=vtx->x2d[vj];yj=vtx->y2d[vj];
+        /* Most edges cannot contain the point: reject by bounds before the
+         * exact determinant. Contacts remain outside as in the original test.
+         */
+        if(on_seg_ll(xi,yi,xj,yj,px,py) && orient_ll(xi,yi,xj,yj,px,py)==0)return 0;
+        if((yi>py)!=(yj>py)){
+            /* Preserve the original 16-bit coordinate differences and signed
+             * truncation toward zero. Their product fits signed 32 bits, so
+             * the original 64-bit multiply/divide is unnecessary here.
+             */
+            int dx=xj-xi,dpy=py-yi,dy=yj-yi;
+            long crossing=(long)dx*(long)dpy/(long)dy+(long)xi;
+            if((long)px<crossing)cnt^=1;
+        }
+        xi=xj;yi=yj;
     }
-    return (cnt & 1);
+    return cnt;
 }
 /* Return 1 if faces f1 and f2 have identical 2D vertex sequences (allowing rotation
  * and reversed order). Comparison uses exact integer 2D coordinates. */
@@ -339,39 +426,45 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     }
     /* Watchdog and iteration-cap disabled for repro testing (temporary). */
     /* Gather integer input polygons (screen coords) */
-    /* One allocation per call, double-aligned for ORCA/C floating point access.
-     * The integer arrays occupy the tail of the same allocation. */
+    /* Borrow reusable, double-aligned workspace from the entry-point wrapper.
+     * Integer diagnostics alone reserve and populate the trailing integer arrays.
+     * A direct caller without shared workspace retains the allocation fallback.
+     */
     double *work_storage;
     double *precise_sx, *precise_sy, *precise_cx, *precise_cy;
+    double *clip_edge_x=NULL,*clip_edge_y=NULL;
     int fractional = (fractional_x && fractional_y && fractional_area2);
     int *input_storage, *output_storage;
     int *sx, *sy, *cx, *cy;
     double *buf_x1, *buf_y1, *buf_x2, *buf_y2;
     int *out_px, *out_py;
     long work_bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX
-                    + (fractional ? (2L * sn + 2L * cn) : 0L));
-    long integer_bytes = (long)sizeof(int) * (2L * sn + 2L * cn + 2L * DEBUG_CLIP_MAX);
+                    + (fractional ? 2L * cn : 0L));
+    long integer_bytes = fractional ? 0L :
+        (long)sizeof(int) * (2L * sn + 2L * cn + 2L * DEBUG_CLIP_MAX);
     work_storage = shared_work ? shared_work : (double*)malloc(work_bytes + integer_bytes);
     if (!work_storage) {
         debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0;
         debug_clip_fixed_area = 0.0; *out_area2 = 0; return 0;
     }
-    input_storage = (int*)((char*)work_storage + work_bytes);
-    output_storage = input_storage + 2 * sn + 2 * cn;
-    sx = input_storage;
-    sy = sx + sn;
-    cx = sy + sn;
-    cy = cx + cn;
     buf_x1 = work_storage;
     buf_y1 = buf_x1 + DEBUG_CLIP_MAX;
     buf_x2 = buf_y1 + DEBUG_CLIP_MAX;
     buf_y2 = buf_x2 + DEBUG_CLIP_MAX;
-    out_px = output_storage;
-    out_py = out_px + DEBUG_CLIP_MAX;
-    precise_sx = work_storage + 4L * DEBUG_CLIP_MAX;
-    precise_sy = precise_sx + sn;
-    precise_cx = precise_sy + sn;
-    precise_cy = precise_cx + cn;
+    if (fractional) {
+        sx = sy = cx = cy = out_px = out_py = NULL;
+        /* Gather the subject directly into SH's first input buffers. */
+        precise_sx = buf_x1;precise_sy = buf_y1;
+        precise_cx = work_storage + 4L * DEBUG_CLIP_MAX;
+        precise_cy = precise_cx + cn;
+    } else {
+        input_storage = (int*)((char*)work_storage + work_bytes);
+        output_storage = input_storage + 2 * sn + 2 * cn;
+        sx = input_storage;sy = sx + sn;cx = sy + sn;cy = cx + cn;
+        out_px = output_storage;out_py = out_px + DEBUG_CLIP_MAX;
+        precise_sx = precise_sy = precise_cx = precise_cy = NULL;
+    }
+    if (!fractional) {
     for (int i = 0; i < sn; ++i) {
         int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[subj] + i] - 1;
         sx[i] = vtx->x2d[vi]; sy[i] = vtx->y2d[vi];
@@ -380,65 +473,22 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[clip] + i] - 1;
         cx[i] = vtx->x2d[vi]; cy[i] = vtx->y2d[vi];
     }
+    }
     /* The ordering path must not inherit integer projection error, even at
      * the temporary x10 scale. Project observer coordinates directly into
      * double arrays; only integer diagnostics use the cached screen vertices.
      */
     if (fractional) {
         double scale = (double)s_global_proj_scale_fixed / (double)FIXED_SCALE;
-        double subject_area2 = 0.0, clip_area2 = 0.0;
-        int i, prev;
-        if (scale <= 0.0) {
+        double *unused_edge_x,*unused_edge_y;
+        if (scale <= 0.0 ||
+            !fractional_face_gather(model,subj,sn,scale,precise_sx,precise_sy,
+                                      &unused_edge_x,&unused_edge_y) ||
+            !fractional_face_gather(model,clip,cn,scale,precise_cx,precise_cy,
+                                      &clip_edge_x,&clip_edge_y)) {
             *fractional_area2 = 0.0;
             if (!shared_work) free(work_storage);
             return 0;
-        }
-        for (i = 0; i < sn + cn; ++i) {
-            int is_subject = (i < sn);
-            int k = is_subject ? i : i - sn;
-            int face = is_subject ? subj : clip;
-            int v = faces->vertex_indices_buffer[faces->vertex_indices_ptr[face] + k] - 1;
-            double z = (double)vtx->zo[v];
-            double *px = is_subject ? precise_sx : precise_cx;
-            double *py = is_subject ? precise_sy : precise_cy;
-            if (z <= 0.0) {
-                *fractional_area2 = 0.0;
-                if (!shared_work) free(work_storage);
-                return 0;
-            }
-            fractional_projection_cached(model, v, scale, &px[k], &py[k]);
-        }
-        /* Translate the shoelace sums to avoid large off-screen products. */
-        prev = sn - 1;
-        for (i = 0; i < sn; ++i) {
-            subject_area2 += (precise_sx[prev] - precise_sx[0]) * (precise_sy[i] - precise_sy[0])
-                           - (precise_sx[i] - precise_sx[0]) * (precise_sy[prev] - precise_sy[0]);
-            prev = i;
-        }
-        prev = cn - 1;
-        for (i = 0; i < cn; ++i) {
-            clip_area2 += (precise_cx[prev] - precise_cx[0]) * (precise_cy[i] - precise_cy[0])
-                        - (precise_cx[i] - precise_cx[0]) * (precise_cy[prev] - precise_cy[0]);
-            prev = i;
-        }
-        if (fabs(subject_area2) <= 1e-12 || fabs(clip_area2) <= 1e-12) {
-            *fractional_area2 = 0.0;
-            if (!shared_work) free(work_storage);
-            return 0;
-        }
-        if (subject_area2 < 0.0) {
-            for (i = 0; i < sn / 2; ++i) {
-                int j = sn - 1 - i;
-                double t = precise_sx[i]; precise_sx[i] = precise_sx[j]; precise_sx[j] = t;
-                t = precise_sy[i]; precise_sy[i] = precise_sy[j]; precise_sy[j] = t;
-            }
-        }
-        if (clip_area2 < 0.0) {
-            for (i = 0; i < cn / 2; ++i) {
-                int j = cn - 1 - i;
-                double t = precise_cx[i]; precise_cx[i] = precise_cx[j]; precise_cx[j] = t;
-                t = precise_cy[i]; precise_cy[i] = precise_cy[j]; precise_cy[j] = t;
-            }
         }
     }
     /* Normalize winding: ensure both polygons use CCW orientation so SH is deterministic
@@ -513,7 +563,7 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     }
     /* Optional detailed debug dump for failing cases (writes centroidlog.txt) */
     FILE* dlog = NULL;
-    if ((debug_overlap_subj == subj && debug_overlap_clip == clip) || (subj == 12 && clip == 50)) {
+    if (!fractional && ((debug_overlap_subj == subj && debug_overlap_clip == clip) || (subj == 12 && clip == 50))) {
         //dlog = fopen("centroidlog.txt", "w");
         if (dlog) {
             fprintf(dlog, "--- compute_intersection_centroid_ordered_fixed debug (subj=%d clip=%d) ---\n", subj, clip);
@@ -525,25 +575,29 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         }
     }
     int cur_n = sn;
-    for (int i = 0; i < cur_n && i < DEBUG_CLIP_MAX; ++i) {
-        buf_x1[i] = fractional ? precise_sx[i] : (double)sx[i];
-        buf_y1[i] = fractional ? precise_sy[i] : (double)sy[i];
+    if(!fractional)for (int i = 0; i < cur_n && i < DEBUG_CLIP_MAX; ++i) {
+        buf_x1[i] = (double)sx[i];
+        buf_y1[i] = (double)sy[i];
     }
     /* Sutherland-Hodgman: each vertex side is evaluated once per clip edge. */
     for (int ci = 0; ci < cn && cur_n > 0; ++ci) {
         int ci2 = ci + 1;
         double cx1d, cy1d, ex, ey;
-        double sx1d, sy1d, side1;
+        double sx1d, sy1d, side1,first_side;
         int inside1;
         int out_n_tmp = 0;
         int si;
         if (ci2 == cn) ci2 = 0;
         cx1d = fractional ? precise_cx[ci] : (double)cx[ci];
         cy1d = fractional ? precise_cy[ci] : (double)cy[ci];
-        ex = (fractional ? precise_cx[ci2] : (double)cx[ci2]) - cx1d;
-        ey = (fractional ? precise_cy[ci2] : (double)cy[ci2]) - cy1d;
+        /* Cached deltas use the identical normalized endpoints/subtraction. */
+        ex = clip_edge_x ? clip_edge_x[ci] :
+             (fractional ? precise_cx[ci2] : (double)cx[ci2]) - cx1d;
+        ey = clip_edge_y ? clip_edge_y[ci] :
+             (fractional ? precise_cy[ci2] : (double)cy[ci2]) - cy1d;
         sx1d = buf_x1[0]; sy1d = buf_y1[0];
         side1 = ex * (sy1d - cy1d) - ey * (sx1d - cx1d);
+        first_side=side1;
         inside1 = (side1 >= 0.0);
         for (si = 0; si < cur_n; ++si) {
             int sj = si + 1;
@@ -551,7 +605,11 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             int inside2;
             if (sj == cur_n) sj = 0;
             sx2d = buf_x1[sj]; sy2d = buf_y1[sj];
-            side2 = ex * (sy2d - cy1d) - ey * (sx2d - cx1d);
+            /* Closing endpoint is the first vertex: reuse the exact stored
+             * side instead of repeating two double products/subtractions.
+             */
+            side2 = (sj==0)?first_side:
+                    ex * (sy2d - cy1d) - ey * (sx2d - cx1d);
             inside2 = (side2 >= 0.0);
             if (inside1 && inside2) {
                 if (out_n_tmp < DEBUG_CLIP_MAX) {
@@ -561,11 +619,19 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
                 }
             } else if (inside1 != inside2) {
                 double dx = sx2d - sx1d, dy = sy2d - sy1d;
-                double denom = dx * ey - dy * ex;
+                /* The fractional path already evaluated both signed sides.
+                 * At a crossing, t = side1/(side1-side2). Reusing them avoids
+                 * repeating four double products and their coordinate differences.
+                 * Opposite signs make the denominator an addition of magnitudes,
+                 * avoiding cancellation. Keep legacy diagnostic arithmetic intact.
+                 */
+                double denom = fractional ? side1 - side2 : dx * ey - dy * ex;
                 double t = 0.0;
                 double ix, iy;
-                if (fabs(denom) > 1e-12)
-                    t = ((cx1d - sx1d) * ey - (cy1d - sy1d) * ex) / denom;
+                if (fabs(denom) > 1e-12) {
+                    if (fractional) t = side1 / denom;
+                    else t = ((cx1d - sx1d) * ey - (cy1d - sy1d) * ex) / denom;
+                }
                 ix = sx1d + t * dx;
                 iy = sy1d + t * dy;
                 if (out_n_tmp < DEBUG_CLIP_MAX) {
@@ -771,9 +837,25 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     if (!shared_work) free(work_storage);
     return 1;
 }
-/* Standalone entry point: keep existing callers and allocation behavior. */
+/* Integer diagnostic entry point: reuse workspace without changing outputs. */
 static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
-    return compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, NULL, NULL, NULL, NULL);
+    FaceArrays3D *faces;
+    double *work;
+    long bytes;
+    int sn,cn;
+    if (!model || !out_area2) return 0;
+    faces=&model->faces;
+    if (subj < 0 || clip < 0 || subj >= faces->face_count || clip >= faces->face_count) return 0;
+    sn=faces->vertex_count[subj];cn=faces->vertex_count[clip];
+    if (order_cache_owner != model) ordering_cache_invalidate(model);
+    bytes=(long)sizeof(double)*(4L*DEBUG_CLIP_MAX)
+         +(long)sizeof(int)*(2L*sn+2L*cn+2L*DEBUG_CLIP_MAX);
+    work=ordering_workspace(bytes);
+    if (!work) {
+        debug_clip_fixed_vcount=0;debug_clip_raw_area2=0;debug_clip_fixed_area=0.0;*out_area2=0;
+        return 0;
+    }
+    return compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, work, NULL, NULL, NULL);
 }
 /* Fractional centroid for face ordering. No pixel rounding or minimum
  * pixel-area threshold: any nondegenerate SH intersection can select a ray.
@@ -794,15 +876,16 @@ static int compute_intersection_centroid_fractional_tryboth(Model3D *model,
     if (subj < 0 || clip < 0 || subj >= faces->face_count || clip >= faces->face_count) return 0;
     sn = faces->vertex_count[subj]; cn = faces->vertex_count[clip];
     if (sn < 3 || cn < 3 || sn > DEBUG_CLIP_MAX || cn > DEBUG_CLIP_MAX) return 0;
-    bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX + 2L * sn + 2L * cn)
-          + (long)sizeof(int) * (2L * sn + 2L * cn + 2L * DEBUG_CLIP_MAX);
-    work = (double*)malloc(bytes);
+    ORDER_COUNT(sh_calls);
+    if (order_cache_owner != model) ordering_cache_invalidate(model);
+    /* Either clipping order fits: only its clip polygon needs extra arrays. */
+    bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX + 2L * (sn>cn?sn:cn));
+    work = ordering_workspace(bytes);
     if (!work) return 0;
     ok = compute_intersection_centroid_ordered_fixed_work(model, subj, clip,
              NULL, NULL, &ignored_area2, work, outx, outy, out_area2);
     if (!ok) ok = compute_intersection_centroid_ordered_fixed_work(model, clip, subj,
              NULL, NULL, &ignored_area2, work, outx, outy, out_area2);
-    free(work);
     return ok;
 }
 
@@ -832,7 +915,8 @@ static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, i
         }
         bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX)
               + (long)sizeof(int) * (2L * sn + 2L * cn + 2L * DEBUG_CLIP_MAX);
-        shared_work = (double*)malloc(bytes);
+        if (order_cache_owner != model) ordering_cache_invalidate(model);
+        shared_work = ordering_workspace(bytes);
         if (!shared_work) {
             debug_clip_fixed_vcount = 0;
             debug_clip_raw_area2 = 0;
@@ -842,11 +926,11 @@ static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, i
         }
     /* Try primary order first */
     res = compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, shared_work, NULL, NULL, NULL);
-    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; free(shared_work); return res; }
+    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0;  return res; }
     /* Try reversed order */
     res2 = compute_intersection_centroid_ordered_fixed_work(model, clip, subj, outx, outy, out_area2, shared_work, NULL, NULL, NULL);
-    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0; free(shared_work); return res2; }
-    free(shared_work);
+    if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0;  return res2; }
+
     }
     /* No drawable clipped polygon found in either order — perform bbox/sample fallback
      * (mirror the inspector behavior): find a sample point inside the integer
@@ -960,7 +1044,7 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
             LineTo(vtx->x2d[vi], vtx->y2d[vi]);
         }
         ClosePoly();
-        PenState ps_subj; GetPenState(&ps_subj); 
+        PenState ps_subj; GetPenState(&ps_subj);
         OpenRgn(); FramePoly(subj_poly); CloseRgn(r1);
         SetPenState(&ps_subj);
         KillPoly(subj_poly);
@@ -976,7 +1060,7 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
             LineTo(vtx->x2d[wi], vtx->y2d[wi]);
         }
         ClosePoly();
-        PenState ps_clip; GetPenState(&ps_clip); 
+        PenState ps_clip; GetPenState(&ps_clip);
         OpenRgn(); FramePoly(clip_poly); CloseRgn(r2);
         SetPenState(&ps_clip);
         KillPoly(clip_poly);
@@ -2747,6 +2831,26 @@ static int projected_polygons_overlap(Model3D *model, int f1, int f2)
 }
 
 /* Text-only UI. Returns the chosen method, or current_method on cancel. */
+/* GEO V3 memoization: keep dispatcher diagnostics and false/watchdog results
+ * unchanged elsewhere. Method and scale are part of the exact directed key.
+ */
+static int projected_polygons_overlap_cached(Model3D *model, int f1, int f2)
+{
+    OrderPairEntry *entry;
+    int result;
+    if (!model) return 0;
+    ORDER_COUNT(overlap_calls);
+    entry=ordering_pair_slot(model, order_overlap_pairs, f1, f2);
+    if (ordering_pair_hit(entry, f1, f2, s_global_proj_scale_fixed, (unsigned int)overlap_method)) {
+        ORDER_COUNT(overlap_hits);
+        return entry->result;
+    }
+    result=projected_polygons_overlap(model,f1,f2);
+    if (result) ordering_pair_store(entry,f1,f2,s_global_proj_scale_fixed,
+                                   (unsigned int)overlap_method,result);
+    return result;
+}
+
 static int select_overlap_method(int current_method)
 {
     static const char *names[7] = {

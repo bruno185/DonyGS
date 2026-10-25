@@ -3,7 +3,7 @@
  * Non-reentrant, like GeoV3_Mul32x32: global input/output staging is shared.
  * Each product is shifted separately, preserving the C rounding behavior.
  */
-static unsigned int geo_rel_words[36];
+static unsigned int geo_rel_words[40];
 static int geo_rel_result;
 
 /* Direct-page layout (byte offsets):
@@ -12,6 +12,10 @@ static int geo_rel_result;
  * 25..31: accumulator; 33..39: epsilon; 41..47: -epsilon
  * 49..55: d; 57..67: a/b/c (two words each)
  * 69: coordinate byte offset; 71: index-list byte offset.
+ * 73: far pointer to the prepared plane's packed vertex-side cache.
+ * 77: one-based vertex ID; 79: cache slot byte offset.
+ * Cache entries are valid for exactly this plane/epsilon/transformation.
+ * Even on-plane vertices are cached; no geometric tolerance is changed.
  * The existing multiplier preserves D, X and Y across its long call.
  */
 asm void GeoRel_Classify32Kernel(void)
@@ -25,18 +29,74 @@ asm void GeoRel_Classify32Kernel(void)
     cld
     tsc
     sec
-    sbc #72
+    sbc #80
     tcs
     tcd
 
-    /* Copy the packet using long global addressing and direct-page stores. */
-    ldx #70
-geo_rel_copy:
-    lda >geo_rel_words,x
-    sta 1,x
-    dex
-    dex
-    bpl geo_rel_copy
+    /* Copy only live packet fields. Unrolled long loads/direct-page stores
+     * avoid loop/index overhead on every relation, including vertex-cache hits.
+     * Flags, accumulator and per-vertex offsets are initialized below instead.
+     */
+    lda >geo_rel_words
+    sta 1
+    lda >geo_rel_words+2
+    sta 3
+    lda >geo_rel_words+4
+    sta 5
+    lda >geo_rel_words+6
+    sta 7
+    lda >geo_rel_words+8
+    sta 9
+    lda >geo_rel_words+10
+    sta 11
+    lda >geo_rel_words+12
+    sta 13
+    lda >geo_rel_words+14
+    sta 15
+    lda >geo_rel_words+16
+    sta 17
+    lda >geo_rel_words+18
+    sta 19
+    lda >geo_rel_words+32
+    sta 33
+    lda >geo_rel_words+34
+    sta 35
+    lda >geo_rel_words+36
+    sta 37
+    lda >geo_rel_words+38
+    sta 39
+    lda >geo_rel_words+40
+    sta 41
+    lda >geo_rel_words+42
+    sta 43
+    lda >geo_rel_words+44
+    sta 45
+    lda >geo_rel_words+46
+    sta 47
+    lda >geo_rel_words+48
+    sta 49
+    lda >geo_rel_words+50
+    sta 51
+    lda >geo_rel_words+52
+    sta 53
+    lda >geo_rel_words+54
+    sta 55
+    lda >geo_rel_words+56
+    sta 57
+    lda >geo_rel_words+58
+    sta 59
+    lda >geo_rel_words+60
+    sta 61
+    lda >geo_rel_words+62
+    sta 63
+    lda >geo_rel_words+64
+    sta 65
+    lda >geo_rel_words+66
+    sta 67
+    lda >geo_rel_words+72
+    sta 73
+    lda >geo_rel_words+74
+    sta 75
     stz 71
     lda #1
     sta 21
@@ -49,12 +109,36 @@ geo_rel_vertex:
 geo_rel_have_vertex:
     ldy 71
     lda [1],y           // OBJ indices are one-based, native 16-bit integers.
+    sta 77
+    inc 71
+    inc 71
+    and #63
+    asl a
+    sta 79
+    tay
+    lda [73],y
+    and #0x1FFF
+    cmp 77
+    bne geo_rel_vertex_uncached
+    lda [73],y
+    and #0x6000
+    cmp #0x2000
+    bne geo_rel_cached_off_plane
+    brl geo_rel_next
+geo_rel_cached_off_plane:
+    cmp #0x4000
+    bne geo_rel_cached_negative
+    lda #1
+    brl geo_rel_side
+geo_rel_cached_negative:
+    lda #0xFFFF
+    brl geo_rel_side
+geo_rel_vertex_uncached:
+    lda 77
     dec a
     asl a
     asl a               // Four bytes per Fixed32 coordinate.
     sta 69
-    inc 71
-    inc 71
     lda 49
     sta 25
     lda 51
@@ -66,16 +150,21 @@ geo_rel_have_vertex:
 
     /* Add (coefficient_x * coordinate_x) >> 16, in signed 64 bits. */
     lda 57
-    sta >geo_mul_a0
+    ora 59
+    bne geo_rel_x_multiply
+    brl geo_rel_x_done
+geo_rel_x_multiply:
+    lda 57
+    sta >geo_mul_inputs
     lda 59
-    sta >geo_mul_a1
+    sta >geo_mul_inputs+2
     ldy 69
     lda [5],y
-    sta >geo_mul_b0
+    sta >geo_mul_inputs+4
     iny
     iny
     lda [5],y
-    sta >geo_mul_b1
+    sta >geo_mul_inputs+6
     jsl GeoV3_Mul32x32
     /* Discard the low word, then sign-extend the shifted 48-bit product. */
     lda >geo_mul_p+6
@@ -99,19 +188,25 @@ geo_rel_x_extend:
     txa                 // TXA does not alter carry from the third ADC.
     adc 31
     sta 31
+geo_rel_x_done:
 
     /* Add (coefficient_y * coordinate_y) >> 16, in signed 64 bits. */
     lda 61
-    sta >geo_mul_a0
+    ora 63
+    bne geo_rel_y_multiply
+    brl geo_rel_y_done
+geo_rel_y_multiply:
+    lda 61
+    sta >geo_mul_inputs
     lda 63
-    sta >geo_mul_a1
+    sta >geo_mul_inputs+2
     ldy 69
     lda [9],y
-    sta >geo_mul_b0
+    sta >geo_mul_inputs+4
     iny
     iny
     lda [9],y
-    sta >geo_mul_b1
+    sta >geo_mul_inputs+6
     jsl GeoV3_Mul32x32
     /* Discard the low word, then sign-extend the shifted 48-bit product. */
     lda >geo_mul_p+6
@@ -135,19 +230,25 @@ geo_rel_y_extend:
     txa                 // TXA does not alter carry from the third ADC.
     adc 31
     sta 31
+geo_rel_y_done:
 
     /* Add (coefficient_z * coordinate_z) >> 16, in signed 64 bits. */
     lda 65
-    sta >geo_mul_a0
+    ora 67
+    bne geo_rel_z_multiply
+    brl geo_rel_z_done
+geo_rel_z_multiply:
+    lda 65
+    sta >geo_mul_inputs
     lda 67
-    sta >geo_mul_a1
+    sta >geo_mul_inputs+2
     ldy 69
     lda [13],y
-    sta >geo_mul_b0
+    sta >geo_mul_inputs+4
     iny
     iny
     lda [13],y
-    sta >geo_mul_b1
+    sta >geo_mul_inputs+6
     jsl GeoV3_Mul32x32
     /* Discard the low word, then sign-extend the shifted 48-bit product. */
     lda >geo_mul_p+6
@@ -171,6 +272,7 @@ geo_rel_z_extend:
     txa                 // TXA does not alter carry from the third ADC.
     adc 31
     sta 31
+geo_rel_z_done:
 
     /* Compare acc to epsilon without subtraction overflow.
      * Bias the signed top words; compare remaining words as unsigned. */
@@ -224,16 +326,30 @@ geo_rel_check_negative:
     cmp 41
     bcc geo_rel_lower_less
     bne geo_rel_lower_greater
-    brl geo_rel_next
+    brl geo_rel_on_plane
 geo_rel_lower_less:
     brl geo_rel_negative
 geo_rel_lower_greater:
-    brl geo_rel_next
+    brl geo_rel_on_plane
 
+geo_rel_on_plane:
+    lda 77
+    ora #0x2000
+    ldy 79
+    sta [73],y
+    brl geo_rel_next
 geo_rel_positive:
+    lda 77
+    ora #0x4000
+    ldy 79
+    sta [73],y
     lda #1
     bra geo_rel_side
 geo_rel_negative:
+    lda 77
+    ora #0x6000
+    ldy 79
+    sta [73],y
     lda #0xFFFF
 geo_rel_side:
     cmp 19
@@ -264,7 +380,7 @@ geo_rel_store:
     sta >geo_rel_result
     tsc
     clc
-    adc #72
+    adc #80
     tcs
     pld
     ply
@@ -279,11 +395,13 @@ geo_rel_store:
  */
 static int GeoRel_Classify32(Model3D *model, int face,
                             Fixed32 a, Fixed32 b, Fixed32 c,
-                            Fixed64 d, Fixed64 epsilon, int obs)
+                            Fixed64 d, Fixed64 epsilon, int obs,
+                            unsigned int *vertex_sides)
 {
     int *indices = model->faces.vertex_indices_buffer
                  + model->faces.vertex_indices_ptr[face];
     Fixed64 negative_epsilon = -epsilon;
+    order_asm_packet_plane=NULL; /* Raw diagnostic calls replace the packet. */
     memcpy(&geo_rel_words[0], &indices, 4);
     memcpy(&geo_rel_words[2], &model->vertices.xo, 4);
     memcpy(&geo_rel_words[4], &model->vertices.yo, 4);
@@ -296,6 +414,29 @@ static int GeoRel_Classify32(Model3D *model, int face,
     memcpy(&geo_rel_words[28], &a, 4);
     memcpy(&geo_rel_words[30], &b, 4);
     memcpy(&geo_rel_words[32], &c, 4);
+    memcpy(&geo_rel_words[36], &vertex_sides, 4);
+    GeoRel_Classify32Kernel();
+    return geo_rel_result;
+}
+
+/* Reuse invariant plane inputs while classifying successive candidate faces.
+ * Only the index-list pointer and vertex count vary. This also reduces the C
+ * call packet to three arguments instead of repeatedly passing 64-bit values.
+ */
+static int GeoRel_ClassifyPrepared(Model3D *model,int face,OrderFixedPlane *plane)
+{
+    static int packet_face=-1;
+    static Fixed64 packet_epsilon=0;
+    int *indices,result;
+    if(order_asm_packet_plane!=plane || packet_face!=plane->face || packet_epsilon!=plane->epsilon){
+        result=GeoRel_Classify32(model,face,plane->a32,plane->b32,plane->c32,
+                                 plane->d,plane->epsilon,plane->observer,plane->vertex_sides);
+        order_asm_packet_plane=plane;packet_face=plane->face;packet_epsilon=plane->epsilon;
+        return result;
+    }
+    indices=model->faces.vertex_indices_buffer+model->faces.vertex_indices_ptr[face];
+    memcpy(&geo_rel_words[0],&indices,4);
+    geo_rel_words[8]=model->faces.vertex_count[face];
     GeoRel_Classify32Kernel();
     return geo_rel_result;
 }

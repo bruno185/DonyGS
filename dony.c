@@ -44,9 +44,9 @@ static int dony_ray_pairs_reserve(DonyRayPairs *cache, int nf)
 static int dony_ray_pair_seen(DonyRayPairs *cache, int p, int q,
                               unsigned int generation)
 {
-    unsigned int a = (unsigned int)((p < q) ? p : q);
-    unsigned int b = (unsigned int)((p < q) ? q : p);
-    unsigned int bucket = ((a * 33U) ^ b) & (DONY_RAY_PAIR_BUCKETS - 1);
+    unsigned int a=(unsigned int)p,b=(unsigned int)q,bucket;
+    if(a>b){unsigned int swap=a;a=b;b=swap;}
+    bucket=(((a << 5)+a)^b) & (DONY_RAY_PAIR_BUCKETS-1);
     unsigned int entry;
     if (cache->stamps[bucket] != generation) return 0;
     entry = cache->heads[bucket];
@@ -61,9 +61,9 @@ static int dony_ray_pair_seen(DonyRayPairs *cache, int p, int q,
 static void dony_ray_pair_record(DonyRayPairs *cache, int p, int q,
                                  unsigned int generation)
 {
-    unsigned int a = (unsigned int)((p < q) ? p : q);
-    unsigned int b = (unsigned int)((p < q) ? q : p);
-    unsigned int bucket = ((a * 33U) ^ b) & (DONY_RAY_PAIR_BUCKETS - 1);
+    unsigned int a=(unsigned int)p,b=(unsigned int)q,bucket;
+    if(a>b){unsigned int swap=a;a=b;b=swap;}
+    bucket=(((a << 5)+a)^b) & (DONY_RAY_PAIR_BUCKETS-1);
     unsigned int i = cache->count++;
     /* Caller checks the nf permutation limit before recording a new swap. */
     cache->first[i] = a;
@@ -73,18 +73,27 @@ static void dony_ray_pair_record(DonyRayPairs *cache, int p, int q,
     cache->stamps[bucket] = generation;
 }
 
-/* Stable insertion sort by descending z_max. */
-static void sort_by_zmax(int* sorted, Fixed32* z_max, int nf)
+/* Stable binary insertion sort. Keep the linear fast path for an already
+ * ordered prefix, locate an out-of-order key in logarithmic comparisons, then
+ * shift its contiguous index run with memmove. No recursion or extra buffer.
+ */
+static void sort_by_zmax(int *sorted,Fixed32 *z_max,int nf)
 {
-    for (int i = 1; i < nf; ++i) {
-        int key = sorted[i];
-        Fixed32 kz = z_max[key];
-        int j = i - 1;
-        while (j >= 0 && z_max[sorted[j]] < kz) {
-            sorted[j + 1] = sorted[j];
-            --j;
+    int i;
+    for(i=1;i<nf;++i){
+        int key=sorted[i];
+        Fixed32 depth=z_max[key];
+        int lo,hi;
+        if(z_max[sorted[i-1]]>=depth)continue;
+        lo=0;hi=i;
+        while(lo<hi){
+            int mid=lo+(hi-lo)/2;
+            /* Insert after existing equal keys to preserve stability. */
+            if(z_max[sorted[mid]]>=depth)lo=mid+1;
+            else hi=mid;
         }
-        sorted[j + 1] = key;
+        memmove(&sorted[lo+1],&sorted[lo],(size_t)(i-lo)*sizeof(int));
+        sorted[lo]=key;
     }
 }
 
@@ -262,11 +271,8 @@ do_permute:
             if (++permutes_this_pass > face_count)
                 goto do_split_giveup;
 
-            {
-                int tmp = sorted[fs];
-                sorted[fs] = sorted[f2];
-                sorted[f2] = tmp;
-            }
+            sorted[fs]=q;
+            sorted[f2]=p;
 
             /*
              * P has been demoted. Restart the comparisons with the
@@ -274,7 +280,7 @@ do_permute:
              */
             dd_flag[p] = generation;
 
-            p = sorted[fs];
+            p = q;
             f2 = fs + 1;
 
             continue;
@@ -285,7 +291,7 @@ do_split_giveup:
              * followed, when necessary, by hierarchical ray casting.
              */
             if (!dony_ray_pair_seen(&ray_pairs, p, q, generation) &&
-                projected_polygons_overlap(model, p, q)) {
+                projected_polygons_overlap_cached(model, p, q)) {
                 int rc;
 
                 rc = ray_cast_hierarchical(model, p, q);
@@ -299,16 +305,13 @@ do_split_giveup:
 
                     dony_ray_pair_record(&ray_pairs, p, q, generation);
 
-                    {
-                        int tmp = sorted[fs];
-                        sorted[fs] = sorted[f2];
-                        sorted[f2] = tmp;
-                    }
+                    sorted[fs]=q;
+                    sorted[f2]=p;
 
                     dd_flag[p] = generation;
 
 
-                    p = sorted[fs];
+                    p = q;
                     f2 = fs + 1;
 
                     continue;

@@ -19,7 +19,6 @@ asm void GeoV3_ScanCandidates(void)
     php
     rep #0x30
     pha
-    phx
     phy
     phd
     cld
@@ -28,13 +27,49 @@ asm void GeoV3_ScanCandidates(void)
     sbc #44
     tcs
     tcd
-    ldx #42
-geo_scan_copy:
-    lda >geo_scan_words,x
-    sta 1,x
-    dex
-    dex
-    bpl geo_scan_copy
+    /* Copy the invariant-size packet without loop/index overhead. Scratch
+     * words at 41/43 are written before use and need no input copy.
+     */
+    lda >geo_scan_words
+    sta 1
+    lda >geo_scan_words+2
+    sta 3
+    lda >geo_scan_words+4
+    sta 5
+    lda >geo_scan_words+6
+    sta 7
+    lda >geo_scan_words+8
+    sta 9
+    lda >geo_scan_words+10
+    sta 11
+    lda >geo_scan_words+12
+    sta 13
+    lda >geo_scan_words+14
+    sta 15
+    lda >geo_scan_words+16
+    sta 17
+    lda >geo_scan_words+18
+    sta 19
+    lda >geo_scan_words+20
+    sta 21
+    lda >geo_scan_words+22
+    sta 23
+    lda >geo_scan_words+24
+    sta 25
+    lda >geo_scan_words+26
+    sta 27
+    lda >geo_scan_words+28
+    sta 29
+    lda >geo_scan_words+30
+    sta 31
+    lda >geo_scan_words+32
+    sta 33
+    lda >geo_scan_words+34
+    sta 35
+    lda >geo_scan_words+36
+    sta 37
+    lda >geo_scan_words+38
+    sta 39
 geo_scan_loop:
     lda 37
     cmp 39
@@ -131,7 +166,6 @@ geo_scan_done:
     tcs
     pld
     ply
-    plx
     pla
     plp
     rtl

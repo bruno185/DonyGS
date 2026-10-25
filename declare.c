@@ -605,3 +605,11 @@ static int ray_cast_at_fractional(Model3D *model, int f1, int f2, double cx, dou
 /* Invalidate after observer-coordinate changes; scale-only zooms reuse ratios. */
 static void fractional_projection_cache_invalidate(Model3D *model);
 static void fractional_projection_cache_release(Model3D *model);
+
+/* Painter-only overlap memoization; diagnostic entry point is unchanged. */
+static int projected_polygons_overlap_cached(Model3D *model, int f1, int f2);
+
+/* Exact 32-bit fixed arithmetic backed by the validated 65816 multiplier. */
+static Fixed32 fixed_mul32_fast(Fixed32 a,Fixed32 b);
+static Fixed64 fixed_product32_fast(Fixed32 a,Fixed32 b);
+static Fixed64 fixed_product64x32_fast(Fixed64 a,Fixed32 b);

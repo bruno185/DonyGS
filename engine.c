@@ -1,4 +1,5 @@
 #include "declare.c"
+#include "ordering_cache.c"
 #include "dony.c"
 #include "screen_save_restore.c"
 #include "color.c"
@@ -1627,10 +1628,10 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     cos_w = cos_deg_int(params->angle_w);
     sin_w = sin_deg_int(params->angle_w);
     // Pre-calculate all trigonometric products in Fixed32 - using 64-bit multiply
-    const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
-    const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
-    const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
-    const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
+    const Fixed32 cos_h_cos_v = fixed_mul32_fast(cos_h, cos_v);
+    const Fixed32 sin_h_cos_v = fixed_mul32_fast(sin_h, cos_v);
+    const Fixed32 cos_h_sin_v = fixed_mul32_fast(cos_h, sin_v);
+    const Fixed32 sin_h_sin_v = fixed_mul32_fast(sin_h, sin_v);
     /* Precomputed rotation matrix - 9 coefficients */
     Fixed32 M00, M01, M02;
     Fixed32 M10, M11, M12;
@@ -1641,7 +1642,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
     Fixed32 distance = params->distance;
     // Apply auto-scale if any
-    //distance = FIXED_MUL_64(distance, INT_TO_FIXED(4));
+    //distance = fixed_mul32_fast(distance, INT_TO_FIXED(4));
     
     // 100% Fixed32 loop - ZERO conversions, maximum speed!
     VertexArrays3D* vtx = &model->vertices;
@@ -1661,16 +1662,16 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
         M11 = FIXED_NEG(sin_h_sin_v);
         M12 = cos_v;
     } else {
-        M00 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(cos_w), sin_h),
-                        FIXED_MUL_64(sin_w, cos_h_sin_v));
-        M01 = FIXED_SUB(FIXED_MUL_64(cos_w, cos_h),
-                        FIXED_MUL_64(sin_w, FIXED_NEG(sin_h_sin_v)));
-        M02 = FIXED_MUL_64(FIXED_NEG(sin_w), cos_v);
-        M10 = FIXED_ADD(FIXED_MUL_64(FIXED_NEG(sin_w), sin_h),
-                        FIXED_MUL_64(FIXED_NEG(cos_w), cos_h_sin_v));
-        M11 = FIXED_ADD(FIXED_MUL_64(sin_w, cos_h),
-                        FIXED_MUL_64(FIXED_NEG(cos_w), sin_h_sin_v));
-        M12 = FIXED_MUL_64(cos_w, cos_v);
+        M00 = FIXED_ADD(fixed_mul32_fast(FIXED_NEG(cos_w), sin_h),
+                        fixed_mul32_fast(sin_w, cos_h_sin_v));
+        M01 = FIXED_SUB(fixed_mul32_fast(cos_w, cos_h),
+                        fixed_mul32_fast(sin_w, FIXED_NEG(sin_h_sin_v)));
+        M02 = fixed_mul32_fast(FIXED_NEG(sin_w), cos_v);
+        M10 = FIXED_ADD(fixed_mul32_fast(FIXED_NEG(sin_w), sin_h),
+                        fixed_mul32_fast(FIXED_NEG(cos_w), cos_h_sin_v));
+        M11 = FIXED_ADD(fixed_mul32_fast(sin_w, cos_h),
+                        fixed_mul32_fast(FIXED_NEG(cos_w), sin_h_sin_v));
+        M12 = fixed_mul32_fast(cos_w, cos_v);
     }
     for (i = 0; i < vcount; i++) {
         x = x_arr[i];
@@ -1678,25 +1679,25 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
         z = z_arr[i];
         zo = FIXED_ADD(
                 FIXED_ADD(
-                    FIXED_ADD(FIXED_MUL_64(M20, x),
-                            FIXED_MUL_64(M21, y)),
-                    FIXED_MUL_64(M22, z)),
+                    FIXED_ADD(fixed_mul32_fast(M20, x),
+                            fixed_mul32_fast(M21, y)),
+                    fixed_mul32_fast(M22, z)),
                 distance);
         if (zo > 0) {
-            xo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M00, x),
-                                    FIXED_MUL_64(M01, y)),
-                        FIXED_MUL_64(M02, z));
-            yo = FIXED_ADD(FIXED_ADD(FIXED_MUL_64(M10, x),
-                                    FIXED_MUL_64(M11, y)),
-                        FIXED_MUL_64(M12, z));
+            xo = FIXED_ADD(FIXED_ADD(fixed_mul32_fast(M00, x),
+                                    fixed_mul32_fast(M01, y)),
+                        fixed_mul32_fast(M02, z));
+            yo = FIXED_ADD(FIXED_ADD(fixed_mul32_fast(M10, x),
+                                    fixed_mul32_fast(M11, y)),
+                        fixed_mul32_fast(M12, z));
             zo_arr[i] = zo;
             xo_arr[i] = xo;
             yo_arr[i] = yo;
             inv_zo = FIXED_DIV_64(scale, zo);
             x2d_arr[i] = FIXED_ROUND_TO_INT(
-                            FIXED_ADD(FIXED_MUL_64(xo, inv_zo), centre_x_f));
+                            FIXED_ADD(fixed_mul32_fast(xo, inv_zo), centre_x_f));
             y2d_arr[i] = FIXED_ROUND_TO_INT(
-                            FIXED_SUB(centre_y_f, FIXED_MUL_64(yo, inv_zo)));
+                            FIXED_SUB(centre_y_f, fixed_mul32_fast(yo, inv_zo)));
         } else {
             zo_arr[i] = zo;
             xo_arr[i] = 0;
@@ -1829,7 +1830,7 @@ static int cmp_faces_by_zmean(const void* pa, const void* pb) {
  * being read as asm-function parameters, avoiding an unverified ORCA/C
  * parameter/stack convention in this low-level helper.
  */
-unsigned int geo_mul_a0, geo_mul_a1, geo_mul_b0, geo_mul_b1;
+unsigned int geo_mul_inputs[4];
 unsigned int geo_mul_p[4];
 
 /*
@@ -1857,7 +1858,7 @@ asm void GeoV3_Mul32x32(void)
      * The stack grows downward; S points just below the first usable byte.
      * Little-endian words (offset -> bits):
      *   1: sign (0 positive, 1 negative); 3..4: swap temporary
-     *   5,7: constant M, bits 0..15,16..31; 9: iteration count; 11: unused
+     *   5,7: constant M, bits 0..15,16..31; 9: short-loop count; 11: word shift
      *   13,15: Q, bits 0..15,16..31
      *   17,19,21,23: P, bits 0..15,16..31,32..47,48..63
      * Short numeric operands address memory relative to D.
@@ -1872,14 +1873,13 @@ asm void GeoV3_Mul32x32(void)
     /* M = |a|: load both words of a and clear the upper 32 bits.
      * Bit 15 of the high input word determines the sign of a.
      */
-    lda     >geo_mul_a0
+    lda     >geo_mul_inputs
     sta     5
-    lda     >geo_mul_a1
+    lda     >geo_mul_inputs+2
     sta     7
     lda     #0
-    sta     9
-    sta     11
     sta     1
+    sta     11          // A factored 65536 multiplier sets this word later.
 
     lda     7
     bpl     geo_mul_a_positive
@@ -1905,9 +1905,9 @@ geo_mul_a_positive:
      * For negative b, take two's complement and toggle the final sign:
      * sign = sign(a) XOR sign(b).
      */
-    lda     >geo_mul_b0
+    lda     >geo_mul_inputs+4
     sta     13
-    lda     >geo_mul_b1
+    lda     >geo_mul_inputs+6
     sta     15
     lda     15
     bpl     geo_mul_b_positive
@@ -1951,8 +1951,9 @@ geo_mul_nonzero:
      */
     ldx     #16
     lda     15
-    beq     geo_mul_loop
-
+    bne     geo_mul_q_wide
+    brl     geo_mul_short16
+geo_mul_q_wide:
     /* Q needs 32 bits. If M fits in 16 bits, exchange magnitudes so
      * the smaller operand becomes Q and only 16 iterations are needed.
      * If both need 32 bits, their order does not affect the loop count.
@@ -1960,7 +1961,7 @@ geo_mul_nonzero:
      * The high accumulator words (21,23) are still zero at this point.
      */
     lda     7
-    bne     geo_mul_use_32
+    bne     geo_mul_select32
     lda     5
     sta     3           // Temporarily save the low word of the old M.
     lda     13
@@ -1970,17 +1971,133 @@ geo_mul_nonzero:
     lda     3
     sta     13          // New Q low word = old M low word.
     stz     15          // Old M high word was zero; new Q fits in 16 bits.
-    bra     geo_mul_loop
+    bra     geo_mul_short16
+
+geo_mul_select32:
+    /* Integer-valued 16.16 operands have a zero low word. Factor out
+     * 65536, multiply the remaining 16-bit magnitude, then shift by a word.
+     * Check both operand orders without changing the already recorded sign.
+     */
+    lda     13
+    bne     geo_mul_check_m_integer
+    lda     15
+    sta     13
+    stz     15
+    lda     #1
+    sta     11
+    bra     geo_mul_short16
+geo_mul_check_m_integer:
+    lda     5
+    bne     geo_mul_full_width
+    lda     7
+    sta     3
+    lda     13
+    sta     5
+    lda     15
+    sta     7
+    lda     3
+    sta     13
+    stz     15
+    lda     #1
+    sta     11
+    bra     geo_mul_short16
+geo_mul_full_width:
+    brl     geo_mul_use_32
+
+    /* For a 16-bit Q, use high32:low16 instead of high32:low32.
+     * Each iteration adds M to high32, then shifts carry:high32:low16.
+     * This saves one direct-page ROR per bit and the alignment fixup.
+     * After 16 steps, words 17,19,21 hold the complete unsigned product.
+     * Word 23 stays zero until signed two's complement is applied below.
+     */
+geo_mul_short16:
+    lda     13
+    cmp     #1
+    bne     geo_mul_short_select
+    /* Multiplication by one only needs a copy, including after factoring. */
+    lda     5
+    sta     17
+    lda     7
+    sta     19
+    brl     geo_mul_short_finish
+geo_mul_short_select:
+    ldx     #16
+    cmp     #256
+    bcs     geo_mul_short_count
+    ldx     #8
+geo_mul_short_count:
+    stx     9
+    lda     13
+    sta     17
+geo_mul_short16_loop:
+    lda     17
+    lsr     a
+    bcc     geo_mul_short16_no_add
+    clc
+    lda     19
+    adc     5
+    sta     19
+    lda     21
+    adc     7
+    sta     21
+    bra     geo_mul_short16_shift
+geo_mul_short16_no_add:
+    clc
+geo_mul_short16_shift:
+    ror     21
+    ror     19
+    ror     17
+    dex
+    bne     geo_mul_short16_loop
+    lda     9
+    cmp     #8
+    bne     geo_mul_short_finish
+    /* Eight steps leave product << 8 in the 48-bit combined register.
+     * Move adjacent bytes with XBA to remove that alignment exactly.
+     */
+    lda     17
+    xba
+    and     #0x00FF
+    sta     3
+    lda     19
+    xba
+    and     #0xFF00
+    ora     3
+    sta     17
+    lda     19
+    xba
+    and     #0x00FF
+    sta     3
+    lda     21
+    xba
+    and     #0xFF00
+    ora     3
+    sta     19
+    lda     21
+    xba
+    and     #0x00FF
+    sta     21
+geo_mul_short_finish:
+    lda     11
+    beq     geo_mul_short_aligned
+    /* Restore the factor 65536 by moving words, with no bitwise loop. */
+    lda     21
+    sta     23
+    lda     19
+    sta     21
+    lda     17
+    sta     19
+    stz     17
+geo_mul_short_aligned:
+    brl     geo_mul_apply_sign
 
 geo_mul_use_32:
     ldx     #32
 
 geo_mul_loop:
-    /* Entry from the 16/32-bit selector. M remains a constant 32-bit
-     * magnitude. P combines a 32-bit high accumulator and low multiplier.
-     * Save the iteration count to detect the short-path alignment fixup.
+    /* Full-width path: P combines a 32-bit high accumulator and Q.
+     * M remains constant throughout the 32 iterations.
      */
-    stx     9
     lda     13
     sta     17
     lda     15
@@ -2021,21 +2138,7 @@ geo_mul_combined_shift:
     dex
     bne     geo_mul_combined_loop
 
-    /* After 32 steps P is the complete unsigned product. With a 16-bit
-     * multiplier, 16 steps give product << 16; remove that alignment.
-     * Its unused multiplier bits are zero, so no contribution is lost.
-     */
-    lda     9
-    cmp     #16
-    bne     geo_mul_apply_sign
-    lda     19
-    sta     17
-    lda     21
-    sta     19
-    lda     23
-    sta     21
-    stz     23
-
+    /* All 32 multiplier bits have been consumed: P is the raw product. */
 geo_mul_apply_sign:
     /* The magnitude is complete: if the final sign is 1, form -P
      * using two's complement across four words. Clear C once,
@@ -2088,23 +2191,51 @@ geo_mul_store:
     rtl                 // Long return; S is back to its entry value.
 }
 
-static unsigned int GeoV3_LowWord(Fixed32 value)
-{
-    return (unsigned int)((unsigned long)value & 0xFFFFUL);
-}
-
-static unsigned int GeoV3_HighWord(Fixed32 value)
-{
-    return (unsigned int)(((unsigned long)value >> 16) & 0xFFFFUL);
-}
-
+/* A single contiguous input packet lets C copy native little-endian words
+ * directly, avoiding four word-extraction calls and a 32-bit right shift.
+ * The assembly kernel uses explicit byte offsets into the same packet.
+ */
 static void GeoV3_Mul32x32SetInputs(Fixed32 a, Fixed32 b)
 {
-    geo_mul_a0 = GeoV3_LowWord(a);
-    geo_mul_a1 = GeoV3_HighWord(a);
-    geo_mul_b0 = GeoV3_LowWord(b);
-    geo_mul_b1 = GeoV3_HighWord(b);
+    memcpy(geo_mul_inputs,&a,sizeof(a));
+    memcpy(geo_mul_inputs+2,&b,sizeof(b));
     GeoV3_Mul32x32();
+}
+
+/* Preserve the exact product bits; do not round or saturate. The 16.16
+ * result is simply product bits 16..47, avoiding a C 64-bit shift/copy.
+ * Scratch remains non-reentrant, like the existing multiplication helper.
+ */
+static Fixed32 fixed_mul32_fast(Fixed32 a,Fixed32 b)
+{
+#if defined(GEOV3_DISABLE_ASM_MUL)
+    return (Fixed32)(((Fixed64)a*(Fixed64)b)>>FIXED_SHIFT);
+#else
+    Fixed32 result;
+    GeoV3_Mul32x32SetInputs(a,b);
+    memcpy(&result,geo_mul_p+1,sizeof(result));
+    return result;
+#endif
+}
+
+static Fixed64 fixed_product32_fast(Fixed32 a,Fixed32 b)
+{
+#if defined(GEOV3_DISABLE_ASM_MUL)
+    return (Fixed64)a*(Fixed64)b;
+#else
+    Fixed64 result;
+    GeoV3_Mul32x32SetInputs(a,b);
+    memcpy(&result,geo_mul_p,sizeof(result));
+    return result;
+#endif
+}
+
+/* Plane coefficients may exceed 32 bits: retain the original wide product. */
+static Fixed64 fixed_product64x32_fast(Fixed64 a,Fixed32 b)
+{
+    Fixed32 a32=(Fixed32)a;
+    if(a==(Fixed64)a32)return fixed_product32_fast(a32,b);
+    return a*(Fixed64)b;
 }
 
 /*
@@ -2216,7 +2347,10 @@ static int geometric_face_relation(Model3D* model, int f1, int f2)
     static Fixed64 cached_epsilon = 0;
     static Fixed64 cached_distance = 0;
     static int epsilon_valid = 0;
+    static Model3D *cache_model=NULL;
+    static unsigned int cache_generation=0,cache_epoch=0;
 
+    OrderFixedPlane *prepared;
     FaceArrays3D* faces;
     VertexArrays3D* vtx;
     Fixed64 epsilon;
@@ -2228,12 +2362,23 @@ static int geometric_face_relation(Model3D* model, int f1, int f2)
     int all_same, all_opp;
     int k, v, side;
     int result;
+    unsigned char *dense_entry;
+    unsigned int dense_shift,dense_code;
 
     if (model == NULL) {
+        ordering_fixed_plane_reset();
         memset(cache_valid, 0, sizeof(cache_valid));
         return 0;
     }
 
+    /* Retain exact ownership/transformation tags even outside a painter's
+     * explicit reset path (for example, interactive pair inspection).
+     */
+    if(order_cache_owner!=model)ordering_cache_invalidate(model);
+    if(cache_model!=model || cache_generation!=order_cache_generation || cache_epoch!=order_fixed_plane_epoch){
+        memset(cache_valid,0,sizeof(cache_valid));
+        cache_model=model;cache_generation=order_cache_generation;cache_epoch=order_fixed_plane_epoch;
+    }
     if (!epsilon_valid ||
         current_observer_distance != cached_distance) {
         cached_epsilon = FIXED_MUL_64(
@@ -2244,6 +2389,12 @@ static int geometric_face_relation(Model3D* model, int f1, int f2)
         memset(cache_valid, 0, sizeof(cache_valid));
     }
 
+    dense_entry=ordering_geometry_slot(model,f1,f2,cached_epsilon);
+    dense_shift=((unsigned int)f2&3U)<<1;
+    if(dense_entry){
+        dense_code=(*dense_entry>>dense_shift)&3U;
+        if(dense_code)return (int)dense_code-2;
+    }
     slot = (((unsigned)f1 * 33u) ^ (unsigned)f2) & 255u;
     if (cache_valid[slot] &&
         cache_f1[slot] == f1 &&
@@ -2255,18 +2406,10 @@ static int geometric_face_relation(Model3D* model, int f1, int f2)
     vtx = &model->vertices;
     epsilon = cached_epsilon;
 
-    a1 = faces->plane_a[f1];
-    b1 = faces->plane_b[f1];
-    c1 = faces->plane_c[f1];
-    d1 = faces->plane_d[f1];
-    result = 0;
-
-    if (d1 > epsilon)
-        obs = 1;
-    else if (d1 < -epsilon)
-        obs = -1;
-    else
-        goto store_result;
+    prepared=ordering_fixed_plane(model,f1,epsilon);
+    result=0;
+    obs=prepared->observer;
+    if (!obs) goto store_result;
 
     /* A 32x32 signed product shifted by 16 has magnitude <= 2^46.
      * Three such terms plus |d| <= 2^62 fit comfortably in signed 64 bits,
@@ -2275,20 +2418,15 @@ static int geometric_face_relation(Model3D* model, int f1, int f2)
      * Define GEOV3_DISABLE_ASM_RELATION for V5 comparisons.
      */
 #if !defined(GEOV3_DISABLE_ASM_MUL) && !defined(GEOV3_DISABLE_ASM_RELATION)
-    if (a1 == (Fixed64)(Fixed32)a1 &&
-        b1 == (Fixed64)(Fixed32)b1 &&
-        c1 == (Fixed64)(Fixed32)c1 &&
-        d1 >= -4611686018427387904LL &&
-        d1 <= 4611686018427387904LL && epsilon >= 0 &&
+    if (prepared->asm_ready &&
         faces->vertex_count[f2] >= 0 &&
         faces->vertex_count[f2] <= MAX_FACE_VERTICES) {
-        result = GeoRel_Classify32(model, f2,
-                                  (Fixed32)a1, (Fixed32)b1, (Fixed32)c1,
-                                  d1, epsilon, obs);
+        result = GeoRel_ClassifyPrepared(model,f2,prepared);
         goto store_result;
     }
 #endif
 
+    a1=prepared->a;b1=prepared->b;c1=prepared->c;d1=prepared->d;
     n2 = faces->vertex_count[f2];
     offset2 = faces->vertex_indices_ptr[f2];
     all_same = 1;
@@ -2328,6 +2466,7 @@ store_result:
     cache_f2[slot] = f2;
     cache_result[slot] = (signed char)result;
     cache_valid[slot] = 1;
+    if(dense_entry)*dense_entry|=(unsigned char)((unsigned int)(result+2)<<dense_shift);
     return result;
 }
 
@@ -4412,64 +4551,37 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
 /* Compute ray cast distances (tf) for faces f1 and f2 at screen coordinate (cx,cy).
  * Returns 1 and fills *out_tf1/*out_tf2 on success, 0 if denom near zero (coplanar/parallel) or invalid.
  */
-/* =====================================================================
- * ray_cast_distances  (OPTIMIZED)
- * ---------------------------------------------------------------------
- * WHAT CHANGED AND WHY IT SHOULD NOT AFFECT THE RESULT
- *
- * 1) Removed Dz. It was always set to the literal 1.0f and only ever used
- *    as a multiplicand (C1 * Dz, C2 * Dz). Multiplying any finite float
- *    by exactly 1.0f is a guaranteed no-op under IEEE-754 (x * 1.0f == x,
- *    bit-for-bit, with no rounding possible) - so C1 * Dz and C2 * Dz have
- *    been replaced directly with C1 and C2. This is not an approximation;
- *    it is an exact identity of the floating-point standard itself.
- *
- * 2) Reordered the work so f2's plane data is only touched, and denom2 is
- *    only computed, after confirming f1's own denom1 test passes. The
- *    original always computed both faces' A/B/C/D and both denom1/denom2
- *    before checking `fabsf(denom1) < 1e-6f || fabsf(denom2) < 1e-6f` and
- *    returning 0 on either failure. Since the function returns the exact
- *    same value (0) regardless of which of the two denom checks fails,
- *    checking denom1 immediately after computing it - before ever reading
- *    f2's plane data - skips work that would have been discarded anyway
- *    whenever f1 alone already disqualifies the pair. Whenever f1 passes,
- *    f2's data is read and denom2 checked exactly as before, with an
- *    identical outcome in every case.
- *
- * 3) D1/D2 are now converted from Fixed64 only once both denom checks
- *    have passed, i.e. only when the function is actually going to
- *    succeed and write to *out_tf1/*out_tf2. In the original, D1/D2 were
- *    read unconditionally up front even though they are never used when
- *    the function returns 0. This is again a pure "skip work whose result
- *    would be discarded" change with no effect on any returned value.
- *
- * Everything else (parameter/bounds validation, Dx/Dy computation, the
- * 1e-6f tolerance, and the final t = -D/denom formulas) is untouched,
- * byte-for-byte, from the original.
- * ===================================================================== */
+/* Integer diagnostic ray path. Cached double coefficients are cast to float
+ * exactly as before; arithmetic order, denominator tolerance and outputs stay
+ * unchanged. The cache is invalidated whenever face planes are recalculated.
+ */
 static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2) {
     if (!model || !out_tf1 || !out_tf2) return 0;
     FaceArrays3D* faces = &model->faces;
     if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
+    double fallback1[4],fallback2[4];
+    double *plane1,*plane2;
     float proj_scale = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
     float Dx = ((float)cx - (float)CENTRE_X) / proj_scale;
     float Dy = ((float)CENTRE_Y - (float)cy) / proj_scale;
     /* --- test f1 first; bail out before touching f2's data if it already fails --- */
-    float A1 = (float)FIXED64_TO_FLOAT(faces->plane_a[f1]);
-    float B1 = (float)FIXED64_TO_FLOAT(faces->plane_b[f1]);
-    float C1 = (float)FIXED64_TO_FLOAT(faces->plane_c[f1]);
+    plane1=ordering_plane(model,f1,fallback1);
+    float A1 = (float)plane1[0];
+    float B1 = (float)plane1[1];
+    float C1 = (float)plane1[2];
     float denom1 = A1 * Dx + B1 * Dy + C1; /* was "+ C1 * Dz" with Dz == 1.0f */
     if (fabsf(denom1) < 1e-6f) return 0; /* coplanar or parallel */
     /* --- f1 passed: now test f2 --- */
-    float A2 = (float)FIXED64_TO_FLOAT(faces->plane_a[f2]);
-    float B2 = (float)FIXED64_TO_FLOAT(faces->plane_b[f2]);
-    float C2 = (float)FIXED64_TO_FLOAT(faces->plane_c[f2]);
+    plane2=ordering_plane(model,f2,fallback2);
+    float A2 = (float)plane2[0];
+    float B2 = (float)plane2[1];
+    float C2 = (float)plane2[2];
     float denom2 = A2 * Dx + B2 * Dy + C2; /* was "+ C2 * Dz" with Dz == 1.0f */
     if (fabsf(denom2) < 1e-6f) return 0; /* coplanar or parallel */
     /* Both denoms are valid: only now convert D1/D2, since they are the
      * only remaining values still needed to produce the output. */
-    float D1 = (float)FIXED64_TO_FLOAT(faces->plane_d[f1]);
-    float D2 = (float)FIXED64_TO_FLOAT(faces->plane_d[f2]);
+    float D1 = (float)plane1[3];
+    float D2 = (float)plane2[3];
     *out_tf1 = -D1 / denom1;
     *out_tf2 = -D2 / denom2;
     return 1;
@@ -4492,6 +4604,8 @@ static int ray_cast_at_fractional(Model3D *model, int f1, int f2,
 {
     FaceArrays3D *faces;
     double scale, dx, dy, denominator1, denominator2, t1, t2;
+    double fallback1[4], fallback2[4];
+    double *plane1, *plane2;
     if (!model) return 0;
     faces = &model->faces;
     if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
@@ -4499,16 +4613,14 @@ static int ray_cast_at_fractional(Model3D *model, int f1, int f2,
     if (scale <= 0.0) return 0;
     dx = (cx - (double)CENTRE_X) / scale;
     dy = ((double)CENTRE_Y - cy) / scale;
-    denominator1 = FIXED64_TO_FLOAT(faces->plane_a[f1]) * dx
-                 + FIXED64_TO_FLOAT(faces->plane_b[f1]) * dy
-                 + FIXED64_TO_FLOAT(faces->plane_c[f1]);
+    plane1 = ordering_plane(model, f1, fallback1);
+    denominator1 = plane1[0] * dx + plane1[1] * dy + plane1[2];
     if (fabs(denominator1) < 1e-6) return 0;
-    denominator2 = FIXED64_TO_FLOAT(faces->plane_a[f2]) * dx
-                 + FIXED64_TO_FLOAT(faces->plane_b[f2]) * dy
-                 + FIXED64_TO_FLOAT(faces->plane_c[f2]);
+    plane2 = ordering_plane(model, f2, fallback2);
+    denominator2 = plane2[0] * dx + plane2[1] * dy + plane2[2];
     if (fabs(denominator2) < 1e-6) return 0;
-    t1 = -FIXED64_TO_FLOAT(faces->plane_d[f1]) / denominator1;
-    t2 = -FIXED64_TO_FLOAT(faces->plane_d[f2]) / denominator2;
+    t1 = -plane1[3] / denominator1;
+    t2 = -plane2[3] / denominator2;
     if (t1 > t2) return 1;  /* f1 is farther: f2 must be drawn later. */
     if (t1 < t2) return -1;
     return 0;
@@ -4758,18 +4870,9 @@ static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)
 
     if (!model) return 0;
 
-    /* Prefer the unrounded SH contour and centroid for the ordering ray.
-     * Retain the existing integer/QuickDraw/bbox fallbacks if unavailable.
+    /* Fractional ordering was attempted before the integer zoom patch.
+     * Keep the original integer/QD/bbox fallback sequence here.
      */
-    {
-        double fx, fy, fractional_area2;
-        if (compute_intersection_centroid_fractional_tryboth(
-                model, f1, f2, &fx, &fy, &fractional_area2)) {
-            rc = ray_cast_at_fractional(model, f1, f2, fx, fy);
-            if (rc != 0) return rc;
-        }
-    }
-
     /* 1) Try the Sutherland-Hodgman intersection centroid. */
     if (compute_intersection_centroid_ordered_fixed_tryboth(
             model, f1, f2, &cx, &cy, &area2, &fallback) && area2 != 0) {
@@ -4792,26 +4895,44 @@ static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)
 
     return 0;
 }
-/* ----------------------------------------------------------------------
- * New public entry point — SAME NAME, SAME SIGNATURE as before, so every
- * existing caller (painter_geoV2, painter_geoV3, check_sort_repair,
- * check_sort_repair_fast) keeps compiling and behaving the same way
- * from their point of view. The only difference is what happens inside:
- * the projection scale is temporarily multiplied by 10 and the two faces'
- * vertices are re-projected before the (unchanged) decision logic runs,
- * then everything is restored before returning.
- * ---------------------------------------------------------------------- */
+/* Hierarchical ordering preserves the x10 fractional projection scale.
+ * Integer screen vertices/bounds are patched only when fractional SH cannot
+ * decide. Every exit restores the caller's scale; pair-cache hits touch no
+ * geometry. The public entry point and ray-result sign convention are unchanged.
+ */
 static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
     if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
     RCHZoomPatch patch;
-    /* Systematic x n zoom, applied on every call (not conditioned on
-     * detecting ambiguity first — see "KNOWN CAVEATS" above). */
-    Fixed32 test_scale = FIXED_MUL_64(s_global_proj_scale_fixed, FLOAT_TO_FIXED(10.0f));
-    // Fixed32 test_scale = s_global_proj_scale_fixed << 4;
+    Fixed32 original_scale = s_global_proj_scale_fixed;
+    OrderPairEntry *entry = ordering_pair_slot(model, order_ray_pairs, f1, f2);
+    ORDER_COUNT(ray_calls);
+    if (ordering_pair_hit(entry, f1, f2, original_scale, 0)) {
+        ORDER_COUNT(ray_hits);
+        return entry->result;
+    }
+    /* Fractional SH/rays read observer coordinates and scale, not integer
+     * screen arrays or bounds. Preserve the previous x10 scale exactly,
+     * but defer fixed-point reprojection and vertex save/restore to fallbacks.
+     */
+    Fixed32 test_scale = FIXED_MUL_64(original_scale, FLOAT_TO_FIXED(10.0f));
+    double fx, fy, fractional_area2;
+    int rc = 0;
+    s_global_proj_scale_fixed = test_scale;
+    if (compute_intersection_centroid_fractional_tryboth(
+            model, f1, f2, &fx, &fy, &fractional_area2)) {
+        rc = ray_cast_at_fractional(model, f1, f2, fx, fy);
+    }
+    s_global_proj_scale_fixed = original_scale;
+    if (rc != 0) {
+        ordering_pair_store(entry, f1, f2, original_scale, 0, rc);
+        return rc;
+    }
+
+    /* Integer fallbacks still receive the original zoomed screen geometry. */
     rch_patch_pair_at_scale(model, f1, f2, test_scale, &patch);
-    int rc = ray_cast_hierarchical_impl(model, f1, f2);
+    rc = ray_cast_hierarchical_impl(model, f1, f2);
     rch_unpatch_pair(model, &patch, f1, f2);
     return rc;
 }
@@ -4873,28 +4994,45 @@ segment "transform";
  *   - The function is intentionally designed to be O(n) over faces and linear in face vertex counts.
  */
 
+/* Uncomment to compare the original C scan against the assembly kernel. */
+// #define FACE_DEPTH_DISABLE_ASM
+#if !defined(FACE_DEPTH_DISABLE_ASM) && !defined(GEOV3_DISABLE_ASM_MUL)
+#define FACE_DEPTH_USE_ASM 1
+#include "face_depth_asm.c"
+#endif
+
 void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
+    ordering_cache_invalidate(model);
     int i, j;
     int culled_count = 0; // diagnostic: number of faces culled by back-face test (observer-space)
     VertexArrays3D* vtx = &model->vertices;
     FaceArrays3D* face_arrays = &model->faces;
+#if defined(FACE_DEPTH_USE_ASM)
+    FaceDepth_ScanSetup(vtx);
+#endif
     for (i = 0; i < face_count; i++) {
-        Fixed32 z_min = FLOAT_TO_FIXED(9999.0);  // Initialize to very large value (closest)
-        Fixed32 z_max = FLOAT_TO_FIXED(-9999.0); // Initialize to very small value (farthest)
-        int display_flag = 1;
-        Fixed32 sum = 0;
-        int n = face_arrays->vertex_count[i];
-        int minx = 9999, maxx = -9999, miny = 9999, maxy = -9999;
-        // Access indices from the packed buffer using the offset
-        int offset = face_arrays->vertex_indices_ptr[i];
-        // --- Newell accumulators (plane normal via ALL vertices, robust to concave faces) ---
-        Fixed64 a64 = 0, b64 = 0, c64 = 0, d64 = 0;
-        Fixed64 sumx64 = 0, sumy64 = 0, sumz64 = 0;
-        Fixed32 x_prev = 0, y_prev = 0, z_prev = 0;
-        Fixed32 x_first = 0, y_first = 0, z_first = 0;
-        Fixed32 xc = 0, yc = 0, zc = 0;
-        int valid_n = 0;
-        int have_prev = 0;
+        Fixed32 z_min,z_max,sum;
+        int display_flag,minx,maxx,miny,maxy,valid_n;
+        int n=face_arrays->vertex_count[i];
+        int offset=face_arrays->vertex_indices_ptr[i];
+        Fixed64 a64,b64,c64,d64,sumx64,sumy64,sumz64;
+        Fixed32 xc,yc,zc;
+#if defined(FACE_DEPTH_USE_ASM)
+        FaceDepth_ScanFace(face_arrays,offset,n);
+        valid_n=face_depth_result.valid_n;display_flag=face_depth_result.display_flag;
+        z_min=face_depth_result.z_min;z_max=face_depth_result.z_max;sum=face_depth_result.sum;
+        minx=face_depth_result.minx;maxx=face_depth_result.maxx;
+        miny=face_depth_result.miny;maxy=face_depth_result.maxy;
+        sumx64=face_depth_result.sumx;sumy64=face_depth_result.sumy;sumz64=face_depth_result.sumz;
+        a64=face_depth_result.a;b64=face_depth_result.b;c64=face_depth_result.c;
+#else
+        Fixed32 x_prev=0,y_prev=0,z_prev=0;
+        Fixed32 x_first=0,y_first=0,z_first=0;
+        int have_prev=0;
+        z_min=FLOAT_TO_FIXED(9999.0);z_max=FLOAT_TO_FIXED(-9999.0);
+        display_flag=1;sum=0;valid_n=0;
+        minx=miny=9999;maxx=maxy=-9999;
+        a64=b64=c64=0;sumx64=sumy64=sumz64=0;
         for (j = 0; j < n; j++) {
             int vertex_idx = face_arrays->vertex_indices_buffer[offset + j] - 1;
             if (vertex_idx >= 0) {
@@ -4926,14 +5064,15 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
                     Fixed32 sy = y_prev + yo;
                     Fixed32 sz = z_prev + zo;
                     Fixed32 sx = x_prev + xo;
-                    a64 += (Fixed64)dy * sz;
-                    b64 += (Fixed64)dz * sx;
-                    c64 += (Fixed64)dx * sy;
+                    a64 += fixed_product32_fast(dy,sz);
+                    b64 += fixed_product32_fast(dz,sx);
+                    c64 += fixed_product32_fast(dx,sy);
                     x_prev = xo; y_prev = yo; z_prev = zo;
                 }
                 valid_n++;
             }
         }
+#endif
         if (!display_flag || n < 3 || valid_n < 3) {
             // face is behind camera or degenerate: zero coefficients
             face_arrays->plane_a[i] = 0;
@@ -4944,6 +5083,7 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
                 face_shade_color[i] = COL_FILL_DEFAULT;
             }
         } else {
+#if !defined(FACE_DEPTH_USE_ASM)
             // close the Newell cycle: last valid vertex -> first valid vertex
             Fixed32 dy = FIXED_SUB(y_prev, y_first);
             Fixed32 dz = FIXED_SUB(z_prev, z_first);
@@ -4951,16 +5091,24 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
             Fixed32 sy = y_prev + y_first;
             Fixed32 sz = z_prev + z_first;
             Fixed32 sx = x_prev + x_first;
-            a64 += (Fixed64)dy * sz;
-            b64 += (Fixed64)dz * sx;
-            c64 += (Fixed64)dx * sy;
+            a64 += fixed_product32_fast(dy,sz);
+            b64 += fixed_product32_fast(dz,sx);
+            c64 += fixed_product32_fast(dx,sy);
             a64 >>= FIXED_SHIFT;
             b64 >>= FIXED_SHIFT;
             c64 >>= FIXED_SHIFT;
+#endif
+#if defined(FACE_DEPTH_USE_ASM)
+            xc=FaceDepth_CentroidCoordinate(sumx64,valid_n);
+            yc=FaceDepth_CentroidCoordinate(sumy64,valid_n);
+            zc=FaceDepth_CentroidCoordinate(sumz64,valid_n);
+#else
             xc = (Fixed32)(sumx64 / valid_n);
             yc = (Fixed32)(sumy64 / valid_n);
             zc = (Fixed32)(sumz64 / valid_n);
-            d64 = -(((Fixed64)a64 * xc) + ((Fixed64)b64 * yc) + ((Fixed64)c64 * zc));
+#endif
+            d64 = -(fixed_product64x32_fast(a64,xc) + fixed_product64x32_fast(b64,yc)
+                   + fixed_product64x32_fast(c64,zc));
             d64 >>= FIXED_SHIFT;
             face_arrays->plane_a[i] = a64;
             face_arrays->plane_b[i] = b64;
@@ -6621,6 +6769,7 @@ static void reverseFaceVertexOrder(Model3D* model, int face_idx) {
     if (face_idx >= faces->face_count) return;
     int n = faces->vertex_count[face_idx];
     if (n < 3) return;
+    ordering_cache_invalidate(model);
     int off = faces->vertex_indices_ptr[face_idx];
     for (int i = 0; i < n / 2; ++i) {
         int tmp = faces->vertex_indices_buffer[off + i];
@@ -6652,6 +6801,7 @@ static void reverseFaceVertexOrder(Model3D* model, int face_idx) {
 }
 
 void hideFace(Model3D* model, int face_idx) {
+    ordering_cache_invalidate(model);
     FaceArrays3D* faces = &model->faces;
     if (faces->vertex_count[face_idx] > 0) {
         faces->saved_vertex_count[face_idx] = faces->vertex_count[face_idx];
@@ -6661,6 +6811,7 @@ void hideFace(Model3D* model, int face_idx) {
 }
 
 void restoreFace(Model3D* model, int face_idx) {
+    ordering_cache_invalidate(model);
     FaceArrays3D* faces = &model->faces;
     // double condition : la face doit être ACTUELLEMENT masquée (vertex_count==0)
     // ET avoir une sauvegarde valide — empêche d'écraser une face jamais masquée
@@ -6672,6 +6823,7 @@ void restoreFace(Model3D* model, int face_idx) {
 }
 
 void restoreAllFaces(Model3D* model) {
+    ordering_cache_invalidate(model);
     FaceArrays3D* faces = &model->faces;
     int i;
     for (i = 0; i < faces->face_count; ++i) {
