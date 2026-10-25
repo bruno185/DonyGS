@@ -60,6 +60,7 @@ segment "main";
         int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
 
         int  oa; // Open-Apple key status
+        
 
         // Initialize the screen save/restore buffer
         if (!initScreenSaveBuffer()) {

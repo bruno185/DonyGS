@@ -32,6 +32,14 @@ void painter_geoV3(Model3D* model, int face_count)
     int nf = face_count;
     int fs = 0;
 
+    /*
+     * The cached plane relation depends on the transformed face/vertex data,
+     * which changes every frame. Its cache is keyed only by face indices and
+     * observer distance, so clear it before sorting this frame. Passing NULL
+     * uses geometric_face_relation()'s existing cache-clear path.
+     */
+    (void)geometric_face_relation(NULL, 0, 0);
+
     if (face_count > allocated) {
         free(dd_flag);
         free(dd_flag_raycast);
@@ -51,8 +59,15 @@ void painter_geoV3(Model3D* model, int face_count)
     }
 
     /*
-     * Initial ordering by maximum depth.
+     * Start every frame from the model's canonical face order. The caller's
+     * sorted_face_indices buffer is reused between frames and GeoV3 mutates it
+     * with swaps; using that previous result as the input makes equal-z_max
+     * faces depend on the direction/history of model rotation.
      */
+    for (int i = 0; i < nf; ++i)
+        sorted[i] = i;
+
+    /* Initial ordering by maximum depth (stable for equal z_max). */
     sort_by_zmax(sorted, faces->z_max, nf);
 
     while (fs < nf - 1) {

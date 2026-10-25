@@ -1937,51 +1937,404 @@ static int cmp_faces_by_zmean(const void* pa, const void* pb) {
  * once neither hypothesis can still hold) is untouched, byte-for-byte,
  * from the original.
  * ===================================================================== */
-static int geometric_face_relation(Model3D* model, int f1, int f2) {
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    static Fixed64 cached_geo_epsilon = 0;
-    static Fixed64 cached_geo_epsilon_distance = 0;
-    static int cached_geo_epsilon_valid = 0; /* 0 until the first real computation */
-    /* epsilon only depends on current_observer_distance, which is constant
-     * for an entire painter sort pass (one frame) - see header comment
-     * above for the full justification of this cache. */
-    Fixed64 epsilon;
-    if (cached_geo_epsilon_valid && current_observer_distance == cached_geo_epsilon_distance) {
-        epsilon = cached_geo_epsilon;
-    } else {
-        epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.001f));
-        cached_geo_epsilon = epsilon;
-        cached_geo_epsilon_distance = current_observer_distance;
-        cached_geo_epsilon_valid = 1;
+
+// comment the following line to disable the assembly multiply and use pure C instead
+#define GEOV3_DISABLE_ASM_MUL
+/*
+ * GeoV3 mixed C/65816 candidate.
+ *
+ * Intended placement: engine.c, replacing the existing
+ * geometric_face_relation() and adding the helper immediately above it.
+ * Requires the existing ORCA/C declarations from declare.c:
+ *   Fixed32, Fixed64, Model3D, FaceArrays3D, VertexArrays3D,
+ *   current_observer_distance, FIXED_SHIFT, FIXED_MUL_64,
+ *   FLOAT_TO_FIXED.
+ *
+ * The assembly multiply is used only when the 64-bit plane coefficient is
+ * exactly the sign extension of a Fixed32. In that case the signed 32x32
+ * product fits in Fixed64, so the result is bit-for-bit the same as the
+ * original C expression. Larger coefficients use the original C multiply.
+ */
+
+/*
+ * Non-reentrant scratch for the short, synchronous assembly helper.
+ * Keep these as file-scope globals so the ORCA assembler can resolve their
+ * symbols from inside asm functions. Inputs are staged in globals instead of
+ * being read as asm-function parameters, avoiding an unverified ORCA/C
+ * parameter/stack convention in this low-level helper.
+ */
+unsigned int geo_mul_a0, geo_mul_a1, geo_mul_b0, geo_mul_b1;
+unsigned int geo_mul_sign;
+unsigned int geo_mul_count;
+unsigned int geo_mul_m0, geo_mul_m1, geo_mul_m2, geo_mul_m3;
+unsigned int geo_mul_q0, geo_mul_q1;
+unsigned int geo_mul_p[4];
+
+/*
+ * Exact signed Fixed32 x Fixed32 -> Fixed64 multiply.
+ * The product is formed with a 32-step shift/add loop using 16-bit words.
+ * `out` is written as four little-endian words.
+ */
+asm void GeoV3_Mul32x32(void)
+{
+    php
+    pha
+    cld
+
+    /* M = abs(a), initially represented as a 64-bit value. */
+    lda     geo_mul_a0
+    sta     geo_mul_m0
+    lda     geo_mul_a1
+    sta     geo_mul_m1
+    lda     #0
+    sta     geo_mul_m2
+    sta     geo_mul_m3
+    sta     geo_mul_sign
+
+    lda     geo_mul_m1
+    bpl     geo_mul_a_positive
+
+    lda     geo_mul_m0
+    eor     #0xFFFF
+    clc
+    adc     #1
+    sta     geo_mul_m0
+    lda     geo_mul_m1
+    eor     #0xFFFF
+    adc     #0
+    sta     geo_mul_m1
+    lda     #1
+    sta     geo_mul_sign
+
+geo_mul_a_positive:
+    /* Q = abs(b), kept as an unsigned 32-bit multiplier. */
+    lda     geo_mul_b0
+    sta     geo_mul_q0
+    lda     geo_mul_b1
+    sta     geo_mul_q1
+    lda     geo_mul_q1
+    bpl     geo_mul_b_positive
+
+    lda     geo_mul_q0
+    eor     #0xFFFF
+    clc
+    adc     #1
+    sta     geo_mul_q0
+    lda     geo_mul_q1
+    eor     #0xFFFF
+    adc     #0
+    sta     geo_mul_q1
+    lda     geo_mul_sign
+    eor     #1
+    sta     geo_mul_sign
+
+geo_mul_b_positive:
+    lda     #0
+    sta     geo_mul_p
+    sta     geo_mul_p+2
+    sta     geo_mul_p+4
+    sta     geo_mul_p+6
+    lda     #32
+    sta     geo_mul_count
+
+geo_mul_loop:
+    lda     geo_mul_q0
+    and     #1
+    beq     geo_mul_skip_add
+
+    clc
+    lda     geo_mul_p
+    adc     geo_mul_m0
+    sta     geo_mul_p
+    lda     geo_mul_p+2
+    adc     geo_mul_m1
+    sta     geo_mul_p+2
+    lda     geo_mul_p+4
+    adc     geo_mul_m2
+    sta     geo_mul_p+4
+    lda     geo_mul_p+6
+    adc     geo_mul_m3
+    sta     geo_mul_p+6
+
+geo_mul_skip_add:
+    /* M <<= 1; Q >>= 1. */
+    lda     geo_mul_m0
+    asl     a
+    sta     geo_mul_m0
+    lda     geo_mul_m1
+    rol     a
+    sta     geo_mul_m1
+    lda     geo_mul_m2
+    rol     a
+    sta     geo_mul_m2
+    lda     geo_mul_m3
+    rol     a
+    sta     geo_mul_m3
+
+    lda     geo_mul_q1
+    lsr     a
+    sta     geo_mul_q1
+    lda     geo_mul_q0
+    ror     a
+    sta     geo_mul_q0
+
+    lda     geo_mul_count
+    sec
+    sbc     #1
+    sta     geo_mul_count
+    bne     geo_mul_loop
+
+    /* Apply the sign to the 64-bit magnitude. */
+    lda     geo_mul_sign
+    beq     geo_mul_store
+
+    lda     geo_mul_p
+    eor     #0xFFFF
+    clc
+    adc     #1
+    sta     geo_mul_p
+    lda     geo_mul_p+2
+    eor     #0xFFFF
+    adc     #0
+    sta     geo_mul_p+2
+    lda     geo_mul_p+4
+    eor     #0xFFFF
+    adc     #0
+    sta     geo_mul_p+4
+    lda     geo_mul_p+6
+    eor     #0xFFFF
+    adc     #0
+    sta     geo_mul_p+6
+
+geo_mul_store:
+    pla
+    plp
+    rtl
+}
+
+static unsigned int GeoV3_LowWord(Fixed32 value)
+{
+    return (unsigned int)((unsigned long)value & 0xFFFFUL);
+}
+
+static unsigned int GeoV3_HighWord(Fixed32 value)
+{
+    return (unsigned int)(((unsigned long)value >> 16) & 0xFFFFUL);
+}
+
+static void GeoV3_Mul32x32SetInputs(Fixed32 a, Fixed32 b)
+{
+    geo_mul_a0 = GeoV3_LowWord(a);
+    geo_mul_a1 = GeoV3_HighWord(a);
+    geo_mul_b0 = GeoV3_LowWord(b);
+    geo_mul_b1 = GeoV3_HighWord(b);
+    GeoV3_Mul32x32();
+}
+
+/*
+ * Diagnostic only: compare the assembly 32x32 multiply with the C reference.
+ * Returns 0 if every case matches, 1 on the first mismatch.
+ * On mismatch, the five output pointers receive the failing test index,
+ * operands, and both 64-bit products. The first 100 cases are boundary pairs;
+ * the following 2048 cases are deterministic pseudo-random bit patterns.
+ */
+int GeoV3_Mul32x32SelfTest(unsigned long *test_index,
+                           Fixed32 *bad_a, Fixed32 *bad_b,
+                           Fixed64 *asm_product_out,
+                           Fixed64 *c_product_out)
+{
+    static const Fixed32 boundary[] = {
+        0L, 1L, -1L, 2L, -2L,
+        65535L, 65536L, -65536L,
+        2147483647L, (-2147483647L - 1L)
+    };
+    unsigned long state;
+    unsigned long index;
+    unsigned long bits;
+    unsigned int i, j;
+    Fixed32 a, b;
+    Fixed64 asm_product, c_product;
+
+    index = 0;
+    for (i = 0; i < (unsigned int)(sizeof(boundary) / sizeof(boundary[0])); ++i) {
+        for (j = 0; j < (unsigned int)(sizeof(boundary) / sizeof(boundary[0])); ++j) {
+            a = boundary[i];
+            b = boundary[j];
+            GeoV3_Mul32x32SetInputs(a, b);
+            memcpy(&asm_product, geo_mul_p, sizeof(asm_product));
+            c_product = (Fixed64)a * (Fixed64)b;
+            if (asm_product != c_product) {
+                *test_index = index;
+                *bad_a = a;
+                *bad_b = b;
+                *asm_product_out = asm_product;
+                *c_product_out = c_product;
+                return 1;
+            }
+            ++index;
+        }
     }
-    Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
-            c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
-    int obs;
-    if (d1 > epsilon) obs = 1;
-    else if (d1 < -epsilon) obs = -1;
-    else return 0;  /* obs == 0 : comportement identique à l'original,
-                        les deux blocs sautaient déjà leur boucle dans ce cas */
-    int n2 = faces->vertex_count[f2];
-    int offset2 = faces->vertex_indices_ptr[f2];
-    int all_same = 1, all_opp = 1;
-    for (int k = 0; k < n2; ++k) {
-        int v = faces->vertex_indices_buffer[offset2 + k] - 1;
-        Fixed64 acc = ((a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT)
-                    + ((b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT)
-                    + ((c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT)
-                    + d1;
-        int side;
-        if (acc > epsilon) side = 1;
-        else if (acc < -epsilon) side = -1;
-        else continue;  /* sommet ambigu : ne contredit ni l'une ni l'autre hypothèse */
-        if (side == obs) all_opp = 0; else all_same = 0;
-        if (!all_same && !all_opp) return 0;  /* sortie anticipée : plus rien à prouver */
+
+    state = 0x13579BDFUL;
+    for (i = 0; i < 2048; ++i) {
+        state = state * 1664525UL + 1013904223UL;
+        bits = state;
+        memcpy(&a, &bits, sizeof(a));
+        state = state * 1664525UL + 1013904223UL;
+        bits = state;
+        memcpy(&b, &bits, sizeof(b));
+
+        GeoV3_Mul32x32SetInputs(a, b);
+        memcpy(&asm_product, geo_mul_p, sizeof(asm_product));
+        c_product = (Fixed64)a * (Fixed64)b;
+        if (asm_product != c_product) {
+            *test_index = index;
+            *bad_a = a;
+            *bad_b = b;
+            *asm_product_out = asm_product;
+            *c_product_out = c_product;
+            return 1;
+        }
+        ++index;
     }
-    if (all_same) return -1;
-    if (all_opp) return 1;
+
+    *test_index = index;
     return 0;
 }
+
+/* Compute (coefficient * coordinate) >> FIXED_SHIFT. */
+static Fixed64 GeoV3_MulFixed64Fixed32Shift(Fixed64 coefficient,
+                                            Fixed32 coordinate)
+{
+#if defined(GEOV3_DISABLE_ASM_MUL)
+    /* A/B diagnostic: use the original expression for the renderer. */
+    return (coefficient * (Fixed64)coordinate) >> FIXED_SHIFT;
+#else
+    Fixed32 coefficient32;
+    Fixed64 product;
+
+    coefficient32 = (Fixed32)coefficient;
+    if (coefficient == (Fixed64)coefficient32) {
+        GeoV3_Mul32x32SetInputs(coefficient32, coordinate);
+        memcpy(&product, geo_mul_p, sizeof(product));
+        return product >> FIXED_SHIFT;
+    }
+
+    /* Preserve the existing C path for coefficients outside signed 32-bit. */
+    return (coefficient * (Fixed64)coordinate) >> FIXED_SHIFT;
+#endif
+}
+
+/*
+ * Complete replacement for the existing geometric_face_relation().
+ * Cache, epsilon handling, decision order and early exits are unchanged.
+ */
+static int geometric_face_relation(Model3D* model, int f1, int f2)
+{
+    static int cache_f1[256];
+    static int cache_f2[256];
+    static signed char cache_result[256];
+    static unsigned char cache_valid[256];
+    static Fixed64 cached_epsilon = 0;
+    static Fixed64 cached_distance = 0;
+    static int epsilon_valid = 0;
+
+    FaceArrays3D* faces;
+    VertexArrays3D* vtx;
+    Fixed64 epsilon;
+    Fixed64 a1, b1, c1, d1;
+    Fixed64 acc;
+    unsigned slot;
+    int obs;
+    int n2, offset2;
+    int all_same, all_opp;
+    int k, v, side;
+    int result;
+
+    if (model == NULL) {
+        memset(cache_valid, 0, sizeof(cache_valid));
+        return 0;
+    }
+
+    if (!epsilon_valid ||
+        current_observer_distance != cached_distance) {
+        cached_epsilon = FIXED_MUL_64(
+            current_observer_distance,
+            FLOAT_TO_FIXED(0.001f));
+        cached_distance = current_observer_distance;
+        epsilon_valid = 1;
+        memset(cache_valid, 0, sizeof(cache_valid));
+    }
+
+    slot = (((unsigned)f1 * 33u) ^ (unsigned)f2) & 255u;
+    if (cache_valid[slot] &&
+        cache_f1[slot] == f1 &&
+        cache_f2[slot] == f2) {
+        return (int)cache_result[slot];
+    }
+
+    faces = &model->faces;
+    vtx = &model->vertices;
+    epsilon = cached_epsilon;
+
+    a1 = faces->plane_a[f1];
+    b1 = faces->plane_b[f1];
+    c1 = faces->plane_c[f1];
+    d1 = faces->plane_d[f1];
+    result = 0;
+
+    if (d1 > epsilon)
+        obs = 1;
+    else if (d1 < -epsilon)
+        obs = -1;
+    else
+        goto store_result;
+
+    n2 = faces->vertex_count[f2];
+    offset2 = faces->vertex_indices_ptr[f2];
+    all_same = 1;
+    all_opp = 1;
+
+    for (k = 0; k < n2; ++k) {
+        v = faces->vertex_indices_buffer[offset2 + k] - 1;
+
+        acc = GeoV3_MulFixed64Fixed32Shift(a1, vtx->xo[v])
+            + GeoV3_MulFixed64Fixed32Shift(b1, vtx->yo[v])
+            + GeoV3_MulFixed64Fixed32Shift(c1, vtx->zo[v])
+            + d1;
+
+        if (acc > epsilon)
+            side = 1;
+        else if (acc < -epsilon)
+            side = -1;
+        else
+            continue;
+
+        if (side == obs)
+            all_opp = 0;
+        else
+            all_same = 0;
+
+        if (!all_same && !all_opp)
+            goto store_result;
+    }
+
+    if (all_same)
+        result = -1;
+    else if (all_opp)
+        result = 1;
+
+store_result:
+    cache_f1[slot] = f1;
+    cache_f2[slot] = f2;
+    cache_result[slot] = (signed char)result;
+    cache_valid[slot] = 1;
+    return result;
+}
+
+
+
+
 /**
  * PAINTER'S ALGORITHM - NEWELL / SANCHA (detailed)
  * =================================================
@@ -2102,6 +2455,9 @@ void painter_bubble_sort_old(Model3D* model, int face_count) {
     
     Fixed32* face_zmean = faces->z_mean;
     if (!face_zmean) return; // safety
+
+    /* Relations depend on this frame's transformed geometry. */
+    (void)geometric_face_relation(NULL, 0, 0);
 
 
     // * * * * * 
@@ -2276,6 +2632,8 @@ void painter_bubble_sort(Model3D* model, int face_count)
         return;
     }
     FaceArrays3D* faces = &model->faces;
+    /* Relations depend on this frame's transformed geometry. */
+    (void)geometric_face_relation(NULL, 0, 0);
     // -------------------------------------------------
     // 1. Initial fast sort + back-face culling
     // -------------------------------------------------
@@ -2556,6 +2914,8 @@ void painter_newell_sancha(Model3D* model, int face_count)
     int* maxx;
     int* miny;
     int* maxy;
+    /* Relations depend on this frame's transformed geometry. */
+    (void)geometric_face_relation(NULL, 0, 0);
     /*
      * ------------------------------------------------------------
      * 1. Initial approximate painter ordering
@@ -3124,6 +3484,8 @@ void painter_newell_sancha_selection(Model3D* model, int face_count)
     if (!model || face_count <= 0)
         return;
 
+    /* Relations depend on this frame's transformed geometry. */
+    (void)geometric_face_relation(NULL, 0, 0);
     faces = &model->faces;
     sorted = faces->sorted_face_indices;
 
@@ -3311,6 +3673,8 @@ void painter_geoV2(Model3D* model, int face_count) {
     if (!face_zmean) return;
     Fixed32* face_zmin = faces->z_min;   /* may be NULL */
     Fixed32* face_zmax = faces->z_max;
+    /* Relations depend on this frame's transformed geometry. */
+    (void)geometric_face_relation(NULL, 0, 0);
     // printf("Running painter_geoV2 with %d faces (cull_back_faces=%d)...\n",
     //        face_count, cull_back_faces);
     painter_newell_sancha_fast(model, face_count);
@@ -6586,6 +6950,8 @@ static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of
  */
 static int pair_order_relation(Model3D* model, int f1, int f2) {
     if (!model) return 0;
+    /* Relations depend on this frame's transformed geometry. */
+    (void)geometric_face_relation(NULL, 0, 0);
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
     Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);

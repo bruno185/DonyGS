@@ -5782,3 +5782,49 @@ int check_sort_repair_fast(Model3D* model, int face_count)
     return repairs;
 }
 
+
+ static int geometric_face_relation_C(Model3D* model, int f1, int f2) {
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    static Fixed64 cached_geo_epsilon = 0;
+    static Fixed64 cached_geo_epsilon_distance = 0;
+    static int cached_geo_epsilon_valid = 0; /* 0 until the first real computation */
+    /* epsilon only depends on current_observer_distance, which is constant
+     * for an entire painter sort pass (one frame) - see header comment
+     * above for the full justification of this cache. */
+    Fixed64 epsilon;
+    if (cached_geo_epsilon_valid && current_observer_distance == cached_geo_epsilon_distance) {
+        epsilon = cached_geo_epsilon;
+    } else {
+        epsilon = FIXED_MUL_64(current_observer_distance, FLOAT_TO_FIXED(0.001f));
+        cached_geo_epsilon = epsilon;
+        cached_geo_epsilon_distance = current_observer_distance;
+        cached_geo_epsilon_valid = 1;
+    }
+    Fixed64 a1 = faces->plane_a[f1], b1 = faces->plane_b[f1],
+            c1 = faces->plane_c[f1], d1 = faces->plane_d[f1];
+    int obs;
+    if (d1 > epsilon) obs = 1;
+    else if (d1 < -epsilon) obs = -1;
+    else return 0;  /* obs == 0 : comportement identique à l'original,
+                        les deux blocs sautaient déjà leur boucle dans ce cas */
+    int n2 = faces->vertex_count[f2];
+    int offset2 = faces->vertex_indices_ptr[f2];
+    int all_same = 1, all_opp = 1;
+    for (int k = 0; k < n2; ++k) {
+        int v = faces->vertex_indices_buffer[offset2 + k] - 1;
+        Fixed64 acc = ((a1 * (Fixed64)vtx->xo[v]) >> FIXED_SHIFT)
+                    + ((b1 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT)
+                    + ((c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT)
+                    + d1;
+        int side;
+        if (acc > epsilon) side = 1;
+        else if (acc < -epsilon) side = -1;
+        else continue;  /* sommet ambigu : ne contredit ni l'une ni l'autre hypothèse */
+        if (side == obs) all_opp = 0; else all_same = 0;
+        if (!all_same && !all_opp) return 0;  /* sortie anticipée : plus rien à prouver */
+    }
+    if (all_same) return -1;
+    if (all_opp) return 1;
+    return 0;
+}

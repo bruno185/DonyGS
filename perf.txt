@@ -60,3 +60,29 @@ GEOV2 : 160 / 160
 GEOV3 : 282 / 282
 
 bubble : 122 / 123
+
+
+----------------------
+a 30 b : 281 /256 /241
+a 280 b : 188 / 157 /169
+
+err : b 207, 230
+
+----------------------
+alt-U : pb à 110°
+
+----------------------
+Perfs GEOV3 :
+Assembleur / C / Assembleur #pragma optimize 7 / C #pragma optimize 7
+modele A  : 233 / 240 / 240 / 232
+modele A  : 162 / 169 / 168 / 162
+
+----------------------
+Perfs GEOV3 assembleur :
+241 
+169
+Perfs GEOV3 C :
+232
+162
+
+
