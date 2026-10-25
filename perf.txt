@@ -84,5 +84,26 @@ Perfs GEOV3 assembleur :
 Perfs GEOV3 C :
 232
 162
+Perfs GEOV3 assembleur modifié :
+221
+152
+Perfs GEOV3 assembleur modifié V2 :
+215
+147
+V3 :
+215
+146
+V4 :
+213
+145
+V5 : 
+207
+140
+
+
+
+
+
+
 
 

@@ -1939,7 +1939,7 @@ static int cmp_faces_by_zmean(const void* pa, const void* pb) {
  * ===================================================================== */
 
 // comment the following line to disable the assembly multiply and use pure C instead
-#define GEOV3_DISABLE_ASM_MUL
+// #define GEOV3_DISABLE_ASM_MUL
 /*
  * GeoV3 mixed C/65816 candidate.
  *
@@ -1957,159 +1957,270 @@ static int cmp_faces_by_zmean(const void* pa, const void* pb) {
  */
 
 /*
- * Non-reentrant scratch for the short, synchronous assembly helper.
+ * Non-reentrant input/output staging for the assembly helper.
+ * Intermediate words live in 24 private stack bytes addressed through D.
  * Keep these as file-scope globals so the ORCA assembler can resolve their
  * symbols from inside asm functions. Inputs are staged in globals instead of
  * being read as asm-function parameters, avoiding an unverified ORCA/C
  * parameter/stack convention in this low-level helper.
  */
 unsigned int geo_mul_a0, geo_mul_a1, geo_mul_b0, geo_mul_b1;
-unsigned int geo_mul_sign;
-unsigned int geo_mul_count;
-unsigned int geo_mul_m0, geo_mul_m1, geo_mul_m2, geo_mul_m3;
-unsigned int geo_mul_q0, geo_mul_q1;
 unsigned int geo_mul_p[4];
 
 /*
  * Exact signed Fixed32 x Fixed32 -> Fixed64 multiply.
- * The product is formed with a 32-step shift/add loop using 16-bit words.
- * `out` is written as four little-endian words.
+ * The product uses 16 or 32 shift/add steps; zero inputs return directly.
+ * geo_mul_p is written as four little-endian words.
+ * Direct-page offsets: sign=1, swap=3..4, M=5..7, count=9, Q=13..15, P=17..23.
+ * Global transfers explicitly use long addressing, independent of D/DBR.
  */
 asm void GeoV3_Mul32x32(void)
 {
-    php
-    pha
-    cld
+    /* Calling convention: save A and X as 16-bit values; restore D and P.
+     * Y and DBR remain unchanged. Do not call C with the temporary D.
+     * Global inputs/output make this routine non-reentrant.
+     * This is a raw product: two 16.16 inputs produce a 32.32 result.
+     * The C wrapper performs the subsequent 16-bit right shift.
+     */
+    php                 // Save P before changing register widths and decimal mode.
+    rep     #0x30       // Use 16-bit A and X/Y for word operations and the counter.
+    pha                 // Save A (2 bytes).
+    phx                 // Save X, used as the iteration counter.
+    phd                 // Save the caller's direct page.
+    cld                 // Use binary arithmetic for ADC/SBC.
+    /* Reserve 24 bytes below the saved registers.
+     * The stack grows downward; S points just below the first usable byte.
+     * Little-endian words (offset -> bits):
+     *   1: sign (0 positive, 1 negative); 3..4: swap temporary
+     *   5,7: constant M, bits 0..15,16..31; 9: iteration count; 11: unused
+     *   13,15: Q, bits 0..15,16..31
+     *   17,19,21,23: P, bits 0..15,16..31,32..47,48..63
+     * Short numeric operands address memory relative to D.
+     * The > prefix forces long addressing for globals.
+     */
+    tsc
+    sec
+    sbc     #24
+    tcs
+    tcd                 // D = S: reserved bytes are D+1 through D+24.
 
-    /* M = abs(a), initially represented as a 64-bit value. */
-    lda     geo_mul_a0
-    sta     geo_mul_m0
-    lda     geo_mul_a1
-    sta     geo_mul_m1
+    /* M = |a|: load both words of a and clear the upper 32 bits.
+     * Bit 15 of the high input word determines the sign of a.
+     */
+    lda     >geo_mul_a0
+    sta     5
+    lda     >geo_mul_a1
+    sta     7
     lda     #0
-    sta     geo_mul_m2
-    sta     geo_mul_m3
-    sta     geo_mul_sign
+    sta     9
+    sta     11
+    sta     1
 
-    lda     geo_mul_m1
+    lda     7
     bpl     geo_mul_a_positive
 
-    lda     geo_mul_m0
+    /* 32-bit two's complement: invert the bits, then add 1.
+     * ADC #0 propagates the carry from the low word to the high word.
+     * |INT32_MIN| = 0x80000000 fits in an unsigned magnitude.
+     */
+    lda     5
     eor     #0xFFFF
     clc
     adc     #1
-    sta     geo_mul_m0
-    lda     geo_mul_m1
+    sta     5
+    lda     7
     eor     #0xFFFF
     adc     #0
-    sta     geo_mul_m1
+    sta     7
     lda     #1
-    sta     geo_mul_sign
+    sta     1
 
 geo_mul_a_positive:
-    /* Q = abs(b), kept as an unsigned 32-bit multiplier. */
-    lda     geo_mul_b0
-    sta     geo_mul_q0
-    lda     geo_mul_b1
-    sta     geo_mul_q1
-    lda     geo_mul_q1
+    /* Q = |b|, an unsigned 32-bit multiplier.
+     * For negative b, take two's complement and toggle the final sign:
+     * sign = sign(a) XOR sign(b).
+     */
+    lda     >geo_mul_b0
+    sta     13
+    lda     >geo_mul_b1
+    sta     15
+    lda     15
     bpl     geo_mul_b_positive
 
-    lda     geo_mul_q0
+    lda     13
     eor     #0xFFFF
     clc
     adc     #1
-    sta     geo_mul_q0
-    lda     geo_mul_q1
+    sta     13
+    lda     15
     eor     #0xFFFF
     adc     #0
-    sta     geo_mul_q1
-    lda     geo_mul_sign
+    sta     15
+    lda     1
     eor     #1
-    sta     geo_mul_sign
+    sta     1
 
 geo_mul_b_positive:
+    /* P = 0 before any early return or accumulation.
+     */
     lda     #0
-    sta     geo_mul_p
-    sta     geo_mul_p+2
-    sta     geo_mul_p+4
-    sta     geo_mul_p+6
-    lda     #32
-    sta     geo_mul_count
+    sta     17
+    sta     19
+    sta     21
+    sta     23
+
+    /* A zero magnitude needs no shift/add iterations.
+     */
+    lda     5
+    ora     7
+    bne     geo_mul_check_q_zero
+    brl     geo_mul_store
+geo_mul_check_q_zero:
+    lda     13
+    ora     15
+    bne     geo_mul_nonzero
+    brl     geo_mul_store
+geo_mul_nonzero:
+
+    /* Q < 65536: all its significant bits fit in 16 iterations.
+     */
+    ldx     #16
+    lda     15
+    beq     geo_mul_loop
+
+    /* Q needs 32 bits. If M fits in 16 bits, exchange magnitudes so
+     * the smaller operand becomes Q and only 16 iterations are needed.
+     * If both need 32 bits, their order does not affect the loop count.
+     * The final sign is already recorded and multiplication is commutative.
+     * The high accumulator words (21,23) are still zero at this point.
+     */
+    lda     7
+    bne     geo_mul_use_32
+    lda     5
+    sta     3           // Temporarily save the low word of the old M.
+    lda     13
+    sta     5           // New M low word = old Q low word.
+    lda     15
+    sta     7           // New M high word = old Q high word.
+    lda     3
+    sta     13          // New Q low word = old M low word.
+    stz     15          // Old M high word was zero; new Q fits in 16 bits.
+    bra     geo_mul_loop
+
+geo_mul_use_32:
+    ldx     #32
 
 geo_mul_loop:
-    lda     geo_mul_q0
-    and     #1
-    beq     geo_mul_skip_add
+    /* Entry from the 16/32-bit selector. M remains a constant 32-bit
+     * magnitude. P combines a 32-bit high accumulator and low multiplier.
+     * Save the iteration count to detect the short-path alignment fixup.
+     */
+    stx     9
+    lda     13
+    sta     17
+    lda     15
+    sta     19
 
-    clc
-    lda     geo_mul_p
-    adc     geo_mul_m0
-    sta     geo_mul_p
-    lda     geo_mul_p+2
-    adc     geo_mul_m1
-    sta     geo_mul_p+2
-    lda     geo_mul_p+4
-    adc     geo_mul_m2
-    sta     geo_mul_p+4
-    lda     geo_mul_p+6
-    adc     geo_mul_m3
-    sta     geo_mul_p+6
-
-geo_mul_skip_add:
-    /* M <<= 1; Q >>= 1. */
-    lda     geo_mul_m0
-    asl     a
-    sta     geo_mul_m0
-    lda     geo_mul_m1
-    rol     a
-    sta     geo_mul_m1
-    lda     geo_mul_m2
-    rol     a
-    sta     geo_mul_m2
-    lda     geo_mul_m3
-    rol     a
-    sta     geo_mul_m3
-
-    lda     geo_mul_q1
+geo_mul_combined_loop:
+    /* Inspect the next multiplier bit without changing the combined P.
+     * Clear C before either path: it is the extra high bit for the shift.
+     */
+    lda     17
     lsr     a
-    sta     geo_mul_q1
-    lda     geo_mul_q0
-    ror     a
-    sta     geo_mul_q0
+    bcc     geo_mul_combined_no_add
 
-    lda     geo_mul_count
-    sec
-    sbc     #1
-    sta     geo_mul_count
-    bne     geo_mul_loop
+    /* Add M to the high 32 bits only. Preserve the final ADC carry:
+     * it is bit 64 of the temporary sum and must enter the following ROR.
+     */
+    clc
+    lda     21
+    adc     5
+    sta     21
+    lda     23
+    adc     7
+    sta     23
+    bra     geo_mul_combined_shift
 
-    /* Apply the sign to the 64-bit magnitude. */
-    lda     geo_mul_sign
+geo_mul_combined_no_add:
+    clc                 // No addition: the extra high bit is zero.
+
+geo_mul_combined_shift:
+    /* Shift the carry:high:low combined value right by one bit.
+     * Each ROR passes its low bit into the next lower word via C.
+     * The low half supplies multiplier bits and receives product bits.
+     */
+    ror     23
+    ror     21
+    ror     19
+    ror     17
+    dex
+    bne     geo_mul_combined_loop
+
+    /* After 32 steps P is the complete unsigned product. With a 16-bit
+     * multiplier, 16 steps give product << 16; remove that alignment.
+     * Its unused multiplier bits are zero, so no contribution is lost.
+     */
+    lda     9
+    cmp     #16
+    bne     geo_mul_apply_sign
+    lda     19
+    sta     17
+    lda     21
+    sta     19
+    lda     23
+    sta     21
+    stz     23
+
+geo_mul_apply_sign:
+    /* The magnitude is complete: if the final sign is 1, form -P
+     * using two's complement across four words. Clear C once,
+     * add 1 to the low word, then propagate carry with ADC #0.
+     */
+    lda     1
     beq     geo_mul_store
 
-    lda     geo_mul_p
+    lda     17
     eor     #0xFFFF
     clc
     adc     #1
-    sta     geo_mul_p
-    lda     geo_mul_p+2
+    sta     17
+    lda     19
     eor     #0xFFFF
     adc     #0
-    sta     geo_mul_p+2
-    lda     geo_mul_p+4
+    sta     19
+    lda     21
     eor     #0xFFFF
     adc     #0
-    sta     geo_mul_p+4
-    lda     geo_mul_p+6
+    sta     21
+    lda     23
     eor     #0xFFFF
     adc     #0
-    sta     geo_mul_p+6
+    sta     23
 
 geo_mul_store:
-    pla
-    plp
-    rtl
+    /* Export P before releasing the workspace: four words, least
+     * significant first. Long addressing is independent of D and DBR.
+     */
+    lda     17
+    sta     >geo_mul_p
+    lda     19
+    sta     >geo_mul_p+2
+    lda     21
+    sta     >geo_mul_p+4
+    lda     23
+    sta     >geo_mul_p+6
+    /* Release exactly the 24 reserved bytes. The saved D, X, A and P
+     * are then accessible to the matching pull instructions.
+     */
+    tsc
+    clc
+    adc     #24
+    tcs
+    pld                 // Restore the caller's direct page.
+    plx                 // Restore X while index registers are still 16-bit.
+    pla                 // Restore A while the accumulator is still 16-bit.
+    plp                 // Restore original flags and register widths.
+    rtl                 // Long return; S is back to its entry value.
 }
 
 static unsigned int GeoV3_LowWord(Fixed32 value)
