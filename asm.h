@@ -1,80 +1,251 @@
-// keypress() will get a keypress from the user
-// This function will wait until a key is pressed and then return.
+/*
+ * ============================================================================
+ *  asm.h — Clavier et commutation SHR — Primitives 65C816
+ * ============================================================================
+ *
+ *  Rôle :
+ *    Accéder directement au clavier Apple IIgs, à l'état Open-Apple et aux
+ *    soft switches d'affichage SHR. Fournir aussi une signature de registres
+ *    utilisable par un breakpoint d'émulateur.
+ *
+ *  Organisation :
+ *    Les lectures clavier attendent activement le strobe, l'acquittent et
+ *    rendent soit le masque, soit le caractère, soit un mot associant
+ *    caractère et modificateur. Les routines d'affichage écrivent le
+ *    registre $00C029.
+ *
+ *  Dépendances et contraintes :
+ *    Définitions assembleur ORCA/C destinées à l'unité de compilation du
+ *    projet. Les contrats de taille et de préservation diffèrent entre
+ *    routines ; ne pas supposer que P ou tous les registres sont restaurés.
+ *    Les accès matériels longs ne dépendent pas de DBR. Aucun timeout
+ *    clavier.
+ *
+ * ============================================================================
+ */
+/*
+ * ----------------------------------------------------------------------------
+ *  keypress
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Attendre une frappe et acquitter le strobe clavier.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    A contient 0x0080 après le masquage, pas le caractère.
+ *
+ *    lecture de $00C000, écriture de $00C010 ; attente active sans timeout.
+ *
+ *  Préconditions :
+ *    accumulateur 16 bits conformément aux constantes employées.
+ *
+ * ----------------------------------------------------------------------------
+ */
 asm int keypress ()
         {
 loop:
-        lda >0xC000     // Read the keyboard status from memory address 0xC000
-        and #0x0080     // Check if the key is pressed (bit 7)
-        beq loop        // If not pressed, loop until a key is pressed
-        sta >0xC010     // Clear the keypress by writing back to 0xC010
+        /* Attendre le bit 7 du registre clavier ; le masquage détruit ici le
+         * code de touche.
+         */
+        lda >0xC000
+        and #0x0080
+        beq loop
+        sta >0xC010
         rtl
         }
 
+
+/*
+ * ----------------------------------------------------------------------------
+ *  getkeypress
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Attendre une frappe et retourner son code sur sept bits.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Retour :
+ *    Caractère dans A, sans le bit de strobe.
+ *
+ *  Sorties et effets de bord :
+ *    acquitte $00C010 ; attente active.
+ *
+ *  Fonctionnement :
+ *    Accumulateur attendu sur 16 bits.
+ *
+ * ----------------------------------------------------------------------------
+ */
 asm char getkeypress ()
         {
 loop:
-        lda >0xC000     // Read the keyboard status from memory address 0xC000
-        bit #0x0080     // Test only the pressed flag without destroying A
-        beq loop        // If not pressed, loop until a key is pressed
-        sta >0xC010     // Clear the keypress by writing back to 0xC010
-        and #0x007F     // Mask off the pressed flag, keep the character code
+        lda >0xC000
+        /* Tester le strobe sans détruire A, puis conserver le caractère
+         * après acquittement.
+         */
+        bit #0x0080
+        beq loop
+        sta >0xC010
+        and #0x007F
         rtl
         }
 
 
-#define KBD       0xC000   /* Keyboard register (data + strobe) */
-#define KBDSTRB   0xC010   /* Reset keyboard strobe */
-#define OASK      0xC061   /* Open-Apple button state */
+#define KBD       0xC000
+#define KBDSTRB   0xC010
+#define OASK      0xC061
 
+
+/*
+ * ----------------------------------------------------------------------------
+ *  getkeypress_openA
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Lire une frappe en conservant l'état de la touche Open-Apple.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Retour :
+ *    Code clavier dans l'octet bas, Open-Apple dans le bit 8.
+ *
+ *  Sorties et effets de bord :
+ *    strobe acquitté ; A est rendu sur 16 bits, P n'est pas restauré.
+ *
+ *  Algorithme :
+ *    accès matériels en 8 bits, sauvegarde du caractère sur la pile,
+ *    transfert du bit 7 de $00C061 vers B, puis reconstitution de B:A.
+ *
+ * ----------------------------------------------------------------------------
+ */
 asm int getkeypress_openA()
         {
-        sep   #0x20         // Switch A to 8 bits to access hardware registers
+        /* Lire les soft switches par octets pour ne pas accéder au registre voisin. */
+        sep   #0x20
 loop:
-        lda   >KBD          // Read the keyboard register
-        bit   #0x80         // Test the "key pressed" bit without destroying A
-        beq   loop          // Loop until a key is pressed
-        sta   >KBDSTRB      // Acknowledge the keyboard strobe
-        and   #0x7F         // Keep only the character code (7 bits)
-        pha                 // Save the character on the stack (8-bit push)
+        lda   >KBD
+        bit   #0x80
+        beq   loop
+        sta   >KBDSTRB
+        and   #0x7F
+        pha
 
-        lda   >OASK         // Read the Open-Apple state
-        asl   a             // The pressed bit (bit 7) goes into the carry
+        /* Convertir le bit Open-Apple en 0 ou 1 et le placer dans l'octet haut. */
+        lda   >OASK
+        asl   a
         lda   #0x00
-        rol   a             // A = 1 if Open-Apple is pressed, 0 otherwise
-        xba                 // Move the flag into B (high byte of C)
+        rol   a
+        xba
 
-        pla                 // Retrieve the character into A (low byte)
-        rep   #0x20         // Switch A to 16 bits: C = B:A = (flag<<8) | char
+        /* Assembler le caractère et le modificateur en repassant A sur 16 bits. */
+        pla
+        rep   #0x20
         rtl
         }
 
 
-// To use with an emulator
-// With Crossrunner, you can set a breakpoint to break when 
-// register A has the value 0xAAAA and register X has the value 0xBBBB.
+/*
+ * ----------------------------------------------------------------------------
+ *  debug
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Présenter la signature A=$AAAA, X=$BBBB à un breakpoint d'émulateur.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Retour :
+ *    Aucun contrat de valeur ; A et X sont sauvegardés puis restaurés.
+ *
+ *  Sorties et effets de bord :
+ *    modifie les indicateurs.
+ *
+ *  Fonctionnement :
+ *    Entrées et
+ *
+ *  Préconditions :
+ *    tailles de registres compatibles avec les immédiats 16 bits. Le
+ *    breakpoint doit être configuré dans l'émulateur.
+ *
+ * ----------------------------------------------------------------------------
+ */
 asm  debug ()
         {
-        pha 
+        /* Sauvegarder les registres avant de présenter la signature de diagnostic. */
+        pha
         phx
         lda #0xAAAA
-        ldx #0xBBBB     // will break after this instruction if you set a breakpoint
-        plx             // restore X
-        pla             // restore A
-        rtl             // return from subroutine
+        ldx #0xBBBB
+        plx
+        pla
+        rtl
         }
 
-asm shroff ()           // turn off superhires mode
+
+/*
+ * ----------------------------------------------------------------------------
+ *  shroff
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Désactiver l'affichage SHR en écrivant $41 dans $00C029.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    A et les indicateurs sont modifiés ; la routine termine avec A, X et Y
+ *    configurés sur 16 bits.
+ *
+ * ----------------------------------------------------------------------------
+ */
+asm shroff ()
         {
         sep #0x20
+        /* Écriture matérielle sur un octet ; REP impose ensuite les tailles de sortie. */
         lda #0x41
         sta >0xC029
         rep #0x30
         rtl
         }
 
-asm shron ()            // turn on superhires mode
+
+/*
+ * ----------------------------------------------------------------------------
+ *  shron
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Activer l'affichage SHR en écrivant $C1 dans $00C029.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    A et les indicateurs sont modifiés ; la routine termine avec A, X et Y
+ *    configurés sur 16 bits.
+ *
+ * ----------------------------------------------------------------------------
+ */
+asm shron ()
         {
         sep #0x20
+        /* Écriture matérielle sur un octet ; REP impose ensuite les tailles de sortie. */
         lda #0xC1
         sta >0xC029
         rep #0x30

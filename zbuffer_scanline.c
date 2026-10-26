@@ -1,39 +1,61 @@
+/*
+ * ============================================================================
+ *  zbuffer_scanline.c — Z-buffer scanline — Variantes flottantes et
+ *  quantifiées
+ * ============================================================================
+ *
+ *  Rôle :
+ *    Résoudre la visibilité par pixel avec une seule ligne de profondeur
+ *    réutilisée, à partir des coordonnées projetées et des métriques déjà
+ *    préparées par le moteur.
+ *
+ *  Organisation :
+ *    Les versions flottantes et V2 sont conservées pour comparaison. Le
+ *    dispatch public sélectionne V3, qui prépare les codes 16 bits de
+ *    profondeur inverse, les arêtes et les faces actives, puis dessine
+ *    chaque span par un noyau assembleur. Le fichier fournit aussi les
+ *    couleurs effectives et drawPixel.
+ *
+ *  Dépendances et contraintes :
+ *    Inclus par engine.c ; écran SHR 320x200, deux pixels par octet. Les
+ *    anciens chemins et V3 ont des précisions et règles de contour
+ *    différentes. Sans culling, la variante active emploie un biais. Les
+ *    buffers statiques et paquets de spans sont non réentrants ; la mémoire
+ *    Z seule ne résume pas leur consommation totale.
+ *
+ * ============================================================================
+ */
 
-// --- Scanline Z-Buffer ---
-// Alternative renderer, triggered by a dedicated key (e.g. Z/z) in the main
-// viewer loop. Entirely additive: does not touch processModelFast,
-// calculateFaceDepths, or the existing painter's-algorithm pipeline. Consumes
-// the same already-computed vtx->x2d/y2d/zo and faces->vertex_indices_buffer.
-//
-// PIXEL PLOT: was done by MoveTo(x,y)+LineTo(x,y) (QuickDraw II, same point =
-// single pixel), replaced with inline 65816
-// assembly later (direct SHR nibble read-modify-write), once this scanline
-// logic is validated. Marked below with "PLOT PIXEL HERE".
-//
-// DEPTH PRECISION: this Z-buffer is kept entirely in native float (NOT
-// Fixed32) on purpose. Diagnosed with a real case (two perpendicular faces
-// of the model, ids 13 and 18, whose observer-space depths interleave within
-// less than 1% of each other in their screen overlap region) - a Fixed32
-// round-trip for inv_z was not resolving such close depth conflicts
-// correctly, causing consistently wrong occlusion between those faces
-// regardless of rotation. Float32 has far more usable relative precision at
-// this magnitude, so all inv_z math below stays in float from vertex
-// computation through to the buffer comparison itself.
-//
-// Adapt SCREEN_WIDTH/SCREEN_HEIGHT and MAX_SPAN_INTERSECTIONS to your
-// actual constants/limits.
 
 typedef struct {
-    int x;        // screen-space x of the intersection
-    float inv_z;  // interpolated 1/z at that intersection (native float)
+    int x;
+    float inv_z;
 } ScanIntersection;
 
-// Extracted verbatim from drawPolygons's fill/frame color logic, so the
-// scanline Z-buffer renderer reproduces the exact same user choices
-// (default colors, user overrides, orientation shading, palette cycling).
-
+/*
+ * ----------------------------------------------------------------------------
+ *  getFaceFillColor
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Résoudre la couleur de remplissage d'une face.
+ *
+ *  Paramètres :
+ *    [entrée] face_id valide base zéro
+ *
+ *  Retour :
+ *    Indice selon priorité shading, aléatoire disponible, choix utilisateur,
+ *    défaut.
+ *
+ *  Fonctionnement :
+ *    Aucun dessin ni modification de l'état. Les sélections spéciales
+ *    doivent être cohérentes avec les buffers.
+ *
+ * ----------------------------------------------------------------------------
+ */
 int getFaceFillColor(int face_id) {
     int fill_color;
+    /* Appliquer la priorité d'orientation avant les autres sources de couleur. */
     if (shaded_by_orientation) {
         fill_color = face_shade_color[face_id];
     } else if (user_fill_color == 16 && random_fill_colors != NULL && face_id < random_colors_capacity) {
@@ -46,8 +68,31 @@ int getFaceFillColor(int face_id) {
     return fill_color;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  getFaceFrameColor
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Résoudre la couleur de contour d'une face.
+ *
+ *  Paramètres :
+ *    [entrée] face_id valide et fill_color effectif
+ *
+ *  Retour :
+ *    Remplissage si choix 17, couleur aléatoire disponible si 16, choix
+ *    explicite ou COL_FRAME.
+ *
+ *  Fonctionnement :
+ *    Aucun dessin ; ne recalcule pas le remplissage.
+ *
+ * ----------------------------------------------------------------------------
+ */
 int getFaceFrameColor(int face_id, int fill_color) {
     int frame_color;
+    /* Traiter le contour identique au remplissage avant les sélections
+     * indépendantes.
+     */
     if (user_frame_color == 17) {
         frame_color = fill_color;
     } else if (user_frame_color == 16 && random_frame_colors != NULL && face_id < random_colors_capacity) {
@@ -60,6 +105,28 @@ int getFaceFrameColor(int face_id, int fill_color) {
     return frame_color;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  drawPixel
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Écrire directement un pixel SHR 320x200 en préservant son voisin.
+ *
+ *  Paramètres :
+ *    [entrée] x dans [0,319], y dans [0,199], color masqué sur quatre bits.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Aucun clipping ni test Z. Adresse $E12000+y*160+x/2. L'assembleur passe
+ *    A en 8 bits, laisse X sur 16 bits et termine A sur 16 bits. A/X et
+ *    indicateurs modifiés ; DBR ignoré par l'adressage long. Pixel pair dans
+ *    le nibble haut, impair dans le nibble bas.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void drawPixel(int x, int y, int color)
 {
     int offset;
@@ -67,26 +134,25 @@ void drawPixel(int x, int y, int color)
 
     color &= 0x0F;
 
-    /* Offset (0..31999) into SHR bank $E1 memory - computed in C,
-       passed to assembly via the X register (16-bit, plenty of range) */
+
+    /* Calculer l'offset d'octet dans la banque SHR. */
     offset = y * 160 + (x >> 1);
 
     asm {
-        sep     #0x20        ; 8-bit accumulator
+        /* Lire l'octet en mode A 8 bits et sauver sa valeur avant le choix de parité. */
+        sep     #0x20
 
-        ldx     offset       ; X = byte offset (index register stays 16-bit)
-        lda     0xE12000,x    ; read the byte containing both pixels
-                             ; (absolute LONG indexed addressing - bank $E1
-                             ; is baked into the instruction itself, no
-                             ; pointer variable involved at all)
+        ldx     offset
+        lda     0xE12000,x
 
-        pha                  ; save original byte
+
+        pha
 
         lda     x
         and     #0x01
         bne     pixel_odd
 
-        /* x EVEN: pixel = high nibble */
+
         pla
         and     #0x0F
         sta     value
@@ -101,8 +167,9 @@ void drawPixel(int x, int y, int color)
         sta     0xE12000,x
         bra     done
 
+/* Modifier uniquement le nibble bas pour x impair. */
 pixel_odd:
-        /* x ODD: pixel = low nibble */
+
         pla
         and     #0xF0
         sta     value
@@ -112,18 +179,41 @@ pixel_odd:
         ora     value
         sta     0xE12000,x
 
+/* Revenir au format d'accumulateur 16 bits attendu par le C. */
 done:
         rep     #0x20
     }
 }
 
-/* Clear SHR rows 0..11 immediately before drawing the model.
- * 12 rows * 160 bytes = 1920 bytes at $E1:2000. Absolute long stores
- * are independent of DBR; A, X and processor flags are preserved.
+/*
+ * ----------------------------------------------------------------------------
+ *  SL_ClearTop12Lines
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Effacer les douze premières lignes de pixels SHR avant le rendu.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Écrit 1920 octets depuis $E1:2000.
+ *
+ *    Compteur 16 bits décrémenté de deux, test BPL incluant le mot d'offset
+ *    zéro ; accès longs indépendants de DBR.
+ *
+ *  Registres et indicateurs :
+ *    Préserve P, A et X ; Y et DBR non utilisés.
+ *
+ * ----------------------------------------------------------------------------
  */
 static void SL_ClearTop12Lines(void)
 {
     asm {
+        /* Sauvegarder le contexte puis effacer les mots de $077E à zéro inclus. */
         php
         rep #0x30
         pha
@@ -141,6 +231,34 @@ static void SL_ClearTop12Lines(void)
     }
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer_old
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Conserver la variante scanline initiale.
+ *
+ *  Paramètres :
+ *    [entrée] model valide, coordonnées projetées et profondeurs calculées.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    écran SHR et buffers statiques ; les allocations ne sont pas toutes
+ *    contrôlées.
+ *
+ *  Fonctionnement :
+ *    Recalcule 1/z et balaie les faces pour chaque ligne, avec une seule
+ *    ligne Z float. Aucun rapprochement de profondeur volontaire.
+ *
+ *    Variante conservée pour comparaison, hors dispatch public actuel. Les
+ *    règles de contour diffèrent de V3 ; ne pas la supprimer comme doublon
+ *    prouvé.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void renderModelScanlineZBuffer_old (Model3D* model) {
     VertexArrays3D* vtx = &model->vertices;
     FaceArrays3D* faces = &model->faces;
@@ -148,12 +266,10 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
     int fcount = faces->face_count;
     int y, f, i;
 
-    // --- 1/z per vertex, recomputed locally once per call (not stored
-    // elsewhere; existing pipeline untouched). Perspective-correct depth
-    // interpolation needs 1/z, which is linear in screen space - z itself
-    // is not. Kept in float (see header comment on precision). ---
+
     static float* inv_z = NULL;
     static int inv_z_capacity = 0;
+    /* Réserver les inverses Z réutilisables puis les recalculer pour les sommets. */
     if (inv_z_capacity < vcount) {
         if (inv_z) free(inv_z);
         inv_z = (float*)malloc(vcount * sizeof(float));
@@ -164,8 +280,7 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
         inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
     }
 
-    // --- One-scanline Z-buffer, reused every line (320 floats only,
-    // not a full-screen buffer) ---
+
     static float zbuffer_line[SCREEN_WIDTH];
 
     ScanIntersection hits[MAX_SPAN_INTERSECTIONS];
@@ -174,12 +289,14 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
     applyPalette(palette);
 
     SL_ClearTop12Lines();
+    /* Effacer la profondeur de la ligne et chercher les spans de chaque face. */
     for (y = 0; y < SCREEN_HEIGHT; y++) {
         int screenY = y + pan_dy;
         if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
 
-        for (i = 0; i < SCREEN_WIDTH; i++) zbuffer_line[i] = -1.0f; // nothing drawn yet
+        for (i = 0; i < SCREEN_WIDTH; i++) zbuffer_line[i] = -1.0f;
 
+        /* Appliquer visibilité et bornes avant d'intersecter les arêtes. */
         for (f = 0; f < fcount; f++) {
             int n, offt, k, hit_count;
 
@@ -191,15 +308,9 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
             offt = faces->vertex_indices_ptr[f];
             hit_count = 0;
 
-            // --- Gather all edge/scanline intersections for this face ---
-            // Standard scan-conversion rule (y1 <= y < y2, taking edge
-            // direction into account) avoids double-counting a vertex that
-            // sits exactly on the scanline - this also makes concave faces
-            // (e.g. the star) work correctly via pair-wise (even-odd) fill,
-            // same principle as the Newell/shoelace robustness discussed
-            // earlier for orientation.
+
             for (k = 0; k < n; k++) {
-                int k2 = (k + 1 < n) ? (k + 1) : 0; // avoid modulo (no native op on 65816)
+                int k2 = (k + 1 < n) ? (k + 1) : 0;
                 int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
                 int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
 
@@ -210,15 +321,13 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
 
                 int ylo = (y1 < y2) ? y1 : y2;
                 int yhi = (y1 < y2) ? y2 : y1;
-                if (y < ylo || y >= yhi) continue; // half-open range, skips horizontal edges too
+                if (y < ylo || y >= yhi) continue;
 
-                // linear interpolation fraction along the edge in screen space
+
                 float t = (float)(y - y1) / (float)(y2 - y1);
                 int xi = x1 + (int)((x2 - x1) * t + 0.5f);
 
-                // 1/z is linear in screen space along this edge (perspective-
-                // correct interpolation) - plain float lerp, no Fixed32
-                // round-trip (see header comment).
+
                 float izf = inv_z[vid1] + (inv_z[vid2] - inv_z[vid1]) * t;
 
                 if (hit_count < MAX_SPAN_INTERSECTIONS) {
@@ -228,10 +337,10 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
                 }
             }
 
+            /* Ignorer la ligne sans span puis ordonner les intersections disponibles. */
             if (hit_count < 2) continue;
 
-            // --- Sort intersections by x (simple insertion sort - hit_count
-            // is small, typically <= number of face vertices) ---
+
             {
                 int a, b;
                 for (a = 1; a < hit_count; a++) {
@@ -245,8 +354,7 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
                 }
             }
 
-            // --- Pair up consecutive intersections (even-odd rule) and
-            // fill each span with a Z-test per pixel ---
+
             {
                 int p;
                 for (p = 0; p + 1 < hit_count; p += 2) {
@@ -256,22 +364,14 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
                     float izb = hits[p + 1].inv_z;
                     int x;
 
-                    if (xa == xb) continue; // degenerate span
+                    if (xa == xb) continue;
 
-                    // Color depends only on the face (f), never on x/y -
-                    // compute once per span instead of once per pixel.
+
                     {
                         int fillColor = getFaceFillColor(f);
                         int frameColor = getFaceFrameColor(f, fillColor);
 
-                        // iz_here varies linearly across the span - compute
-                        // the per-pixel step ONCE (one division), then just
-                        // add it each pixel instead of recomputing a full
-                        // division + multiplication every pixel. This is
-                        // the hottest loop in the function (executed once
-                        // per pixel drawn, vs once per span/edge for the
-                        // other optimizations), so this is where the real
-                        // cost was.
+
                         float dIz = (izb - iza) / (float)(xb - xa);
                         float iz_here = iza;
 
@@ -281,7 +381,7 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
                                 if (iz_here > zbuffer_line[x]) {
                                     zbuffer_line[x] = iz_here;
 
-                                    // --- PLOT PIXEL HERE ---
+
                                     if (x == xa || x == xb) {
                                         drawPixel(screenX, screenY, frameColor);
                                     } else {
@@ -298,6 +398,34 @@ void renderModelScanlineZBuffer_old (Model3D* model) {
     }
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer_fast
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Conserver la variante scanline flottante rapide.
+ *
+ *  Paramètres :
+ *    [entrée] model valide, coordonnées projetées et profondeurs calculées.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    écran SHR et buffers statiques ; les allocations ne sont pas toutes
+ *    contrôlées.
+ *
+ *  Fonctionnement :
+ *    Recalcule 1/z et balaie les faces pour chaque ligne, avec une seule
+ *    ligne Z float. Aucun rapprochement de profondeur volontaire.
+ *
+ *    Variante conservée pour comparaison, hors dispatch public actuel. Les
+ *    règles de contour diffèrent de V3 ; ne pas la supprimer comme doublon
+ *    prouvé.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void renderModelScanlineZBuffer_fast(Model3D* model) {
     VertexArrays3D* vtx = &model->vertices;
     FaceArrays3D* faces = &model->faces;
@@ -305,9 +433,10 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
     int fcount = faces->face_count;
     int y, f, i;
 
-    // --- 1/z per vertex (inchangé) ---
+
     static float* inv_z = NULL;
     static int inv_z_capacity = 0;
+    /* Réserver les inverses Z réutilisables puis les recalculer pour les sommets. */
     if (inv_z_capacity < vcount) {
         if (inv_z) free(inv_z);
         inv_z = (float*)malloc(vcount * sizeof(float));
@@ -324,20 +453,22 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
     SetPenMode(0);
     applyPalette(palette);
 
-    // Bounds de clipping en "model space" (constantes pour toute la frame)
+
     int clip_x_min = -pan_dx;
     int clip_x_max = SCREEN_WIDTH - 1 - pan_dx;
 
     SL_ClearTop12Lines();
+    /* Effacer la profondeur de la ligne et chercher les spans de chaque face. */
     for (y = 0; y < SCREEN_HEIGHT; y++) {
         int screenY = y + pan_dy;
         if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
 
-        // Reset Z-buffer (parcours pointeur, plus facile à optimiser pour le compilateur)
+
         float* zb_clear = zbuffer_line;
         float* zb_clear_end = zbuffer_line + SCREEN_WIDTH;
         while (zb_clear < zb_clear_end) *zb_clear++ = -1.0f;
 
+        /* Appliquer visibilité et bornes avant d'intersecter les arêtes. */
         for (f = 0; f < fcount; f++) {
             int n, offt, k, hit_count;
 
@@ -346,14 +477,14 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
             if (n < 3) continue;
             if (y < faces->miny[f] || y > faces->maxy[f]) continue;
 
-            // OPTIM 1 : couleurs une seule fois par face
+
             int fillColor = getFaceFillColor(f);
             int frameColor = getFaceFrameColor(f, fillColor);
 
             offt = faces->vertex_indices_ptr[f];
             hit_count = 0;
 
-            // --- Intersections edge/scanline ---
+
             for (k = 0; k < n; k++) {
                 int k2 = (k + 1 < n) ? (k + 1) : 0;
                 int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
@@ -363,11 +494,11 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
                 int y2 = vtx->y2d[vid2];
                 int dy = y2 - y1;
 
-                if (dy == 0) continue;                    // edge horizontal
+                if (dy == 0) continue;
                 if (dy > 0) {
-                    if (y < y1 || y >= y2) continue;      // half-open [y1, y2)
+                    if (y < y1 || y >= y2) continue;
                 } else {
-                    if (y < y2 || y >= y1) continue;      // half-open [y2, y1)
+                    if (y < y2 || y >= y1) continue;
                 }
 
                 int x1 = vtx->x2d[vid1];
@@ -384,9 +515,10 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
                 }
             }
 
+            /* Ignorer la ligne sans span puis ordonner les intersections disponibles. */
             if (hit_count < 2) continue;
 
-            // OPTIM 2 : tri spécialisé (cas triangle = 2 hits, 90% du temps)
+
             if (hit_count == 2) {
                 if (hits[0].x > hits[1].x) {
                     ScanIntersection tmp = hits[0];
@@ -406,7 +538,7 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
                 }
             }
 
-            // --- Remplissage des spans ---
+
             int p;
             for (p = 0; p + 1 < hit_count; p += 2) {
                 int xa = hits[p].x;
@@ -416,18 +548,14 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
 
                 if (xa > xb) continue;
 
-                // OPTIM 3 : clipping X avant la boucle, pas dedans
+
                 if (xb < clip_x_min || xa > clip_x_max) continue;
 
                 int x0 = xa;
                 int x1 = xb;
                 float iz0 = iza;
 
-                // --- FIX : cas dégénéré (span d'1 pixel) traité à part,
-                // AVANT toute division, pour éviter une division par
-                // zéro sur (xb - xa) == 0. Le clipping peut aussi
-                // réduire un span normal à 1 pixel après ajustement
-                // (voir plus bas), donc ce cas est revérifié après clip. ---
+
                 if (x0 == x1) {
                     int sx0 = x0 + pan_dx;
                     if (iz0 > zbuffer_line[x0]) {
@@ -437,11 +565,11 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
                     continue;
                 }
 
-                // dIz calculé seulement si xb != xa (span >= 2 pixels avant clip)
+
                 float dIz = (izb - iza) / (float)(xb - xa);
 
                 if (x0 < clip_x_min) {
-                    iz0 += dIz * (clip_x_min - x0);  // pas de division, juste un fmul
+                    iz0 += dIz * (clip_x_min - x0);
                     x0 = clip_x_min;
                 }
                 if (x1 > clip_x_max) x1 = clip_x_max;
@@ -450,23 +578,22 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
                 int sx0 = x0 + pan_dx;
                 int sx1 = x1 + pan_dx;
 
-                // OPTIM 4 : pas de branche contour/fill dans la boucle interne
+
                 if (x0 == x1) {
-                    // Span réduit à 1 pixel par le clipping (pas par les
-                    // coordonnées d'origine) - dIz est valide ici puisqu'il
-                    // a été calculé avant clip, donc pas de division par 0.
+
+
                     if (iz0 > zbuffer_line[x0]) {
                         zbuffer_line[x0] = iz0;
                         drawPixel(sx0, screenY, frameColor);
                     }
                 } else {
-                    // Premier pixel = contour
+
                     if (iz0 > zbuffer_line[x0]) {
                         zbuffer_line[x0] = iz0;
                         drawPixel(sx0, screenY, frameColor);
                     }
 
-                    // Milieu = fill (boucle la plus chaude : 0 branche, accès pointeur)
+
                     float iz = iz0 + dIz;
                     float* zb = &zbuffer_line[x0 + 1];
                     int x;
@@ -479,7 +606,7 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
                         zb++;
                     }
 
-                    // Dernier pixel = contour (iz accumulé = profondeur exacte au clip)
+
                     if (iz > *zb) {
                         *zb = iz;
                         drawPixel(sx1, screenY, frameColor);
@@ -490,21 +617,46 @@ void renderModelScanlineZBuffer_fast(Model3D* model) {
     }
 }
 
-/* Render a 3D model using a scanline Z-buffer algorithm with a small bias to reduce Z-fighting.
-Slower than the non-biased version (renderModelScanlineZBuffer_fast) due to the additional bias calculations.
-Called only when back-face culling is off.
-*/
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer_biased
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Conserver la variante scanline flottante avec biais.
+ *
+ *  Paramètres :
+ *    [entrée] model valide, coordonnées projetées et profondeurs calculées.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    écran SHR et buffers statiques ; les allocations ne sont pas toutes
+ *    contrôlées.
+ *
+ *  Fonctionnement :
+ *    Recalcule 1/z et balaie les faces pour chaque ligne, avec une seule
+ *    ligne Z float. Ajoute un biais de 0,001 aux faces plane_d>0.
+ *
+ *    Variante conservée pour comparaison, hors dispatch public actuel. Les
+ *    règles de contour diffèrent de V3 ; ne pas la supprimer comme doublon
+ *    prouvé.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void renderModelScanlineZBuffer_biased(Model3D* model) {
     VertexArrays3D* vtx = &model->vertices;
     FaceArrays3D* faces = &model->faces;
     int vcount = vtx->vertex_count;
     int fcount = faces->face_count;
     int y, f, i;
-    static const float Z_FIGHT_BIAS = 0.001f;  // or 0.0001f;
+    static const float Z_FIGHT_BIAS = 0.001f;
 
-    // --- 1/z per vertex (inchangé) ---
+
     static float* inv_z = NULL;
     static int inv_z_capacity = 0;
+    /* Réserver les inverses Z réutilisables puis les recalculer pour les sommets. */
     if (inv_z_capacity < vcount) {
         if (inv_z) free(inv_z);
         inv_z = (float*)malloc(vcount * sizeof(float));
@@ -521,20 +673,22 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
     SetPenMode(0);
     applyPalette(palette);
 
-    // Bounds de clipping en "model space" (constantes pour toute la frame)
+
     int clip_x_min = -pan_dx;
     int clip_x_max = SCREEN_WIDTH - 1 - pan_dx;
 
     SL_ClearTop12Lines();
+    /* Effacer la profondeur de la ligne et chercher les spans de chaque face. */
     for (y = 0; y < SCREEN_HEIGHT; y++) {
         int screenY = y + pan_dy;
         if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
 
-        // Reset Z-buffer (parcours pointeur, plus facile à optimiser pour le compilateur)
+
         float* zb_clear = zbuffer_line;
         float* zb_clear_end = zbuffer_line + SCREEN_WIDTH;
         while (zb_clear < zb_clear_end) *zb_clear++ = -1.0f;
 
+        /* Appliquer visibilité et bornes avant d'intersecter les arêtes. */
         for (f = 0; f < fcount; f++) {
             int n, offt, k, hit_count;
 
@@ -543,21 +697,17 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
             if (n < 3) continue;
             if (y < faces->miny[f] || y > faces->maxy[f]) continue;
 
-            // OPTIM 1 : couleurs une seule fois par face
+
             int fillColor = getFaceFillColor(f);
             int frameColor = getFaceFrameColor(f, fillColor);
 
-            // Biais anti Z-fighting - cette fonction n'est appelee que quand
-            // cull_back_faces est desactive (voir le dispatcher
-            // renderModelScanlineZBuffer), donc pas besoin de re-tester
-            // cull_back_faces ici : toujours pertinent d'appliquer le biais
-            // sur les faces front.
+
             float depthBias = (faces->plane_d[f] > 0) ? Z_FIGHT_BIAS : 0.0f;
 
             offt = faces->vertex_indices_ptr[f];
             hit_count = 0;
 
-            // --- Intersections edge/scanline ---
+
             for (k = 0; k < n; k++) {
                 int k2 = (k + 1 < n) ? (k + 1) : 0;
                 int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
@@ -567,11 +717,11 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
                 int y2 = vtx->y2d[vid2];
                 int dy = y2 - y1;
 
-                if (dy == 0) continue;                    // edge horizontal
+                if (dy == 0) continue;
                 if (dy > 0) {
-                    if (y < y1 || y >= y2) continue;      // half-open [y1, y2)
+                    if (y < y1 || y >= y2) continue;
                 } else {
-                    if (y < y2 || y >= y1) continue;      // half-open [y2, y1)
+                    if (y < y2 || y >= y1) continue;
                 }
 
                 int x1 = vtx->x2d[vid1];
@@ -580,7 +730,7 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
                 float t = (float)(y - y1) / (float)dy;
                 int xi = x1 + (int)((x2 - x1) * t + 0.5f);
                 float izf = inv_z[vid1] + (inv_z[vid2] - inv_z[vid1]) * t;
-                izf += depthBias; // biais applique une fois par intersection
+                izf += depthBias;
 
                 if (hit_count < MAX_SPAN_INTERSECTIONS) {
                     hits[hit_count].x = xi;
@@ -589,9 +739,10 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
                 }
             }
 
+            /* Ignorer la ligne sans span puis ordonner les intersections disponibles. */
             if (hit_count < 2) continue;
 
-            // OPTIM 2 : tri spécialisé (cas triangle = 2 hits, 90% du temps)
+
             if (hit_count == 2) {
                 if (hits[0].x > hits[1].x) {
                     ScanIntersection tmp = hits[0];
@@ -611,7 +762,7 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
                 }
             }
 
-            // --- Remplissage des spans ---
+
             int p;
             for (p = 0; p + 1 < hit_count; p += 2) {
                 int xa = hits[p].x;
@@ -621,16 +772,14 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
 
                 if (xa > xb) continue;
 
-                // OPTIM 3 : clipping X avant la boucle, pas dedans
+
                 if (xb < clip_x_min || xa > clip_x_max) continue;
 
                 int x0 = xa;
                 int x1 = xb;
                 float iz0 = iza;
 
-                // --- FIX : cas degenere (span d'1 pixel) traite a part,
-                // AVANT toute division, pour eviter une division par zero
-                // sur (xb - xa) == 0. ---
+
                 if (x0 == x1) {
                     int sx0 = x0 + pan_dx;
                     if (iz0 > zbuffer_line[x0]) {
@@ -640,11 +789,11 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
                     continue;
                 }
 
-                // dIz calcule seulement si xb != xa (span >= 2 pixels avant clip)
+
                 float dIz = (izb - iza) / (float)(xb - xa);
 
                 if (x0 < clip_x_min) {
-                    iz0 += dIz * (clip_x_min - x0);  // pas de division, juste un fmul
+                    iz0 += dIz * (clip_x_min - x0);
                     x0 = clip_x_min;
                 }
                 if (x1 > clip_x_max) x1 = clip_x_max;
@@ -653,23 +802,22 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
                 int sx0 = x0 + pan_dx;
                 int sx1 = x1 + pan_dx;
 
-                // OPTIM 4 : pas de branche contour/fill dans la boucle interne
+
                 if (x0 == x1) {
-                    // Span reduit a 1 pixel par le clipping (pas par les
-                    // coordonnees d'origine) - dIz est valide ici puisqu'il
-                    // a ete calcule avant clip, donc pas de division par 0.
+
+
                     if (iz0 > zbuffer_line[x0]) {
                         zbuffer_line[x0] = iz0;
                         drawPixel(sx0, screenY, frameColor);
                     }
                 } else {
-                    // Premier pixel = contour
+
                     if (iz0 > zbuffer_line[x0]) {
                         zbuffer_line[x0] = iz0;
                         drawPixel(sx0, screenY, frameColor);
                     }
 
-                    // Milieu = fill (boucle la plus chaude : 0 branche, acces pointeur)
+
                     float iz = iz0 + dIz;
                     float* zb = &zbuffer_line[x0 + 1];
                     int x;
@@ -682,7 +830,7 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
                         zb++;
                     }
 
-                    // Dernier pixel = contour (iz accumule = profondeur exacte au clip)
+
                     if (iz > *zb) {
                         *zb = iz;
                         drawPixel(sx1, screenY, frameColor);
@@ -694,32 +842,48 @@ void renderModelScanlineZBuffer_biased(Model3D* model) {
 }
 
 
-/* ====================================================================
- * Optimized scanline renderer
- *
- * The original fast/biased renderers above are kept for reference.  This
- * version moves work out of the per-scanline hot path, following the same
- * strategy as the optimized fullscreen Z-buffer renderer:
- *
- *   - 1/z and face colours are computed once per frame;
- *   - polygon edges are prepared once, including dx/dy and d(1/z)/dy;
- *   - a counting sort tells us which faces start on each scanline;
- *   - only active faces are visited on a scanline;
- *   - active edges are advanced by additions, with no division in the
- *     scanline/edge loop;
- *   - horizontal clipping is performed before the pixel loop;
- *   - the one-line float Z-buffer is retained, so this renderer keeps the
- *     depth representation and comparison rule of the original scanline code.
- * ==================================================================== */
-
 typedef struct {
-    float x;              /* Current x intersection. */
-    float inv_z;          /* Current reciprocal depth. */
-    float x_step;         /* dx / dy. */
-    float inv_z_step;     /* d(1/z) / dy. */
-    int ya, yb;           /* Active for ya <= y < yb. */
+    float x;
+    float inv_z;
+    float x_step;
+    float inv_z_step;
+    int ya, yb;
 } ScanEdgeFast;
 
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer_coreV2
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Rendre les surfaces par balayage scanline V2 flottant.
+ *
+ *  Paramètres :
+ *    [entrée] model valide avec projection et métriques à jour ; biased,
+ *    active le rapprochement des faces de plane_d>0 lorsque le culling est
+ *    désactivé.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    couleurs, mémoire Z, écran ou framebuffer, buffers statiques non
+ *    réentrants.
+ *
+ *  Fonctionnement :
+ *    N’effectue ni transformation ni classement des faces ; les faces actives sont
+ *    parcourues par identifiant pour définir les égalités de profondeur.
+ *    Réserve/réutilise buffers par sommet/face/arête, calcule 1/z, prépare
+ *    les arêtes, classe les débuts de face par histogramme puis balaie
+ *    uniquement les faces actives. Ligne Z en float, interpolation de 1/z et
+ *    biais flottant.
+ *
+ *    Le clipping du viewport est appliqué aux spans ; pas de clipping 3D
+ *    général. Les réserves et le comportement d'échec restent propres à
+ *    cette version.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
 {
     VertexArrays3D* vtx = &model->vertices;
@@ -749,6 +913,7 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
 
     if (vcount <= 0 || fcount <= 0) return;
 
+    /* Agrandir les buffers de sommets et conserver leur capacité entre les rendus. */
     if (vert_capacity < vcount) {
         if (inv_z) free(inv_z);
         inv_z = (float*)malloc(vcount * sizeof(float));
@@ -756,6 +921,7 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
         vert_capacity = vcount;
     }
 
+    /* Réserver les tables de faces, couleurs et biais. */
     if (face_capacity < fcount) {
         if (face_start)  free(face_start);
         if (face_sorted) free(face_sorted);
@@ -786,7 +952,10 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
         edge_capacity = total_edges;
     }
 
-    /* Reciprocal depth is still float, exactly as in the original renderer. */
+
+    /* Calculer les profondeurs inverses et les codes selon le format de
+     * cette version.
+     */
     for (i = 0; i < vcount; i++) {
         float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
         inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
@@ -800,9 +969,15 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
     if (y_hi >= SCREEN_HEIGHT) y_hi = SCREEN_HEIGHT - 1;
     if (y_lo > y_hi) return;
 
+    /* Transformer l'histogramme en offsets cumulés pour classer les débuts
+     * de faces.
+     */
+    /* Initialiser l'histogramme des premières lignes ; préparer visibilité,
+     * couleurs et arêtes.
+     */
     for (b = 0; b <= SCREEN_HEIGHT; b++) bucket[b] = 0;
 
-    /* Prepare faces and edges once for the whole frame. */
+
     for (f = 0; f < fcount; f++) {
         int n = faces->vertex_count[f];
         int offt = faces->vertex_indices_ptr[f];
@@ -856,7 +1031,7 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
                 ed->inv_z = inv_z[vid2];
             }
 
-            /* Jump directly to the first scanline that can actually be visited. */
+
             if (ed->ya < y_lo && ed->yb > y_lo) {
                 float skip = (float)(y_lo - ed->ya);
                 ed->x += ed->x_step * skip;
@@ -875,6 +1050,7 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
     SetPenMode(0);
     applyPalette(palette);
 
+    /* Démarrer la liste des faces actives, puis balayer les lignes visibles. */
     active_count = 0;
     SL_ClearTop12Lines();
     for (y = y_lo; y <= y_hi; y++) {
@@ -883,7 +1059,10 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
         float* zp;
         float* zend;
 
-        /* Add newly visible faces while retaining ascending face order. */
+
+        /* Insérer les faces commençant sur cette ligne en gardant l'ordre
+         * d'identifiants.
+         */
         for (si = bucket[row]; si < bucket[row + 1]; si++) {
             int nf = face_sorted[si];
             int pos = active_count;
@@ -900,6 +1079,9 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
         while (zp < zend) *zp++ = -1.0f;
 
         keep = 0;
+        /* Écarter les faces terminées et extraire les intersections des
+         * arêtes actives.
+         */
         for (ai = 0; ai < active_count; ai++) {
             int n, offt, hit_count;
             int fillColor, frameColor;
@@ -928,6 +1110,9 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
             }
 
             if (hit_count < 2) continue;
+            /* Ordonner les intersections : échange simple pour deux, tri par
+             * insertion au-delà.
+             */
             if (hit_count == 2) {
                 if (hits[0].x > hits[1].x) {
                     ScanIntersection tmp = hits[0];
@@ -952,6 +1137,9 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
 
             {
                 int p;
+                /* Apparier les intersections par parité, clipper les spans
+                 * et les transmettre au noyau de dessin.
+                 */
                 for (p = 0; p + 1 < hit_count; p += 2) {
                     int xa = hits[p].x;
                     int xb = hits[p + 1].x;
@@ -1020,15 +1208,6 @@ static void renderModelScanlineZBuffer_coreV2(Model3D* model, int biased)
 }
 
 
-
-/* ====================================================================
- * V3: integer hot path for the one-scanline Z-buffer.
- *
- * Unlike V2, no floating-point operation and no C drawPixel() call occurs
- * for each covered pixel.  Reciprocal depth is quantized once per vertex;
- * edges are walked in 12.12 fixed point; a complete span is depth-tested and
- * painted by one 65816 routine.  The Z-buffer remains only one 320-pixel row.
- * ==================================================================== */
 typedef unsigned int SLZWord;
 #define SL_Z_FRAC 12
 #define SL_Z_ROUND 0x800L
@@ -1041,7 +1220,28 @@ static SLZWord sl_zline[SCREEN_WIDTH];
 static float sl_zscale = 1.0f;
 
 
-/* Clear the reusable 320-word scanline Z-buffer in native 65816 code. */
+/*
+ * ----------------------------------------------------------------------------
+ *  SL_ClearLine
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Réinitialiser la ligne Z réutilisée par le rendu scanline V3.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Retour :
+ *    Aucun ; écrit SCREEN_WIDTH mots $FFFF dans sl_zline.
+ *
+ *  Fonctionnement :
+ *    Les accès globaux longs évitent la dépendance à DBR.
+ *
+ *  Registres et indicateurs :
+ *    Préserve P, modifie A/X.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void SL_ClearLine(void)
 {
     asm {
@@ -1049,6 +1249,7 @@ static void SL_ClearLine(void)
         rep #0x30
         ldx #0
         lda #0xFFFF
+/* Remplir chaque mot avant de rendre la ligne au parcours suivant. */
 slcl_loop:
         sta >sl_zline,x
         inx
@@ -1062,19 +1263,66 @@ slcl_loop:
 typedef struct { int x; SLZWord zq; } SLZHit;
 typedef struct { long x,z,sx,sz; int ya,yb,xb; } SLZEdge;
 
+/*
+ * ----------------------------------------------------------------------------
+ *  SL_SetScale
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Adapter la quantification scanline en réservant de la marge pour le
+ *    biais.
+ *
+ *  Paramètres :
+ *    [entrée] max_inv_z
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    sl_zscale=cible/(max_inv_z+SL_Z_BIAS) si le dénominateur dépasse 1e-7.
+ *
+ *  Fonctionnement :
+ *    Sinon conserve l'échelle précédente.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void SL_SetScale(float max_inv_z)
 {
-    /* Reserve headroom for the positive depth bias to avoid saturation. */
+
+    /* Inclure le biais maximal avant la division pour limiter la saturation. */
     float max_biased_inv_z = max_inv_z + SL_Z_BIAS;
 
     if (max_biased_inv_z > 0.0000001f)
         sl_zscale = SL_TARGET_MAX_CODE / max_biased_inv_z;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  SL_Quantize
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Quantifier une profondeur inverse en code 16 bits où petit signifie
+ *    proche.
+ *
+ *  Paramètres :
+ *    [entrée] inv_z, profondeur inverse flottante ; valeurs négatives
+ *    ramenées à zéro.
+ *
+ *  Retour :
+ *    65535 - round(inv_z*échelle), après saturation de la valeur quantifiée
+ *    dans [0,65535]. $FFFF est la valeur vide/lointaine.
+ *
+ *  Fonctionnement :
+ *    Aucun changement d'échelle.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static SLZWord SL_Quantize(float inv_z)
 {
     float scaled;
     long q;
+    /* Appliquer l'échelle scanline, arrondir, saturer puis inverser le code. */
     if (inv_z < 0.0f) inv_z = 0.0f;
     scaled = inv_z * sl_zscale;
     q = (long)(scaled + 0.5f);
@@ -1083,9 +1331,33 @@ static SLZWord SL_Quantize(float inv_z)
     return (SLZWord)(0xFFFFUL - (unsigned long)q);
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  SL_LerpZ
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Interpoler linéairement un code Z entre deux abscisses.
+ *
+ *  Paramètres :
+ *    [entrée] za/zb, codes aux positions xa/xb ; x, position demandée.
+ *
+ *  Retour :
+ *    Za si xa==xb, sinon za+(zb-za)*(x-xa)/(xb-xa), calcul intermédiaire
+ *    long.
+ *
+ *  Fonctionnement :
+ *    Aucune saturation ; le domaine interpolé et les produits doivent être
+ *    valides.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static SLZWord SL_LerpZ(SLZWord za, SLZWord zb, int xa, int xb, int x)
 {
     long num;
+    /* Garder la profondeur gauche pour une abscisse unique, sinon interpoler
+     * en long.
+     */
     if (xb == xa) return za;
     num = ((long)zb - (long)za) * (long)(x - xa);
     return (SLZWord)((long)za + num / (long)(xb - xa));
@@ -1096,11 +1368,46 @@ unsigned long sl_p_zptr, sl_p_pptr;
 int sl_p_n, sl_p_odd, sl_p_mode, sl_p_cl, sl_p_ci, sl_p_cr;
 unsigned int sl_p_zl, sl_p_zr;
 
+/*
+ * ----------------------------------------------------------------------------
+ *  SL_SpanRun
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Dessiner un span préclippé avec test Z strict dans un noyau 65C816.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Entrées et sorties implicites :
+ *    Entrée : paquet partagé sl_p_* : pointeurs Z et pixels far, parité
+ *    gauche, codes gauche/droite, couleurs gauche/intérieur/droite,
+ *    accumulateur et pas 16.16, nombre de pixels intérieurs et mode 0
+ *    (gauche seul) ou 1 (span complet).
+ *
+ *  Retour :
+ *    Aucun ; écrit Z et les nibbles de couleur.
+ *
+ *  Registres et indicateurs :
+ *    Préserve P et D ; A/X/Y modifiés, DBR inchangé. Mode décimal supposé
+ *    désactivé. Cadre D de 32 octets : zacc à 0/2, zstep à 4/6, zptr à 8/10,
+ *    pptr à 12/14, compte à 16, couleur basse/haute à 18/20, parité à 22,
+ *    masque/valeur à 24/26. Les profondeurs [8],Y peuvent franchir une
+ *    banque ; le pointeur de pixels n'est incrémenté que sur 16 bits et doit
+ *    rester dans sa banque. Traite les extrémités exactement et l'intérieur
+ *    par paires pair/impair. Les pixels de même code Z ne sont pas
+ *    remplacés. Non réentrant.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void SL_SpanRun(void)
 {
     asm {
-        /* Allocate a 32-byte direct-page frame on the stack and point D at it */
-        /* (the C direct page is saved by phd and restored by pld at the end). */
+
+
+        /* Sauvegarder le contexte et réserver 32 octets ; D est positionné
+         * sur le premier octet utile.
+         */
         php
         phd
         rep #0x30
@@ -1111,7 +1418,10 @@ static void SL_SpanRun(void)
         inc a
         tcd
 
-        /* Load the parameters into the frame (see the layout above). */
+
+        /* Copier le paquet dans le cadre direct et préparer les deux nibbles
+         * de couleur.
+         */
         lda >sl_p_zacc
         sta 0
         lda >sl_p_zacc+2
@@ -1130,7 +1440,7 @@ static void SL_SpanRun(void)
         sta 14
         lda >sl_p_n
         sta 16
-        /* Interior colour -> lo = 0x0N (low nibble) and hi = 0xN0 (high nibble). */
+
         lda >sl_p_ci
         and #0x000F
         sta 18
@@ -1139,14 +1449,12 @@ static void SL_SpanRun(void)
         asl a
         asl a
         sta 20
-        /* Parity of the first interior pixel = parity of the left pixel xor 1. */
+
         lda >sl_p_odd
         eor #1
         sta 22
-        /* Y = byte offset of the current pixel in the Z row (2 per pixel). */
-        /*  */
-        /* ---- LEFT PIXEL: exact zq (zl), colour cl ---- */
-        /* A = parity -> mask (24) of the nibble to keep, value (26) to OR in. */
+
+
         ldy #0
 
         lda >sl_p_odd
@@ -1167,8 +1475,9 @@ static void SL_SpanRun(void)
         asl a
         asl a
         sta 26
+    /* Tester la profondeur exacte du pixel gauche avant toute écriture du nibble. */
     zbr_l_go:
-        /* Depth test: draw only if zq is STRICTLY smaller (closer) than the stored Z. */
+
         lda >sl_p_zl
         cmp [8],y
         bcs zbr_lsk
@@ -1180,12 +1489,15 @@ static void SL_SpanRun(void)
         sta [12]
         rep #0x20
     zbr_lsk:
-        /* mode 0: left pixel only, we are done. */
+
         lda >sl_p_mode
         bne zbr_full
         brl zbr_done
-        /* Step over the left pixel: Z index += 2, and the pixel pointer moves to the */
-        /* next byte after an odd pixel (low nibble). */
+
+
+    /* Avancer après le pixel gauche ; l'adresse couleur progresse seulement
+     * après un pixel impair.
+     */
     zbr_full:
         iny
         iny
@@ -1194,12 +1506,13 @@ static void SL_SpanRun(void)
         inc 12
     zbr_lev:
 
-        /* ---- INTERIOR PIXELS (n may be 0) ---- */
+
         lda 16
         bne zbr_int
         brl zbr_right
-        /* If the first interior pixel is odd, do it alone so that the rest runs as */
-        /* (even, odd) pairs, one byte per pair. */
+
+
+    /* Traiter seul un premier pixel impair pour aligner le reste sur des paires. */
     zbr_int:
         lda 22
         beq zbp_even
@@ -1226,15 +1539,16 @@ static void SL_SpanRun(void)
         inc 12
         dec 16
 
-        /* Pairs: X = n / 2.  Each pass does an even pixel (high nibble) then an odd */
-        /* pixel (low nibble) and then moves the pixel pointer to the next byte. */
-        /* z += step is a 32-bit add; the high word is the pixel's zq. */
+
     zbp_even:
         lda 16
         lsr a
         tax
         beq zbp_tail
 
+    /* Avancer zacc en 32 bits pour chaque pixel ; propager C du mot bas au
+     * mot haut, puis tester Z.
+     */
     zbp_pair:
         clc
         lda 0
@@ -1278,7 +1592,8 @@ static void SL_SpanRun(void)
         dex
         bne zbp_pair
 
-        /* Tail: if n is odd, one last even pixel remains. */
+
+    /* Traiter l'éventuel pixel pair résiduel après les paires. */
     zbp_tail:
         lda 16
         and #1
@@ -1306,8 +1621,8 @@ static void SL_SpanRun(void)
         iny
         iny
 
-        /* ---- RIGHT PIXEL: exact zq (zr), colour cr ---- */
-        /* Parity = (parity of first interior pixel + n) & 1. */
+
+    /* Recalculer la parité et employer le code exact de l'extrémité droite. */
     zbr_right:
         lda >sl_p_n
         clc
@@ -1343,7 +1658,8 @@ static void SL_SpanRun(void)
         rep #0x20
     zbr_rsk:
 
-        /* Free the frame and restore D and the processor flags. */
+
+    /* Libérer exactement le cadre avant de restaurer D et P. */
     zbr_done:
         rep #0x30
         tsc
@@ -1356,7 +1672,28 @@ static void SL_SpanRun(void)
 }
 
 
-
+/*
+ * ----------------------------------------------------------------------------
+ *  SL_PaintSpan
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Préparer un span V3 qui utilise la seule ligne de profondeur courante.
+ *
+ *  Paramètres :
+ *    [entrée] x0/x1 inclus sans pan, screenY avec pan, z0/z1 aux extrémités,
+ *    fillColor/frameColor et nudge en codes.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Span déjà clippé requis. Soustrait nudge avec borne zéro, prépare
+ *    adresses et parité puis interpole Z en 16.16. Les deux extrémités
+ *    utilisent la couleur de contour.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void SL_PaintSpan(int x0, int x1, int screenY,
                          SLZWord z0, SLZWord z1,
                          int fillColor, int frameColor, int nudge)
@@ -1364,16 +1701,21 @@ static void SL_PaintSpan(int x0, int x1, int screenY,
     int sx0, nsteps;
     long zstep, zacc;
     if (x0 > x1) return;
+    /* Réduire les deux codes de profondeur sans passer sous zéro. */
     if (nudge) {
         z0 = (z0 > (SLZWord)nudge) ? (SLZWord)(z0-nudge) : 0;
         z1 = (z1 > (SLZWord)nudge) ? (SLZWord)(z1-nudge) : 0;
     }
+    /* Préparer les pointeurs de la ligne Z et de l'écran au premier pixel. */
     sx0 = x0 + pan_dx;
     sl_p_zptr = (unsigned long)(sl_zline + sx0);
     sl_p_pptr = SL_SHR_BASE + (unsigned long)screenY * 160UL + (unsigned long)(sx0 >> 1);
     sl_p_odd = sx0 & 1;
     sl_p_zl = z0;
     sl_p_cl = frameColor;
+    /* Le span ponctuel se limite au pixel gauche ; sinon préparer intérieur
+     * et bord droit.
+     */
     if (x0 == x1) {
         sl_p_mode = 0;
         SL_SpanRun();
@@ -1392,6 +1734,40 @@ static void SL_PaintSpan(int x0, int x1, int screenY,
     SL_SpanRun();
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer_coreV3
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Rendre les surfaces par balayage scanline V3 quantifié.
+ *
+ *  Paramètres :
+ *    [entrée] model valide avec projection et métriques à jour ; biased,
+ *    active le rapprochement des faces de plane_d>0 lorsque le culling est
+ *    désactivé.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    couleurs, mémoire Z, écran ou framebuffer, buffers statiques non
+ *    réentrants.
+ *
+ *  Fonctionnement :
+ *    N’effectue ni transformation ni classement des faces ; les faces actives sont
+ *    parcourues par identifiant pour définir les égalités de profondeur.
+ *    Réserve/réutilise buffers par sommet/face/arête, calcule 1/z, prépare
+ *    les arêtes, classe les débuts de face par histogramme puis balaie
+ *    uniquement les faces actives. Ligne Z de 320 codes 16 bits ; arêtes à
+ *    douze fractions, spans en 16.16 et petit nudge entier.
+ *
+ *    Le clipping du viewport est appliqué aux spans ; pas de clipping 3D
+ *    général. Les réserves et le comportement d'échec restent propres à
+ *    cette version.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
 {
     VertexArrays3D* vtx = &model->vertices;
@@ -1410,9 +1786,9 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
     static SLZWord* vzq_b = NULL;
     static int vert_capacity = 0;
 
-    static int* face_start = NULL;          /* first scanline of the face (relative to y_lo), -1 = skipped */
-    static int* face_sorted = NULL;         /* faces sorted by first scanline (counting sort)               */
-    static int* face_active = NULL;         /* faces crossing the current scanline, ascending face index    */
+    static int* face_start = NULL;
+    static int* face_sorted = NULL;
+    static int* face_active = NULL;
     static unsigned char* face_fill = NULL;
     static unsigned char* face_frame = NULL;
     static unsigned char* face_nudge = NULL;
@@ -1421,11 +1797,12 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
     static SLZEdge* edge_buf = NULL;
     static int edge_capacity = 0;
 
-    /* counting-sort tables: bucket[r] .. bucket[r+1]-1 = faces starting at row r */
+
     static int bucket[SCREEN_HEIGHT + 1];
     static int bucket_cur[SCREEN_HEIGHT + 1];
 
-    /* ---- scratch buffers: they only ever grow, so after the first frame there is no malloc ---- */
+
+    /* Réserver les tables de faces, couleurs et biais. */
     if (face_capacity < fcount) {
         if (face_start)   free(face_start);
         if (face_sorted)  free(face_sorted);
@@ -1442,6 +1819,7 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
         face_capacity = (face_start && face_sorted && face_active &&
                          face_fill && face_frame && face_nudge) ? fcount : 0;
     }
+    /* Agrandir les buffers de sommets et conserver leur capacité entre les rendus. */
     if (vert_capacity < vcount) {
         if (inv_z) free(inv_z);
         if (vzq)   free(vzq);
@@ -1464,12 +1842,11 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
     if (face_capacity < fcount || vert_capacity < vcount || edge_capacity < total_edges)
         return;
 
-    /* ---- PER VERTEX, once per frame -------------------------------------
-     * inv_z = 1/z is linear in screen space.  The scale that maps inv_z to the
-     * 16-bit range is chosen from the largest inv_z of this frame, then every
-     * vertex is quantised ONCE (zq: smaller = closer).  Everything after this
-     * point is integer: edges and spans only interpolate zq. */
+
     frame_max_inv_z = 0.0f;
+    /* Calculer les profondeurs inverses et les codes selon le format de
+     * cette version.
+     */
     for (i = 0; i < vcount; i++) {
         float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
         inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
@@ -1478,7 +1855,7 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
     SL_SetScale(frame_max_inv_z);
 
     for (i = 0; i < vcount; i++) {
-        /* vzq_b is the "pulled closer" copy used by faces with plane_d > 0 (biased only). */
+
         vzq[i]   = SL_Quantize(inv_z[i]);
         vzq_b[i] = biased ? SL_Quantize(inv_z[i] + SL_Z_BIAS) : vzq[i];
     }
@@ -1486,18 +1863,19 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
     SetPenMode(0);
     applyPalette(palette);
 
-    /* Visible window in model coordinates: the pan offsets (pan_dx, pan_dy) are
-     * added back when addressing the screen and the Z-buffer. */
+
     clip_x_min = -pan_dx;
     clip_x_max = SCREEN_WIDTH - 1 - pan_dx;
     y_lo = -pan_dy;
     y_hi = SCREEN_HEIGHT - 1 - pan_dy;
 
 
-    /* ---- PER FACE, once per frame -----------------------------------------
-     * - decide if the face can appear at all (shown, >= 3 vertices, overlaps the window)
-     * - cache its colours and depth nudge
-     * - set up one SLZEdge per polygon edge (see the SLZEdge comment) */
+    /* Transformer l'histogramme en offsets cumulés pour classer les débuts
+     * de faces.
+     */
+    /* Initialiser l'histogramme des premières lignes ; préparer visibilité,
+     * couleurs et arêtes.
+     */
     for (b = 0; b <= SCREEN_HEIGHT; b++) bucket[b] = 0;
 
     for (f = 0; f < fcount; f++) {
@@ -1512,11 +1890,10 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
         fmax = faces->maxy[f];
         if (fmax < y_lo || fmin > y_hi) continue;
 
-        /* First scanline we will actually visit: faces that start above the
-         * window are activated on its first row. */
+
         b = ((fmin > y_lo) ? fmin : y_lo) - y_lo;
         face_start[f] = b;
-        bucket[b + 1]++;       /* histogram of start rows (shifted by one for the prefix sum) */
+        bucket[b + 1]++;
 
         fill = getFaceFillColor(f);
         face_fill[f]  = (unsigned char)fill;
@@ -1538,25 +1915,23 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
             long zs, ex, ez, sx, sz, skip;
 
             if (dy == 0) {
-                ed->ya = 32767; ed->yb = 32767;      /* horizontal edge: never active */
+                ed->ya = 32767; ed->yb = 32767;
                 ed->x = 0L; ed->z = 0L; ed->sx = 0L; ed->sz = 0L;
                 continue;
             }
 
-            /* Slopes per scanline in 12-bit fixed point (dx/dy and dzq/dy). */
+
             sx = (((long)vtx->x2d[vid2] - (long)vtx->x2d[vid1]) * 4096L) / (long)dy;
             sz = (((long)zsrc[vid2] - (long)zsrc[vid1]) * 4096L) / (long)dy;
 
-            /* The edge is walked from its upper end downwards.  x is stored as an
-             * offset from xb (= x of vertex 1), so for dy < 0 the starting offset
-             * is x(v2) - x(v1) and the slopes stay valid (dx/dy changes sign with dy). */
+
             if (dy > 0) { ya = y1; yb = y2; xs = 0;                                        zs = (long)zsrc[vid1]; }
             else        { ya = y2; yb = y1; xs = vtx->x2d[vid2] - vtx->x2d[vid1];          zs = (long)zsrc[vid2]; }
 
             ex = (long)xs * 4096L;
             ez = zs * 4096L;
 
-            /* Edge starts above the visible window: jump straight to the first visible row. */
+
             if (ya < y_lo && yb > y_lo) {
                 skip = (long)(y_lo - ya);
                 ex += sx * skip;
@@ -1565,14 +1940,13 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
 
             ed->ya = ya;  ed->yb = yb;
             ed->xb = vtx->x2d[vid1];
-            ed->x  = ex + SL_Z_ROUND;     /* the +0.5 rounding is baked in once, here */
+            ed->x  = ex + SL_Z_ROUND;
             ed->z  = ez + SL_Z_ROUND;
             ed->sx = sx;  ed->sz = sz;
         }
     }
 
-    /* ---- COUNTING SORT: faces ordered by their first visible scanline ----
-     * (prefix sums turn the histogram into start offsets, then each face is placed). */
+
     for (b = 0; b < SCREEN_HEIGHT; b++) bucket[b + 1] += bucket[b];
     for (b = 0; b <= SCREEN_HEIGHT; b++) bucket_cur[b] = bucket[b];
     for (f = 0; f < fcount; f++) {
@@ -1580,20 +1954,20 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
         if (b >= 0) face_sorted[bucket_cur[b]++] = f;
     }
 
-    /* ---- MAIN LOOP: one scanline at a time ---------------------------------
-     * Only faces crossing the scanline are visited (active list), instead of
-     * testing every face on every row. */
+
+    /* Démarrer la liste des faces actives, puis balayer les lignes visibles. */
     active_count = 0;
     SL_ClearTop12Lines();
     for (y = y_lo; y <= y_hi; y++) {
         int screenY = y + pan_dy;
         int row = y - y_lo;
-        /* One-line Z-buffer: clear only the row reused for this scanline. */
+
         SL_ClearLine();
 
-        /* Faces that start on this row join the active list.  The list is kept in
-         * ascending face index (insertion sort) so that depth ties are resolved in the
-         * same order as a plain loop over all faces. */
+
+        /* Insérer les faces commençant sur cette ligne en gardant l'ordre
+         * d'identifiants.
+         */
         for (si = bucket[row]; si < bucket[row + 1]; si++) {
             int nf = face_sorted[si];
             int pos = active_count;
@@ -1606,39 +1980,44 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
         }
 
         keep = 0;
+        /* Écarter les faces terminées et extraire les intersections des
+         * arêtes actives.
+         */
         for (ai = 0; ai < active_count; ai++) {
             int n, offt, hit_count;
             int fillColor, frameColor, nudge;
 
             f = face_active[ai];
-            if (faces->maxy[f] < y) continue;      /* face finished: dropped from the list */
+            if (faces->maxy[f] < y) continue;
             face_active[keep++] = f;
 
             n = faces->vertex_count[f];
             offt = faces->vertex_indices_ptr[f];
             hit_count = 0;
 
-            /* Intersect the scanline with the polygon: every edge active on row y gives
-             * one hit (x, zq); the edge state is then advanced by one row. */
+
             ed = edge_buf + offt;
             for (k = 0; k < n; k++, ed++) {
                 if (y < ed->ya || y >= ed->yb) continue;
                 if (hit_count < MAX_SPAN_INTERSECTIONS) {
-                    /* Fixed-point -> pixel: truncate toward zero (like the (int)(v + 0.5f)
-                     * of the original float code), added to the edge's base x. */
+
+
                     long t = ed->x;
                     hits[hit_count].x  = ed->xb + ((t >= 0L) ? (int)(t >> SL_Z_FRAC) : -(int)((-t) >> SL_Z_FRAC));
                     hits[hit_count].zq = (SLZWord)(ed->z >> SL_Z_FRAC);
                     hit_count++;
                 }
-                /* advance even when the hit table is full, to keep the edge in step */
+
                 ed->x += ed->sx;
                 ed->z += ed->sz;
             }
 
             if (hit_count < 2) continue;
 
-            /* Sort the hits by x (a swap for the usual 2 hits, insertion sort otherwise). */
+
+            /* Ordonner les intersections : échange simple pour deux, tri par
+             * insertion au-delà.
+             */
             if (hit_count == 2) {
                 if (hits[0].x > hits[1].x) {
                     SLZHit tmp = hits[0];
@@ -1662,10 +2041,12 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
             frameColor = face_frame[f];
             nudge      = face_nudge[f];
 
-            /* Consecutive hit pairs are the inside spans of the polygon (even-odd rule).
-             * Clip each span to the window; zq at a clipped end is interpolated. */
+
             {
                 int p;
+                /* Apparier les intersections par parité, clipper les spans
+                 * et les transmettre au noyau de dessin.
+                 */
                 for (p = 0; p + 1 < hit_count; p += 2) {
                     int xa = hits[p].x;
                     int xb = hits[p + 1].x;
@@ -1694,31 +2075,140 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
 }
 
 
-
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer_fastV3
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Appeler renderModelScanlineZBuffer_coreV3 sans rapprochement des faces
+ *    de plane_d>0.
+ *
+ *  Paramètres :
+ *    [entrée] model valide avec données de vue préparées.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Reprend les préconditions, effets mémoire et règles de dessin du noyau
+ *    appelé.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void renderModelScanlineZBuffer_fastV3(Model3D* model)
 {
+    /* Transmettre explicitement le choix du biais au noyau commun. */
     renderModelScanlineZBuffer_coreV3(model, 0);
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer_biasedV3
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Appeler renderModelScanlineZBuffer_coreV3 avec rapprochement des faces
+ *    de plane_d>0.
+ *
+ *  Paramètres :
+ *    [entrée] model valide avec données de vue préparées.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Reprend les préconditions, effets mémoire et règles de dessin du noyau
+ *    appelé.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void renderModelScanlineZBuffer_biasedV3(Model3D* model)
 {
+    /* Transmettre explicitement le choix du biais au noyau commun. */
     renderModelScanlineZBuffer_coreV3(model, 1);
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer_fastV2
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Appeler renderModelScanlineZBuffer_coreV2 sans rapprochement des faces
+ *    de plane_d>0.
+ *
+ *  Paramètres :
+ *    [entrée] model valide avec données de vue préparées.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Reprend les préconditions, effets mémoire et règles de dessin du noyau
+ *    appelé.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void renderModelScanlineZBuffer_fastV2(Model3D* model)
 {
+    /* Transmettre explicitement le choix du biais au noyau commun. */
     renderModelScanlineZBuffer_coreV2(model, 0);
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer_biasedV2
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Appeler renderModelScanlineZBuffer_coreV2 avec rapprochement des faces
+ *    de plane_d>0.
+ *
+ *  Paramètres :
+ *    [entrée] model valide avec données de vue préparées.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Reprend les préconditions, effets mémoire et règles de dessin du noyau
+ *    appelé.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void renderModelScanlineZBuffer_biasedV2(Model3D* model)
 {
+    /* Transmettre explicitement le choix du biais au noyau commun. */
     renderModelScanlineZBuffer_coreV2(model, 1);
 }
 
-/* Dispatcher: the optimized V2 path replaces the former per-scanline/per-face
- * implementation.  The original functions remain above for A/B testing. */
+/*
+ * ----------------------------------------------------------------------------
+ *  renderModelScanlineZBuffer
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Choisir la variante de rendu public selon le back-face culling.
+ *
+ *  Paramètres :
+ *    [entrée] model valide et vue préparée.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Avec culling, chemin sans biais ; sans culling, chemin qui rapproche
+ *    les faces plane_d>0. La version scanline active est V3 ; V2 et les
+ *    anciennes versions restent hors de ce dispatch.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void renderModelScanlineZBuffer(Model3D* model)
 {
+    /* Sélectionner le noyau avec la politique de biais correspondant à la
+     * visibilité.
+     */
     if (cull_back_faces)
         renderModelScanlineZBuffer_fastV3(model);
     else

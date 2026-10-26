@@ -1,8 +1,26 @@
-/* Per-face depth/bounds/Newell scan, ORCA/C / 65816.
- * The C caller retains centroid division, plane D, culling and shading.
- * Products are raw signed 32x32 -> 64; normal accumulators shift only once,
- * after closing the polygon, exactly as in calculateFaceDepths().
- * Global packets are non-reentrant, like the shared multiplication helper.
+/*
+ * ============================================================================
+ *  face_depth_asm.c — Calcul assembleur des métriques des faces
+ * ============================================================================
+ *
+ *  Rôle :
+ *    Parcourir les sommets des faces pour calculer profondeurs, bornes
+ *    projetées, sommes de coordonnées et normale de Newell, en conservant le
+ *    comportement numérique du parcours C.
+ *
+ *  Organisation :
+ *    Les pointeurs invariants sont préparés une fois ; chaque appel de face
+ *    fournit sa liste d'indices. Le noyau ferme le cycle des sommets valides
+ *    et exporte une structure de résultats. La division du centroïde, le
+ *    terme d du plan et le culling final restent dans calculateFaceDepths.
+ *
+ *  Dépendances et contraintes :
+ *    Inclus conditionnellement par engine.c et dépend de GeoV3_Mul32x32. La
+ *    somme servant à z_mean reboucle sur 32 bits ; les sommes de centroïde
+ *    et de Newell sont sur 64 bits. Le décalage des normales intervient
+ *    après accumulation complète. Les paquets sont non réentrants.
+ *
+ * ============================================================================
  */
 typedef struct {
     int valid_n,display_flag;
@@ -13,18 +31,54 @@ typedef struct {
 static FaceDepthScanResult face_depth_result;
 static unsigned int face_depth_inputs[13];
 
-/* D-relative byte layout, using 148 bounded stack bytes:
- * 1/5/9/13/17/21: far pointers indices/xo/yo/zo/x2d/y2d; 25: remaining.
- * 27/29/31/33: index offset, valid count, display flag, previous-valid flag.
- * 35/39/43: z_min/z_max/wrapped 32-bit z sum; 47/49/51/53: screen bounds.
- * 55/63/71: signed 64-bit coordinate sums; 79/87/95: raw Newell sums.
- * 103..113: previous xyz; 115..125: first xyz; 127..137: current xyz.
- * 139/141/143/145: coordinate offset, comparison scratch, screen offset, n.
- * JSL's return and the multiplier's workspace live BELOW this frame. The
- * multiplier preserves D/X/Y and returns its four words in geo_mul_p.
+
+/*
+ * ----------------------------------------------------------------------------
+ *  FaceDepth_ScanKernel
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Parcourir une face pour calculer profondeurs, bornes, centroïde et
+ *    normale.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Entrées et sorties implicites :
+ *    [entrée] face_depth_inputs, pointeurs far puis longueur sur 16 bits.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    face_depth_result
+ *
+ *  Fonctionnement :
+ *    Noyau et multiplicateur non réentrants.
+ *
+ *    Pointeurs ORCA/C sur quatre octets, accès globaux longs.
+ *
+ *    La somme de profondeur conserve son rebouclage 32 bits ; les sommes du
+ *    centroïde sont 64 bits. Les normales ne sont décalées qu'après
+ *    fermeture du contour.
+ *
+ *  Registres et indicateurs :
+ *    Préserve P, A, X, Y et D.
+ *
+ *  Organisation mémoire :
+ *    Cadre D de 148 octets : indices/xo/yo/zo/x2d/y2d à 1/5/9/13/17/21 ;
+ *    longueur à 25 ; offset/valides/affichage/précédent à 27/29/31/33 ;
+ *    zmin/zmax/somme32 à 35/39/43 ; bbox à 47..53 ; sommes xyz 64 bits à
+ *    55/63/71 ; Newell brut à 79/87/95 ; xyz précédent/premier/courant à
+ *    103..113/115..125/127..137 ; temporaires à 139..145.
+ *
+ * ----------------------------------------------------------------------------
  */
 asm void FaceDepth_ScanKernel(void)
 {
+    /* Sauvegarder le contexte, désactiver le mode décimal et réserver les
+     * 148 octets du cadre D.
+     */
     php
     rep #0x30
     pha
@@ -37,7 +91,10 @@ asm void FaceDepth_ScanKernel(void)
     sbc #148
     tcs
     tcd
-    /* Only the 26 input bytes are copied; output/scratch is initialized here. */
+
+    /* Copier les 26 octets d'entrées ; initialiser séparément les compteurs,
+     * bornes et sommes.
+     */
     lda >face_depth_inputs
     sta 1
     lda >face_depth_inputs+2
@@ -71,9 +128,12 @@ asm void FaceDepth_ScanKernel(void)
     stz 33
     lda #1
     sta 31
-    /* Retain the original +/-9999 sentinels, even for unusual coordinates. */
+
     stz 35
     stz 39
+    /* Les sentinelles de bornes valent +/-9999 ; conserver ces valeurs même
+     * pour une géométrie inhabituelle.
+     */
     lda #0x270F
     sta 37
     sta 47
@@ -108,22 +168,28 @@ asm void FaceDepth_ScanKernel(void)
     stz 97
     stz 99
     stz 101
+/* Lire le prochain indice 16 bits ; ignorer les valeurs dont indice-1 est
+ * négatif, sans contrôle de borne supérieure.
+ */
 depth_scan_vertex:
     lda 25
     beq depth_scan_end_vertices
     bmi depth_scan_end_vertices
     ldy 27
     lda [1],y
-    dec a               // Match the original signed 16-bit index-minus-one.
+    dec a
     bpl depth_scan_valid_index
     brl depth_scan_next
 depth_scan_end_vertices:
     brl depth_scan_finish
+/* Calculer les offsets de deux octets pour l'écran et quatre pour les
+ * coordonnées observateur.
+ */
 depth_scan_valid_index:
     asl a
-    sta 143             // Two bytes per screen coordinate.
+    sta 143
     asl a
-    sta 139             // Four bytes per observer coordinate.
+    sta 139
     tay
     ldy 139
     lda [5],y
@@ -148,11 +214,13 @@ depth_scan_valid_index:
     sta 137
     lda 137
     bpl depth_scan_z_nonnegative
-    stz 31              // Any negative observer depth hides the entire face.
+    stz 31
+/* Après exclusion des profondeurs négatives, comparer zmin avec mot haut
+ * signé biaisé puis mot bas non signé.
+ */
 depth_scan_z_nonnegative:
-    /* Signed 32-bit comparisons: bias only the high word, then compare
-     * equal-high low words unsigned. No subtraction overflow is possible.
-     */
+
+
     lda 37
     eor #0x8000
     sta 141
@@ -174,6 +242,7 @@ depth_scan_zmin_store:
     sta 35
     lda 137
     sta 37
+/* Mettre à jour zmax avec la même comparaison multi-mot. */
 depth_scan_zmin_done:
     lda 41
     eor #0x8000
@@ -195,10 +264,12 @@ depth_scan_zmax_store:
     sta 39
     lda 137
     sta 41
+/* Cumuler z pour la moyenne en 32 bits avec rebouclage, puis étendre les
+ * bornes écran X/Y.
+ */
 depth_scan_zmax_done:
-    /* z_mean intentionally uses the old wrapping 32-bit sum; centroid
-     * uses separate sign-extended 64-bit sums. These are not interchangeable.
-     */
+
+
     clc
     lda 43
     adc 135
@@ -245,8 +316,11 @@ depth_scan_ymin_done:
     ldy 143
     lda [21],y
     sta 53
+/* Accumuler les coordonnées des sommets pour le centroïde, avec extension du
+ * signe sur 64 bits.
+ */
 depth_scan_ymax_done:
-    /* Sign extension before accumulation retains all 64 centroid bits. */
+
     ldx #0
     lda 129
     bpl depth_scan_sumx_positive
@@ -259,13 +333,13 @@ depth_scan_sumx_positive:
     lda 57
     adc 129
     sta 57
-    txa                 // TXA preserves carry into the sign-extension words.
+    txa
     adc 59
     sta 59
     txa
     adc 61
     sta 61
-    /* Sign extension before accumulation retains all 64 centroid bits. */
+
     ldx #0
     lda 133
     bpl depth_scan_sumy_positive
@@ -278,13 +352,13 @@ depth_scan_sumy_positive:
     lda 65
     adc 133
     sta 65
-    txa                 // TXA preserves carry into the sign-extension words.
+    txa
     adc 67
     sta 67
     txa
     adc 69
     sta 69
-    /* Sign extension before accumulation retains all 64 centroid bits. */
+
     ldx #0
     lda 137
     bpl depth_scan_sumz_positive
@@ -297,7 +371,7 @@ depth_scan_sumz_positive:
     lda 73
     adc 137
     sta 73
-    txa                 // TXA preserves carry into the sign-extension words.
+    txa
     adc 75
     sta 75
     txa
@@ -326,6 +400,9 @@ depth_scan_sumz_positive:
     sta 113
     sta 125
     brl depth_scan_next
+/* Ajouter l'arête depuis le sommet valide précédent aux sommes de Newell ;
+ * mémoriser ensuite le sommet courant.
+ */
 depth_scan_have_previous:
     jsl depth_scan_edge
     lda 127
@@ -340,15 +417,20 @@ depth_scan_have_previous:
     sta 111
     lda 137
     sta 113
+/* Avancer dans la liste d'indices sans relier une entrée invalide à la
+ * géométrie.
+ */
 depth_scan_next:
     inc 27
     inc 27
     dec 25
     brl depth_scan_vertex
+/* Fermer le cycle avec le premier sommet valide uniquement si la face est
+ * affichable et possède au moins trois sommets valides.
+ */
 depth_scan_finish:
-    /* The C reference closes/shifts only a visible nondegenerate face.
-     * Invalid indices are skipped; the cycle joins successive VALID vertices.
-     */
+
+
     lda 31
     beq depth_scan_export
     lda 145
@@ -370,8 +452,10 @@ depth_scan_finish:
     lda 125
     sta 137
     jsl depth_scan_edge
-    /* Arithmetic shift by exactly one word AFTER the full Newell sum.
-     * Discard bits 0..15 and sign-extend bits 48..63 into the new top word.
+
+
+    /* Décaler la somme de Newell a de 16 bits après accumulation complète et
+     * étendre son signe.
      */
     lda 81
     sta 79
@@ -387,6 +471,9 @@ depth_scan_a_extend_positive:
     lda #0
 depth_scan_a_extend:
     sta 85
+    /* Décaler la somme de Newell b de 16 bits après accumulation complète et
+     * étendre son signe.
+     */
     lda 89
     sta 87
     lda 91
@@ -401,6 +488,9 @@ depth_scan_b_extend_positive:
     lda #0
 depth_scan_b_extend:
     sta 93
+    /* Décaler la somme de Newell c de 16 bits après accumulation complète et
+     * étendre son signe.
+     */
     lda 97
     sta 95
     lda 99
@@ -415,8 +505,11 @@ depth_scan_c_extend_positive:
     lda #0
 depth_scan_c_extend:
     sta 101
+/* Copier les résultats dans l'ordre des champs C alignés sur deux octets,
+ * puis restaurer le contexte.
+ */
 depth_scan_export:
-    /* Export in the native C struct's 16-bit-aligned field order. */
+
     lda 29
     sta >face_depth_result
     lda 31
@@ -500,13 +593,15 @@ depth_scan_export:
     plp
     rtl
 
-/* Local subroutine: add the edge previous -> current to all three raw
- * Newell sums. Coordinate sums/differences wrap at 32 bits as in Fixed32 C;
- * multiplication and accumulation retain the complete signed 64-bit product.
- * Each axis uses the same shared multiplier, without a C call or 64-bit copy.
+
+/* Sous-routine locale appelée par JSL : ajouter les trois produits de Newell
+ * bruts sur 64 bits ; RTL revient dans le noyau.
  */
 depth_scan_edge:
-    /* a += (previous_y - current_y) * (previous_z + current_z). */
+
+    /* a += (yp-yc) * (zp+zc) ; différences et sommes 32 bits, produit et
+     * cumul 64 bits avec retenues.
+     */
     sec
     lda 107
     sbc 131
@@ -535,7 +630,10 @@ depth_scan_edge:
     lda 85
     adc >geo_mul_p+6
     sta 85
-    /* b += (previous_z - current_z) * (previous_x + current_x). */
+
+    /* b += (zp-zc) * (xp+xc) ; différences et sommes 32 bits, produit et
+     * cumul 64 bits avec retenues.
+     */
     sec
     lda 111
     sbc 135
@@ -564,7 +662,10 @@ depth_scan_edge:
     lda 93
     adc >geo_mul_p+6
     sta 93
-    /* c += (previous_x - current_x) * (previous_y + current_y). */
+
+    /* c += (xp-xc) * (yp+yc) ; différences et sommes 32 bits, produit et
+     * cumul 64 bits avec retenues.
+     */
     sec
     lda 103
     sbc 127
@@ -596,35 +697,110 @@ depth_scan_edge:
     rtl
 }
 
-/* Stable observer-array pointers are staged once per calculateFaceDepths(). */
+
+/*
+ * ----------------------------------------------------------------------------
+ *  FaceDepth_ScanSetup
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Préparer les pointeurs de coordonnées pour un parcours complet des
+ *    faces.
+ *
+ *  Paramètres :
+ *    [entrée] vtx, tableaux observateur et projetés déjà calculés.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    paquet global ; les pointeurs doivent rester stables jusqu'à la fin du
+ *    parcours.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void FaceDepth_ScanSetup(VertexArrays3D *vtx)
 {
+    /* Installer une fois les cinq pointeurs de coordonnées invariants pour
+     * le parcours des faces.
+     */
     memcpy(&face_depth_inputs[2],&vtx->xo,4);
     memcpy(&face_depth_inputs[4],&vtx->yo,4);
     memcpy(&face_depth_inputs[6],&vtx->zo,4);
     memcpy(&face_depth_inputs[8],&vtx->x2d,4);
     memcpy(&face_depth_inputs[10],&vtx->y2d,4);
 }
+
+/*
+ * ----------------------------------------------------------------------------
+ *  FaceDepth_ScanFace
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Calculer les métriques d'une liste d'indices de face.
+ *
+ *  Paramètres :
+ *    [entrée] faces ; offset dans vertex_indices_buffer ; n, nombre
+ *    d'indices.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    face_depth_result ; utilise les coordonnées préparées par
+ *    FaceDepth_ScanSetup.
+ *
+ *  Fonctionnement :
+ *    L'appelant doit garantir la validité de la liste.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void FaceDepth_ScanFace(FaceArrays3D *faces,int offset,int n)
 {
+    /* Décrire la liste de la face puis exécuter le noyau ; le résultat reste
+     * dans face_depth_result.
+     */
     int *indices=faces->vertex_indices_buffer+offset;
     memcpy(face_depth_inputs,&indices,4);
     face_depth_inputs[12]=(unsigned int)n;
     FaceDepth_ScanKernel();
 }
 
-/* Averages still truncate toward zero. Most coordinate sums fit signed 32
- * bits: prove that before using a cheaper 32-bit division. Four-vertex faces
- * use a shift with a negative-value bias; unproven wide sums retain C division.
- * Coordinate sums cannot overflow when adding 3 (at most MAX_VERTICES int32s).
+
+/*
+ * ----------------------------------------------------------------------------
+ *  FaceDepth_CentroidCoordinate
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Diviser une somme de coordonnées par le nombre de sommets valides.
+ *
+ *  Paramètres :
+ *    [entrée] sum, somme 64 bits ; count, diviseur strictement positif.
+ *
+ *  Retour :
+ *    Moyenne Fixed32 tronquée vers zéro.
+ *
+ *  Fonctionnement :
+ *    Aucun effet de bord. Réduit à une division 32 bits si possible ; pour
+ *    count=4, ajoute 3 aux sommes négatives avant le décalage de deux bits
+ *    afin de conserver la troncature C.
+ *
+ * ----------------------------------------------------------------------------
  */
 static Fixed32 FaceDepth_CentroidCoordinate(Fixed64 sum,int count)
 {
+    /* Prouver que la somme tient sur 32 bits avant de prendre la division
+     * plus courte.
+     */
     Fixed32 narrow=(Fixed32)sum;
     if(sum==(Fixed64)narrow){
         if(count==4)return (narrow+(narrow<0?3L:0L))>>2;
         return narrow/count;
     }
+    /* Pour quatre sommets, corriger les négatifs avant le décalage afin de
+     * tronquer vers zéro.
+     */
     if(count==4)return (Fixed32)((sum+(sum<0?3:0))>>2);
     return (Fixed32)(sum/count);
 }

@@ -1,25 +1,77 @@
-/* GEO plane classification, signed 32-bit coefficients with 64-bit sums.
- * Included by engine.c after the V5 multiplication helper.
- * Non-reentrant, like GeoV3_Mul32x32: global input/output staging is shared.
- * Each product is shifted separately, preserving the C rounding behavior.
+/*
+ * ============================================================================
+ *  geo_relation_asm.c — Classification assembleur des sommets par rapport à
+ *  un plan
+ * ============================================================================
+ *
+ *  Rôle :
+ *    Déterminer si les sommets d'une face se trouvent tous du même côté
+ *    qu'un observateur, tous du côté opposé, ou de côtés incompatibles par
+ *    rapport à un plan de référence.
+ *
+ *  Organisation :
+ *    Les wrappers construisent ou réutilisent un paquet de plan préparé. Le
+ *    noyau évalue les produits signés 32x32 vers 64 bits, décale chaque
+ *    terme séparément et compare la somme à la bande de tolérance. Le côté
+ *    exact des sommets est mémorisé par plan.
+ *
+ *  Dépendances et contraintes :
+ *    Inclus par engine.c après GeoV3_Mul32x32. Le noyau requiert des
+ *    coefficients a/b/c représentables sur 32 bits et les bornes de d
+ *    validées par ordering_fixed_plane. Le paquet et le multiplicateur sont
+ *    partagés ; les accès globaux longs évitent une dépendance à DBR.
+ *
+ * ============================================================================
  */
 static unsigned int geo_rel_words[40];
 static int geo_rel_result;
 
-/* Direct-page layout (byte offsets):
- * 1: index pointer; 5/9/13: x/y/z pointers (four bytes per pointer)
- * 17: remaining vertices; 19: observer side; 21/23: all_same/all_opp
- * 25..31: accumulator; 33..39: epsilon; 41..47: -epsilon
- * 49..55: d; 57..67: a/b/c (two words each)
- * 69: coordinate byte offset; 71: index-list byte offset.
- * 73: far pointer to the prepared plane's packed vertex-side cache.
- * 77: one-based vertex ID; 79: cache slot byte offset.
- * Cache entries are valid for exactly this plane/epsilon/transformation.
- * Even on-plane vertices are cached; no geometric tolerance is changed.
- * The existing multiplier preserves D, X and Y across its long call.
+
+/*
+ * ----------------------------------------------------------------------------
+ *  GeoRel_Classify32Kernel
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Classer une face candidate par rapport au plan et au côté de
+ *    l'observateur.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Entrées et sorties implicites :
+ *    [entrée] geo_rel_words
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    geo_rel_result, -1 avant, +1 après, 0 indéterminé.
+ *
+ *  Registres et indicateurs :
+ *    Préserve P, A, X, Y et D ; accès globaux longs indépendants de DBR.
+ *
+ *  Organisation mémoire :
+ *    Cadre D, 80 octets : indices à 1 ; xo/yo/zo à 5/9/13 ; reste/obs à
+ *    17/19 ; all_same/all_opp à 21/23 ; acc à 25..31 ; epsilon à 33..39 ;
+ *    -epsilon à 41..47 ; d à 49..55 ; a/b/c à 57..67 ; offsets à 69/71 ;
+ *    cache far à 73 ; ID/slot à 77/79.
+ *
+ *  Préconditions :
+ *    coefficients a/b/c signés 32 bits, |d| <= 2^62, epsilon >= 0, indices
+ *    et cache de côtés valides. Décale chaque produit de 16 bits avant
+ *    somme.
+ *
+ *    Cache partagé valide seulement pour le plan, la tolérance et la vue
+ *    préparés.
+ *
+ * ----------------------------------------------------------------------------
  */
 asm void GeoRel_Classify32Kernel(void)
 {
+    /* Sauvegarder P/A/X/Y/D, imposer les tailles 16 bits et réserver 80
+     * octets en page directe sur la pile.
+     */
     php
     rep #0x30
     pha
@@ -33,9 +85,9 @@ asm void GeoRel_Classify32Kernel(void)
     tcs
     tcd
 
-    /* Copy only live packet fields. Unrolled long loads/direct-page stores
-     * avoid loop/index overhead on every relation, including vertex-cache hits.
-     * Flags, accumulator and per-vertex offsets are initialized below instead.
+
+    /* Copier seulement les entrées du paquet ; initialise ensuite offset et
+     * hypothèses all_same/all_opp.
      */
     lda >geo_rel_words
     sta 1
@@ -102,13 +154,19 @@ asm void GeoRel_Classify32Kernel(void)
     sta 21
     sta 23
 
+/* Parcourir les indices OBJ à base un ; terminer dès que tous les sommets
+ * sont classés.
+ */
 geo_rel_vertex:
     lda 17
     bne geo_rel_have_vertex
     brl geo_rel_finish
+/* Chercher le sommet dans le cache du plan : vérifier les 13 bits
+ * d'identifiant avant d'interpréter le code de côté.
+ */
 geo_rel_have_vertex:
     ldy 71
-    lda [1],y           // OBJ indices are one-based, native 16-bit integers.
+    lda [1],y
     sta 77
     inc 71
     inc 71
@@ -125,6 +183,9 @@ geo_rel_have_vertex:
     cmp #0x2000
     bne geo_rel_cached_off_plane
     brl geo_rel_next
+/* Réutiliser le côté positif ou négatif ; un sommet dans la tolérance
+ * n'élimine aucune hypothèse.
+ */
 geo_rel_cached_off_plane:
     cmp #0x4000
     bne geo_rel_cached_negative
@@ -133,11 +194,14 @@ geo_rel_cached_off_plane:
 geo_rel_cached_negative:
     lda #0xFFFF
     brl geo_rel_side
+/* Passer à un offset de coordonnées de quatre octets et initialiser
+ * l'accumulateur 64 bits avec d.
+ */
 geo_rel_vertex_uncached:
     lda 77
     dec a
     asl a
-    asl a               // Four bytes per Fixed32 coordinate.
+    asl a
     sta 69
     lda 49
     sta 25
@@ -146,13 +210,16 @@ geo_rel_vertex_uncached:
     lda 53
     sta 29
     lda 55
-    sta 31              // Start from d; bounded sums cannot overflow.
+    sta 31
 
-    /* Add (coefficient_x * coordinate_x) >> 16, in signed 64 bits. */
+
     lda 57
     ora 59
     bne geo_rel_x_multiply
     brl geo_rel_x_done
+/* Ajouter (x * coefficient_x) >> 16. Le multiplicateur préserve D/X/Y ; le
+ * produit est partagé dans geo_mul_p.
+ */
 geo_rel_x_multiply:
     lda 57
     sta >geo_mul_inputs
@@ -166,15 +233,18 @@ geo_rel_x_multiply:
     lda [5],y
     sta >geo_mul_inputs+6
     jsl GeoV3_Mul32x32
-    /* Discard the low word, then sign-extend the shifted 48-bit product. */
+
     lda >geo_mul_p+6
     bpl geo_rel_x_positive
     lda #0xFFFF
     bra geo_rel_x_extend
 geo_rel_x_positive:
     lda #0
+/* Étendre le signe du produit décalé sur 64 bits ; propager C entre les
+ * quatre additions sans le perdre lors de TXA.
+ */
 geo_rel_x_extend:
-    tax                 // X supplies the sign-extension word, not a pointer.
+    tax
     clc
     lda 25
     adc >geo_mul_p+2
@@ -185,16 +255,19 @@ geo_rel_x_extend:
     lda 29
     adc >geo_mul_p+6
     sta 29
-    txa                 // TXA does not alter carry from the third ADC.
+    txa
     adc 31
     sta 31
 geo_rel_x_done:
 
-    /* Add (coefficient_y * coordinate_y) >> 16, in signed 64 bits. */
+
     lda 61
     ora 63
     bne geo_rel_y_multiply
     brl geo_rel_y_done
+/* Ajouter (y * coefficient_y) >> 16. Le multiplicateur préserve D/X/Y ; le
+ * produit est partagé dans geo_mul_p.
+ */
 geo_rel_y_multiply:
     lda 61
     sta >geo_mul_inputs
@@ -208,15 +281,18 @@ geo_rel_y_multiply:
     lda [9],y
     sta >geo_mul_inputs+6
     jsl GeoV3_Mul32x32
-    /* Discard the low word, then sign-extend the shifted 48-bit product. */
+
     lda >geo_mul_p+6
     bpl geo_rel_y_positive
     lda #0xFFFF
     bra geo_rel_y_extend
 geo_rel_y_positive:
     lda #0
+/* Étendre le signe du produit décalé sur 64 bits ; propager C entre les
+ * quatre additions sans le perdre lors de TXA.
+ */
 geo_rel_y_extend:
-    tax                 // X supplies the sign-extension word, not a pointer.
+    tax
     clc
     lda 25
     adc >geo_mul_p+2
@@ -227,16 +303,19 @@ geo_rel_y_extend:
     lda 29
     adc >geo_mul_p+6
     sta 29
-    txa                 // TXA does not alter carry from the third ADC.
+    txa
     adc 31
     sta 31
 geo_rel_y_done:
 
-    /* Add (coefficient_z * coordinate_z) >> 16, in signed 64 bits. */
+
     lda 65
     ora 67
     bne geo_rel_z_multiply
     brl geo_rel_z_done
+/* Ajouter (z * coefficient_z) >> 16. Le multiplicateur préserve D/X/Y ; le
+ * produit est partagé dans geo_mul_p.
+ */
 geo_rel_z_multiply:
     lda 65
     sta >geo_mul_inputs
@@ -250,15 +329,18 @@ geo_rel_z_multiply:
     lda [13],y
     sta >geo_mul_inputs+6
     jsl GeoV3_Mul32x32
-    /* Discard the low word, then sign-extend the shifted 48-bit product. */
+
     lda >geo_mul_p+6
     bpl geo_rel_z_positive
     lda #0xFFFF
     bra geo_rel_z_extend
 geo_rel_z_positive:
     lda #0
+/* Étendre le signe du produit décalé sur 64 bits ; propager C entre les
+ * quatre additions sans le perdre lors de TXA.
+ */
 geo_rel_z_extend:
-    tax                 // X supplies the sign-extension word, not a pointer.
+    tax
     clc
     lda 25
     adc >geo_mul_p+2
@@ -269,16 +351,18 @@ geo_rel_z_extend:
     lda 29
     adc >geo_mul_p+6
     sta 29
-    txa                 // TXA does not alter carry from the third ADC.
+    txa
     adc 31
     sta 31
+/* Comparer acc à +epsilon : biaiser uniquement le mot de poids fort par XOR
+ * $8000, puis comparer les mots bas sans signe.
+ */
 geo_rel_z_done:
 
-    /* Compare acc to epsilon without subtraction overflow.
-     * Bias the signed top words; compare remaining words as unsigned. */
+
     lda 39
     eor #0x8000
-    sta 69              // Coordinate offset is no longer needed for this vertex.
+    sta 69
     lda 31
     eor #0x8000
     cmp 69
@@ -302,13 +386,15 @@ geo_rel_upper_less:
 geo_rel_upper_greater:
     brl geo_rel_positive
 
+/* Comparer acc à -epsilon par mots hauts signés biaisés, puis mots
+ * inférieurs non signés ; éviter une soustraction débordante.
+ */
 geo_rel_check_negative:
 
-    /* Compare acc to -epsilon without subtraction overflow.
-     * Bias the signed top words; compare remaining words as unsigned. */
+
     lda 47
     eor #0x8000
-    sta 69              // Coordinate offset is no longer needed for this vertex.
+    sta 69
     lda 31
     eor #0x8000
     cmp 69
@@ -332,12 +418,16 @@ geo_rel_lower_less:
 geo_rel_lower_greater:
     brl geo_rel_on_plane
 
+/* Mémoriser un sommet dans la bande de tolérance, sans départager les faces. */
 geo_rel_on_plane:
     lda 77
     ora #0x2000
     ldy 79
     sta [73],y
     brl geo_rel_next
+/* Mémoriser le côté positif et transmettre +1 au test par rapport à
+ * l'observateur.
+ */
 geo_rel_positive:
     lda 77
     ora #0x4000
@@ -345,37 +435,51 @@ geo_rel_positive:
     sta [73],y
     lda #1
     bra geo_rel_side
+/* Mémoriser le côté négatif et transmettre -1 au test par rapport à
+ * l'observateur.
+ */
 geo_rel_negative:
     lda 77
     ora #0x6000
     ldy 79
     sta [73],y
     lda #0xFFFF
+/* Un sommet du côté observateur exclut all_opp ; un sommet opposé exclut
+ * all_same.
+ */
 geo_rel_side:
     cmp 19
     bne geo_rel_opposite
-    stz 23              // A vertex on the observer side rules out all_opp.
+    stz 23
     bra geo_rel_flags
 geo_rel_opposite:
-    stz 21              // A vertex on the other side rules out all_same.
+    stz 21
+/* Si les deux hypothèses sont éliminées, rendre immédiatement une relation
+ * indéterminée.
+ */
 geo_rel_flags:
     lda 21
     ora 23
     bne geo_rel_next
-    lda #0              // Mixed sides: early return, relation undetermined.
+    lda #0
     bra geo_rel_store
+/* Décrémenter le nombre de sommets restant à classer. */
 geo_rel_next:
     dec 17
     brl geo_rel_vertex
+/* Priorité à all_same, même pour une liste vide, conformément au chemin C. */
 geo_rel_finish:
     lda 21
     beq geo_rel_not_same
-    lda #0xFFFF         // Preserve C priority: all_same wins, even if no vertices.
+    lda #0xFFFF
     bra geo_rel_store
 geo_rel_not_same:
     lda 23
     beq geo_rel_store
     lda #1
+/* Publier le résultat puis libérer les 80 octets et restaurer les registres
+ * et P.
+ */
 geo_rel_store:
     sta >geo_rel_result
     tsc
@@ -390,8 +494,30 @@ geo_rel_store:
     rtl
 }
 
-/* Called once per uncached relation, only after the coefficient/d bounds test.
- * Packet copying avoids dependence on the ORCA/C assembly parameter ABI.
+
+/*
+ * ----------------------------------------------------------------------------
+ *  GeoRel_Classify32
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Construire le paquet complet et appeler le noyau de classement.
+ *
+ *  Paramètres :
+ *    [entrée] model, face candidate ; a/b/c en 16.16 sur 32 bits ; d et
+ *    epsilon sur 64 bits ; obs, côté de l'observateur ; vertex_sides, cache
+ *    de 64 mots.
+ *
+ *  Retour :
+ *    -1 avant, +1 après, 0 indéterminé selon le plan fourni.
+ *
+ *  Sorties et effets de bord :
+ *    paquet global, cache de côtés et résultat ; invalide le paquet préparé.
+ *
+ *  Fonctionnement :
+ *    L'appelant garantit les bornes arithmétiques requises par le noyau.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int GeoRel_Classify32(Model3D *model, int face,
                             Fixed32 a, Fixed32 b, Fixed32 c,
@@ -401,7 +527,13 @@ static int GeoRel_Classify32(Model3D *model, int face,
     int *indices = model->faces.vertex_indices_buffer
                  + model->faces.vertex_indices_ptr[face];
     Fixed64 negative_epsilon = -epsilon;
-    order_asm_packet_plane=NULL; /* Raw diagnostic calls replace the packet. */
+    /* Un appel brut remplace le paquet ; invalider le raccourci de
+     * réutilisation du plan préparé.
+     */
+    order_asm_packet_plane=NULL;
+    /* Marshaler les pointeurs far, coefficients et tolérances par copies de
+     * mots natifs little-endian.
+     */
     memcpy(&geo_rel_words[0], &indices, 4);
     memcpy(&geo_rel_words[2], &model->vertices.xo, 4);
     memcpy(&geo_rel_words[4], &model->vertices.yo, 4);
@@ -419,21 +551,47 @@ static int GeoRel_Classify32(Model3D *model, int face,
     return geo_rel_result;
 }
 
-/* Reuse invariant plane inputs while classifying successive candidate faces.
- * Only the index-list pointer and vertex count vary. This also reduces the C
- * call packet to three arguments instead of repeatedly passing 64-bit values.
+
+/*
+ * ----------------------------------------------------------------------------
+ *  GeoRel_ClassifyPrepared
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Classer une face en réutilisant le paquet d'un plan préparé.
+ *
+ *  Paramètres :
+ *    [entrée] model, face candidate et plane retourné par
+ *    ordering_fixed_plane.
+ *
+ *  Retour :
+ *    Relation -1/0/+1 du noyau.
+ *
+ *  Sorties et effets de bord :
+ *    paquet et cache de côtés du plan.
+ *
+ *  Fonctionnement :
+ *    Reconstruit le paquet complet au changement de plan ; sinon remplace
+ *    uniquement la liste d'indices et sa longueur. Non réentrant : les
+ *    globals sont partagés.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int GeoRel_ClassifyPrepared(Model3D *model,int face,OrderFixedPlane *plane)
 {
     static int packet_face=-1;
     static Fixed64 packet_epsilon=0;
     int *indices,result;
+    /* Reconstruire le paquet si le plan, la face de référence ou epsilon change. */
     if(order_asm_packet_plane!=plane || packet_face!=plane->face || packet_epsilon!=plane->epsilon){
         result=GeoRel_Classify32(model,face,plane->a32,plane->b32,plane->c32,
                                  plane->d,plane->epsilon,plane->observer,plane->vertex_sides);
         order_asm_packet_plane=plane;packet_face=plane->face;packet_epsilon=plane->epsilon;
         return result;
     }
+    /* Pour le même plan, seuls le pointeur d'indices et le nombre de sommets
+     * de la face candidate changent.
+     */
     indices=model->faces.vertex_indices_buffer+model->faces.vertex_indices_ptr[face];
     memcpy(&geo_rel_words[0],&indices,4);
     geo_rel_words[8]=model->faces.vertex_count[face];

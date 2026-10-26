@@ -1,3 +1,8 @@
+cr 2.8 : 8731 ==> 273 ticks
+cr max : 889 ==> 28 ticks
+kegs max : 32  ==> 1 tick 
+
+
 voici les temps mesurés pou chaque painter, pour un modele de 500 faces :
 FAST : 54
 BUBBLE SORT : 94

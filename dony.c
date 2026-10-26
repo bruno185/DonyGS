@@ -1,18 +1,33 @@
-/* GEOV3 painter - cleaned final version.
- * Geometric tests use geometric_face_relation() in both directions. 
- Inspired by Robert Dony's algorithm. */
-
-/* Uncomment to use the original C depth/bounds candidate scan. */
-// #define GEOV3_DISABLE_ASM_SCAN
+/*
+ * ============================================================================
+ *  dony.c — Classement GEO V3 par sélection et reprise
+ * ============================================================================
+ *
+ *  Rôle :
+ *    Construire un ordre arrière-vers-avant selon une stratégie inspirée de
+ *    Robert Dony : sélectionner une face, comparer les candidates et
+ *    reprendre la sélection après permutation.
+ *
+ *  Organisation :
+ *    Un tri stable par profondeur maximale prépare le parcours. Les
+ *    intervalles disjoints sont rejetés, puis les plans sont testés dans les
+ *    deux sens. Les cas ambigus utilisent le chevauchement projeté et le ray
+ *    casting hiérarchique. Des stamps et un cache de paires limitent les
+ *    cycles.
+ *
+ *  Dépendances et contraintes :
+ *    Inclus par engine.c ; dony_scan_asm.c fournit le filtrage par défaut.
+ *    GEOV3_DISABLE_ASM_SCAN sélectionne le filtrage C. Les métriques doivent
+ *    être préparées avant le tri et rester stables pendant son exécution.
+ *    Cette variante ne découpe pas les faces.
+ *
+ * ============================================================================
+ */
 #if !defined(GEOV3_DISABLE_ASM_SCAN)
 #include "dony_scan_asm.c"
 #endif
 
-/* Ray-cast cycle guard: track unordered face pairs, not individual faces.
- * Each selection pass can perform at most nf permutations, so nf entries
- * suffice for all ray-cast swaps. Hash collisions use exact-key chaining;
- * they never suppress an unrelated pair. Separate arrays stay small on IIGS.
- */
+
 #define DONY_RAY_PAIR_BUCKETS 256
 typedef struct {
     unsigned int *first, *second, *next;
@@ -22,13 +37,39 @@ typedef struct {
     unsigned int count;
 } DonyRayPairs;
 
+
+/*
+ * ----------------------------------------------------------------------------
+ *  dony_ray_pairs_reserve
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Réserver les listes de paires utilisées pour empêcher les cycles de ray
+ *    casting.
+ *
+ *  Paramètres :
+ *    [entrée] cache, structure possédant ses buffers ; nf, capacité requise.
+ *
+ *  Retour :
+ *    1 si la capacité suffit ou a été augmentée, 0 si une allocation échoue.
+ *
+ *  Sorties et effets de bord :
+ *    buffers remplacés seulement après réussite des trois allocations ;
+ *    count et stamps sont réinitialisés lors de l'agrandissement.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int dony_ray_pairs_reserve(DonyRayPairs *cache, int nf)
 {
     unsigned int *a, *b, *next;
+    /* Réutiliser la capacité existante ; sinon allouer un nouveau jeu
+     * complet avant de remplacer l'ancien.
+     */
     if (nf <= cache->capacity) return 1;
     a = (unsigned int*)malloc((size_t)nf * sizeof(unsigned int));
     b = (unsigned int*)malloc((size_t)nf * sizeof(unsigned int));
     next = (unsigned int*)malloc((size_t)nf * sizeof(unsigned int));
+    /* Libérer seulement les nouvelles allocations en cas d'échec. */
     if (!a || !b || !next) {
         free(a); free(b); free(next);
         return 0;
@@ -41,13 +82,39 @@ static int dony_ray_pairs_reserve(DonyRayPairs *cache, int nf)
     return 1;
 }
 
+
+/*
+ * ----------------------------------------------------------------------------
+ *  dony_ray_pair_seen
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester si une paire non orientée a déjà provoqué un échange dans cette
+ *    passe.
+ *
+ *  Paramètres :
+ *    [entrée] cache ; p et q, faces à base zéro ; generation, passe de
+ *    sélection.
+ *
+ *  Retour :
+ *    1 pour une paire exacte présente, 0 sinon.
+ *
+ *  Fonctionnement :
+ *    Aucun effet de bord. Les identifiants sont normalisés, puis les
+ *    collisions de hash sont parcourues dans une liste chaînée dont les
+ *    liens sont stockés à base un.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int dony_ray_pair_seen(DonyRayPairs *cache, int p, int q,
                               unsigned int generation)
 {
     unsigned int a=(unsigned int)p,b=(unsigned int)q,bucket;
+    /* Normaliser la paire pour que (p,q) et (q,p) partagent la même clé. */
     if(a>b){unsigned int swap=a;a=b;b=swap;}
     bucket=(((a << 5)+a)^b) & (DONY_RAY_PAIR_BUCKETS-1);
     unsigned int entry;
+    /* Ignorer les buckets d'une autre passe, puis comparer les clés complètes. */
     if (cache->stamps[bucket] != generation) return 0;
     entry = cache->heads[bucket];
     while (entry) {
@@ -58,14 +125,41 @@ static int dony_ray_pair_seen(DonyRayPairs *cache, int p, int q,
     return 0;
 }
 
+
+/*
+ * ----------------------------------------------------------------------------
+ *  dony_ray_pair_record
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Enregistrer une paire non orientée échangée pendant la passe courante.
+ *
+ *  Paramètres :
+ *    [entrée] cache, p, q et generation.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    count, tableaux de paires, tête de bucket et stamp mis à jour.
+ *
+ *  Préconditions :
+ *    l'appelant a vérifié la limite de permutations ; une entrée libre doit
+ *    exister. Les collisions conservent les clés exactes.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void dony_ray_pair_record(DonyRayPairs *cache, int p, int q,
                                  unsigned int generation)
 {
     unsigned int a=(unsigned int)p,b=(unsigned int)q,bucket;
     if(a>b){unsigned int swap=a;a=b;b=swap;}
     bucket=(((a << 5)+a)^b) & (DONY_RAY_PAIR_BUCKETS-1);
+    /* Ajouter l'entrée en tête de chaîne ; la capacité est contrôlée par
+     * l'appelant.
+     */
     unsigned int i = cache->count++;
-    /* Caller checks the nf permutation limit before recording a new swap. */
+
     cache->first[i] = a;
     cache->second[i] = b;
     cache->next[i] = (cache->stamps[bucket] == generation) ? cache->heads[bucket] : 0;
@@ -73,22 +167,44 @@ static void dony_ray_pair_record(DonyRayPairs *cache, int p, int q,
     cache->stamps[bucket] = generation;
 }
 
-/* Stable binary insertion sort. Keep the linear fast path for an already
- * ordered prefix, locate an out-of-order key in logarithmic comparisons, then
- * shift its contiguous index run with memmove. No recursion or extra buffer.
+
+/*
+ * ----------------------------------------------------------------------------
+ *  sort_by_zmax
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Trier les indices de faces par profondeur maximale décroissante, de
+ *    façon stable.
+ *
+ *  Paramètres :
+ *    [entrée] z_max, profondeurs par face ; nf, longueur de sorted.
+ *
+ *    [entrée-sortie] sorted, permutation d'identifiants à base zéro.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Algorithme :
+ *    insertion binaire puis memmove ; les clés égales restent dans leur
+ *    ordre initial. Une clé déjà à sa place évite la recherche.
+ *
+ * ----------------------------------------------------------------------------
  */
 static void sort_by_zmax(int *sorted,Fixed32 *z_max,int nf)
 {
     int i;
+    /* Étendre le préfixe trié sans déplacer les faces de profondeur égale. */
     for(i=1;i<nf;++i){
         int key=sorted[i];
         Fixed32 depth=z_max[key];
         int lo,hi;
         if(z_max[sorted[i-1]]>=depth)continue;
         lo=0;hi=i;
+        /* Chercher la position après les clés égales afin de préserver la stabilité. */
         while(lo<hi){
             int mid=lo+(hi-lo)/2;
-            /* Insert after existing equal keys to preserve stability. */
+
             if(z_max[sorted[mid]]>=depth)lo=mid+1;
             else hi=mid;
         }
@@ -97,9 +213,36 @@ static void sort_by_zmax(int *sorted,Fixed32 *z_max,int nf)
     }
 }
 
-/* Dony-style selection/restart painter.
- * Face splitting is replaced by projected-overlap and ray-cast fallback. */
 
+/*
+ * ----------------------------------------------------------------------------
+ *  painter_geoV3
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Construire l'ordre arrière-vers-avant par sélection et reprise des
+ *    comparaisons.
+ *
+ *  Paramètres :
+ *    [entrée] model et face_count, nombre de faces à ordonner.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    model->faces.sorted_face_indices
+ *
+ *  Fonctionnement :
+ *    Initialise l'ordre canonique, trie par zmax, rejette les intervalles
+ *    disjoints, puis teste les plans dans les deux sens. Une face devant
+ *    précéder P est permutée en tête de la passe, qui reprend avec ce
+ *    nouveau P. En cas d'ambiguïté ou de cycle, utilise le chevauchement
+ *    projeté et le ray casting hiérarchique. Aucun découpage : des cycles
+ *    peuvent rester insolubles. État statique conservé entre appels ; arrêt
+ *    du processus si la réserve échoue.
+ *
+ * ----------------------------------------------------------------------------
+ */
 void painter_geoV3(Model3D* model, int face_count)
 {
     FaceArrays3D* faces = &model->faces;
@@ -113,14 +256,11 @@ void painter_geoV3(Model3D* model, int face_count)
     int nf = face_count;
     int fs = 0;
 
-    /*
-     * The cached plane relation depends on the transformed face/vertex data,
-     * which changes every frame. Its cache is keyed only by face indices and
-     * observer distance, so clear it before sorting this frame. Passing NULL
-     * uses geometric_face_relation()'s existing cache-clear path.
-     */
+
+    /* Invalider explicitement les relations préparées avant le tri de cette vue. */
     (void)geometric_face_relation(NULL, 0, 0);
 
+    /* Agrandir les buffers persistants de sélection et de prévention des cycles. */
     if (face_count > allocated) {
         free(dd_flag);
 
@@ -135,31 +275,33 @@ void painter_geoV3(Model3D* model, int face_count)
         generation = 0;
     }
 
-    /*
-     * Start every frame from the model's canonical face order. The caller's
-     * sorted_face_indices buffer is reused between frames and GeoV3 mutates it
-     * with swaps; using that previous result as the input makes equal-z_max
-     * faces depend on the direction/history of model rotation.
+
+    /* Repartir de l'ordre canonique pour que les égalités ne dépendent pas
+     * de la vue précédente.
      */
     for (int i = 0; i < nf; ++i)
         sorted[i] = i;
 
-    /* Initial ordering by maximum depth (stable for equal z_max). */
+
+    /* Produire l'ordre initial et préparer le filtrage assembleur si
+     * celui-ci est activé.
+     */
     sort_by_zmax(sorted, faces->z_max, nf);
 #if !defined(GEOV3_DISABLE_ASM_SCAN)
     GeoV3_ScanSetup(faces, sorted, nf);
 #endif
 
+    /* Fixer successivement la prochaine face à dessiner au début de la
+     * partie non traitée.
+     */
     while (fs < nf - 1) {
         int p;
         int f2;
         int permutes_this_pass;
 
-        /* A flag is set only when its stamp matches this selection pass.
-         * Keep the generation across frames to avoid routine array clearing.
-         * Unsigned wrap is defined: clear the entire allocation before reusing
-         * stamp 1, including entries outside a temporarily smaller model.
-         * Do not advance the generation on a permutation/restart of this pass.
+
+        /* Attribuer un stamp à la passe ; après rebouclage, effacer toute la
+         * capacité avant de réutiliser 1.
          */
         ++generation;
         if (generation == 0) {
@@ -168,11 +310,14 @@ void painter_geoV3(Model3D* model, int face_count)
             generation = 1;
         }
 
-        ray_pairs.count = 0; /* Previous pass entries are hidden by generation. */
+        ray_pairs.count = 0;
         p = sorted[fs];
         f2 = fs + 1;
         permutes_this_pass = 0;
 
+        /* Comparer P aux candidats restants ; un échange impose de
+         * recommencer la sélection.
+         */
         while (f2 < nf) {
             int q;
 #if !defined(GEOV3_DISABLE_ASM_SCAN)
@@ -183,16 +328,16 @@ void painter_geoV3(Model3D* model, int face_count)
 
 #if defined(GEOV3_DISABLE_ASM_SCAN)
 
-            /*
-             * Test 1: depth intervals do not overlap.
-             */
+
+            /* Chemin C optionnel : éliminer les intervalles de profondeur séparés. */
             if (faces->z_max[q] <= faces->z_min[p])
                 goto skip_q;
 
-            /*
-             * Test 2: projected X intervals do not overlap.
-             */
+
             {
+                /* Rejeter les bornes X sans recouvrement strict, avec les
+                 * soustractions natives 16 bits.
+                 */
                 int dx;
 
                 dx = (faces->maxx[p] > faces->maxx[q])
@@ -203,10 +348,9 @@ void painter_geoV3(Model3D* model, int face_count)
                     goto skip_q;
             }
 
-            /*
-             * Test 3: projected Y intervals do not overlap.
-             */
+
             {
+                /* Appliquer le même rejet aux bornes Y. */
                 int dy;
 
                 dy = (faces->maxy[p] > faces->maxy[q])
@@ -217,38 +361,31 @@ void painter_geoV3(Model3D* model, int face_count)
                     goto skip_q;
             }
 
-#endif /* GEOV3_DISABLE_ASM_SCAN */
+#endif
 
-            /*
-             * Tests 4-7: geometric plane relations.
-             *
-             * Each call tests both relations to one face plane. Evaluate
-             * the reverse direction only if the first call has not already
-             * validated the current ordering.
-             */
+
             {
                 int geo_pq;
                 int geo_qp;
 
-                geo_pq = geometric_face_relation(model, p, q);
-                /* This result validates P-before-Q regardless of the reverse
-                 * relation. Avoid computing that relation when it cannot
-                 * change the decision. Remaining tests keep their priority.
+                /* Tester d'abord P/Q ; le sens inverse est inutile lorsque
+                 * le premier résultat valide déjà P avant Q.
                  */
+                geo_pq = geometric_face_relation(model, p, q);
+
+
                 if (geo_pq == -1)
                     goto skip_q;
 
                 geo_qp = geometric_face_relation(model, q, p);
 
-                /*
-                 * At least one geometric test validates the current
-                 * P-before-Q ordering.
-                 */
+
                 if (geo_qp == 1)
                     goto skip_q;
 
-                /*
-                 * Geometry requires Q before P.
+
+                /* Si la géométrie impose Q avant P, échanger sauf si Q a
+                 * déjà été écartée pendant cette passe.
                  */
                 if (geo_pq == 1 || geo_qp == -1) {
                     if (dd_flag[q] != generation)
@@ -257,27 +394,23 @@ void painter_geoV3(Model3D* model, int face_count)
                     goto do_split_giveup;
                 }
 
-                /*
-                 * None of the four geometric tests can establish
-                 * an ordering.
-                 */
+
                 goto do_split_giveup;
             }
 
+/* Limiter les permutations pour garantir la terminaison et reprendre avec le
+ * nouveau P.
+ */
 do_permute:
-            /*
-             * Protect against a permutation cycle.
-             */
+
+
             if (++permutes_this_pass > face_count)
                 goto do_split_giveup;
 
             sorted[fs]=q;
             sorted[f2]=p;
 
-            /*
-             * P has been demoted. Restart the comparisons with the
-             * new candidate at FS, as in Dony's selection algorithm.
-             */
+
             dd_flag[p] = generation;
 
             p = q;
@@ -285,19 +418,21 @@ do_permute:
 
             continue;
 
+/* Remplacer le découpage absent par chevauchement et ray casting, sans
+ * rééchanger une paire déjà mémorisée.
+ */
 do_split_giveup:
-            /*
-             * Face splitting is replaced by a projected-overlap test
-             * followed, when necessary, by hierarchical ray casting.
-             */
+
+
             if (!dony_ray_pair_seen(&ray_pairs, p, q, generation) &&
                 projected_polygons_overlap_cached(model, p, q)) {
                 int rc;
 
                 rc = ray_cast_hierarchical(model, p, q);
 
-                /*
-                 * Q must precede P.
+
+                /* Un rayon impose Q avant P ; enregistrer la paire avant de
+                 * redémarrer les comparaisons.
                  */
                 if (rc < 0) {
                     if (++permutes_this_pass > face_count)
@@ -317,13 +452,14 @@ do_split_giveup:
                     continue;
                 }
 
-                /*
-                 * Current P-before-Q ordering is valid.
-                 */
+
                 if (rc > 0)
                     goto skip_q;
             }
 
+/* Avancer après une paire acceptée ou sans solution ; terminer la passe à
+ * épuisement des candidats.
+ */
 skip_q:
             ++f2;
         }

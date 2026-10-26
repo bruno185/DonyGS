@@ -1,21 +1,74 @@
-/* GEO V3 candidate scanner, ORCA/C / 65816.
- * Skip consecutive Q faces rejected by depth/X/Y tests in one assembly call.
- * No sorting or geometric decision is changed; return nf when exhausted.
- * Non-reentrant staging is private to the synchronous painter invocation.
+/*
+ * ============================================================================
+ *  dony_scan_asm.c — Filtrage assembleur des candidats GEO V3
+ * ============================================================================
+ *
+ *  Rôle :
+ *    Sauter en un appel les candidates dont les intervalles de profondeur ou
+ *    les boîtes projetées excluent le recouvrement. Rendre au C la première
+ *    position nécessitant les tests géométriques.
+ *
+ *  Organisation :
+ *    Deux wrappers préparent les pointeurs stables, les bornes de la face
+ *    sélectionnée et la position de départ. Le noyau 65C816 copie le paquet
+ *    dans un cadre de page directe sur la pile, puis parcourt la permutation
+ *    sans la modifier.
+ *
+ *  Dépendances et contraintes :
+ *    Inclus par dony.c lorsque le filtrage assembleur est activé. Pointeurs
+ *    far ORCA/C sur quatre octets, bornes sur 16 bits et profondeur 16.16.
+ *    Les soustractions d'intervalles conservent les règles du C natif.
+ *    Paquet global non réentrant ; disposition du cadre et registres décrits
+ *    au niveau du noyau.
+ *
+ * ============================================================================
  */
 static unsigned int geo_scan_words[22];
 static int geo_scan_result;
 static int geo_scan_cached_p = -1;
 
-/* D-relative words:
- * 1/5/9/13/17/21: far pointers sorted/z_max/minx/maxx/miny/maxy
- * 25/27: P's z_min, low word / sign-biased high word
- * 29/31/33/35: P's minx/maxx/miny/maxy
- * 37/39: current/end sorted positions; 41: scratch; 43: Q*2.
- * Preserve P,A,X,Y,D; globals explicitly use long addressing.
+
+/*
+ * ----------------------------------------------------------------------------
+ *  GeoV3_ScanCandidates
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Trouver le prochain candidat non rejeté par les tests rapides de la
+ *    méthode de classement.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Entrées et sorties implicites :
+ *    Entrée : geo_scan_words, préparé par les deux wrappers C.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    geo_scan_result, position dans la liste triée, ou nf à épuisement.
+ *
+ *  Fonctionnement :
+ *    Ne calcule aucune relation de plan et ne modifie pas l'ordre des faces.
+ *
+ *    Calculs binaires 16 bits.
+ *
+ *    Les accès globaux > ignorent DBR.
+ *
+ *  Registres et indicateurs :
+ *    Préserve P, A, Y et D ; X et DBR ne sont pas utilisés.
+ *
+ *  Organisation mémoire :
+ *    Cadre D de 44 octets : pointeurs far tri/zmax/minx/maxx/miny/maxy à
+ *    1/5/9/13/17/21 ; zmin de P à 25/27, bornes de P à 29/31/33/35,
+ *    position/fin à 37/39, temporaire à 41 et offset Q*2 à 43.
+ *
+ * ----------------------------------------------------------------------------
  */
 asm void GeoV3_ScanCandidates(void)
 {
+    /* Sauvegarder le contexte et réserver 44 octets de page directe sur la pile. */
     php
     rep #0x30
     pha
@@ -27,8 +80,10 @@ asm void GeoV3_ScanCandidates(void)
     sbc #44
     tcs
     tcd
-    /* Copy the invariant-size packet without loop/index overhead. Scratch
-     * words at 41/43 are written before use and need no input copy.
+
+
+    /* Copier le paquet invariant ; les temporaires 41 et 43 seront écrits
+     * avant lecture.
      */
     lda >geo_scan_words
     sta 1
@@ -70,42 +125,49 @@ asm void GeoV3_ScanCandidates(void)
     sta 37
     lda >geo_scan_words+38
     sta 39
+/* Arrêter au-delà de la dernière position, sinon charger l'identifiant Q. */
 geo_scan_loop:
     lda 37
     cmp 39
     bcc geo_scan_have_q
     brl geo_scan_done
+/* Convertir Q en offsets : deux octets pour les bornes, quatre pour les
+ * profondeurs.
+ */
 geo_scan_have_q:
     asl a
     tay
-    lda [1],y           // Q = sorted[position], a zero-based face ID.
+    lda [1],y
     asl a
-    sta 43              // Q*2 addresses 16-bit bounds arrays.
+    sta 43
     asl a
-    tay                 // Q*4 addresses the 32-bit depth array.
+    tay
     iny
     iny
     lda [5],y
-    eor #0x8000         // Bias sign bits to use an unsigned word comparison.
+    /* Comparer les profondeurs signées par mots hauts biaisés puis mots bas
+     * non signés ; rejeter zmax(Q) <= zmin(P).
+     */
+    eor #0x8000
     cmp 27
     bcc geo_scan_depth_reject
     bne geo_scan_depth_pass
     dey
     dey
     lda [5],y
-    cmp 25              // Equal high words: low words compare unsigned.
+    cmp 25
     bcc geo_scan_depth_reject
     beq geo_scan_depth_reject
     bra geo_scan_depth_pass
 geo_scan_depth_reject:
     brl geo_scan_reject
+/* Tester X avec la même soustraction 16 bits que le chemin C ; un écart nul
+ * rejette aussi le candidat.
+ */
 geo_scan_depth_pass:
     ldy 43
 
-    /* Preserve the original interval formula, including 16-bit differences:
-     * maxP > maxQ ? minP-maxQ : minQ-maxP; reject if nonnegative.
-     * Only the choice of branch uses a signed comparison of the maxima.
-     */
+
     lda [13],y
     eor #0x8000
     sta 41
@@ -125,12 +187,12 @@ geo_scan_x_qmax:
     sbc 31
     bmi geo_scan_x_pass
     brl geo_scan_reject
+/* Appliquer à Y le même test d'intervalle, sans modifier ses règles de
+ * débordement 16 bits.
+ */
 geo_scan_x_pass:
 
-    /* Preserve the original interval formula, including 16-bit differences:
-     * maxP > maxQ ? minP-maxQ : minQ-maxP; reject if nonnegative.
-     * Only the choice of branch uses a signed comparison of the maxima.
-     */
+
     lda [21],y
     eor #0x8000
     sta 41
@@ -150,13 +212,18 @@ geo_scan_y_qmax:
     sbc 35
     bmi geo_scan_y_pass
     brl geo_scan_reject
+/* Rendre la position courante au C, qui décidera de la relation géométrique. */
 geo_scan_y_pass:
 
-    /* All quick rejects passed: let C evaluate the geometric relations. */
+
     bra geo_scan_done
+/* Passer au candidat suivant après un rejet rapide. */
 geo_scan_reject:
     inc 37
     brl geo_scan_loop
+/* Publier la position et libérer exactement le cadre avant de restaurer le
+ * contexte.
+ */
 geo_scan_done:
     lda 37
     sta >geo_scan_result
@@ -171,9 +238,33 @@ geo_scan_done:
     rtl
 }
 
-/* Set up stable array pointers once per painter invocation. */
+
+/*
+ * ----------------------------------------------------------------------------
+ *  GeoV3_ScanSetup
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Préparer les pointeurs invariants du filtrage pour un appel à la méthode de classement.
+ *
+ *  Paramètres :
+ *    [entrée] faces, tableaux de métriques ; sorted, indices de faces à base
+ *    zéro ; nf, nombre de positions valides.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    paquet global, limite de recherche et invalidation du P mémorisé.
+ *
+ *  Préconditions :
+ *    pointeurs ORCA/C de quatre octets et tableaux stables pendant le tri.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void GeoV3_ScanSetup(FaceArrays3D *faces, int *sorted, int nf)
 {
+    /* Installer une fois les six pointeurs far et la limite de recherche. */
     memcpy(&geo_scan_words[0], &sorted, 4);
     memcpy(&geo_scan_words[2], &faces->z_max, 4);
     memcpy(&geo_scan_words[4], &faces->minx, 4);
@@ -184,11 +275,38 @@ static void GeoV3_ScanSetup(FaceArrays3D *faces, int *sorted, int nf)
     geo_scan_cached_p = -1;
 }
 
+
+/*
+ * ----------------------------------------------------------------------------
+ *  GeoV3_FindCandidate
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Rechercher une position candidate en réutilisant les bornes de la face
+ *    P.
+ *
+ *  Paramètres :
+ *    [entrée] faces, métriques immuables pendant le tri ; p, face à base
+ *    zéro ; start, première position à examiner dans sorted.
+ *
+ *  Retour :
+ *    Première position non rejetée, ou nf.
+ *
+ *  Sorties et effets de bord :
+ *    paquet et résultat globaux.
+ *
+ *  Fonctionnement :
+ *    Recharge les bornes uniquement si p change ; le mot haut de zmin est
+ *    biaisé par XOR $8000 pour permettre une comparaison signée à partir de
+ *    CMP.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int GeoV3_FindCandidate(FaceArrays3D *faces, int p, int start)
 {
-    /* P is unchanged while walking candidates; reload its bounds only after
-     * advancing the selection or swapping in a new P. Geometry is read-only.
-     */
+
+
+    /* Actualiser uniquement les invariants qui dépendent de la face sélectionnée. */
     if (geo_scan_cached_p != p) {
         memcpy(&geo_scan_words[12], &faces->z_min[p], 4);
         geo_scan_words[13] ^= 0x8000U;
@@ -198,6 +316,7 @@ static int GeoV3_FindCandidate(FaceArrays3D *faces, int p, int start)
         geo_scan_words[17] = (unsigned int)faces->maxy[p];
         geo_scan_cached_p = p;
     }
+    /* Transmettre la position de départ et exécuter le noyau synchrone. */
     geo_scan_words[18] = (unsigned int)start;
     GeoV3_ScanCandidates();
     return geo_scan_result;

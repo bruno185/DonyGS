@@ -1,45 +1,27 @@
-
 /*
  * ============================================================================
- *              OBJExplorer.cc - Fixed32 Optimized Implementation
+ *  ObjExplorer.cc — Explorateur OBJ — Programme principal
  * ============================================================================
  *
- * Purpose:
- *   High-performance Apple IIGS 3D OBJ viewer and explorer implementing the painter's family
- *   of algorithms with multiple painter modes (FAST / FIXED / CORRECT / CORRECTV2).
- *   Reads simplified OBJ files (vertices "v" and faces "f"), transforms them into observer space,
- *   projects to 2D screen coordinates and renders filled polygons.
+ *  Rôle :
+ *    Piloter le chargement des modèles, la préparation des vues et les
+ *    commandes de l'explorateur Apple IIgs. Le programme permet de comparer
+ *    les méthodes de classement, les Z-buffers et les outils d'inspection.
  *
- * Highlights :
- *   - Target: Apple IIGS (ORCA/C, QuickDraw)
- *   - Painter modes:
- *       * FAST  : z_mean + bbox tests (very fast, less robust)
- *       * FIXED : full fixed-point Newell/Sancha implementation with pairwise
- *                 tests and corrections (robust)
- *       * GEO   : Geometry-only painter mode for heuristic plane-based ordering
- *       * CORRECT : Advanced ordering correction with local face reordering
- *       * CORRECTV2 : Experimental local correction (painter_correctV2) for
- *                   pathological cases
- *   - Z-Buffer scanline rendering implémented
-
- * Responsibilities (per-frame):
- *   - Transform vertices (Fixed32) to observer-space (xo/yo/zo).
- *   - Project to integer screen coordinates (x2d/y2d).
- *   - Compute per-face metrics: z_min/z_max/z_mean, bbox, plane coefficients.
- *   - Dispatch to the selected painter to populate `sorted_face_indices`.
- *   - Provide tools to inspect and debug the rendering process, 
- *     including visual overlays for inconclusive face pairs and timing instrumentation.
+ *  Organisation :
+ *    La fonction main distingue le chargement, le retraitement géométrique,
+ *    le redessin, l'attente clavier et la libération par des labels. Les
+ *    vues textuelles temporaires réutilisent la sauvegarde SHR pour éviter
+ *    un nouveau rendu.
  *
+ *  Dépendances et contraintes :
+ *    Inclut engine.c, qui rassemble les autres sources dans une même unité
+ *    ORCA/C. Le clavier peut associer Open-Apple à un caractère. Les chaînes
+ *    visibles de l'interface sont conservées. Hommage à Robert Dony, auteur
+ *    de Calcul des parties cachées (Masson, 1986).
  *
- * Author: Bruno
- * Date: programming started in january 2026
  * ============================================================================
  */
-
-// ==============================================================
-// MAIN PROGRAM
-// ==============================================================
-//
 #pragma memorymodel 1
 #pragma optimize 1
 
@@ -47,29 +29,60 @@
 
 
 segment "main";
+
+/*
+ * ----------------------------------------------------------------------------
+ *  main
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Piloter le chargement, les vues graphiques et les commandes de
+ *    l'explorateur.
+ *
+ *  Paramètres :
+ *    Aucun paramètre explicite.
+ *
+ *  Retour :
+ *    0 à la sortie normale ; 1 sur les chemins d'erreur traités ici.
+ *
+ *  Fonctionnement :
+ *    Possède le modèle et coordonne QuickDraw, palettes, sauvegarde SHR et
+ *    Z-buffers. Les labels séparent chargement (newmodel), retraitement
+ *    géométrique (bigloop), redessin (loopReDraw/draw), attente clavier
+ *    (getakey) et libération (end). Les données numériques restent dans le
+ *    moteur ; les chaînes visibles de l'interface ne sont pas traduites dans
+ *    cette révision des commentaires.
+ *
+ * ----------------------------------------------------------------------------
+ */
     int main() {
         Model3D* model = NULL;
         ObserverParams params;
         char filename[100];
-        // char input[50];
-        int colorpalette = 0; // default color palette
+
+        int colorpalette = 0;
         long last_process_time_start = 0;
         long last_process_time_end = 0;
         long last_ZB_FS_render_time = 0;
         long last_ZB_SL_render_time = 0;
-        int show_inconclusive = 0; // toggle: display inconclusive pair overlays (press 'i' to toggle)
+        int show_inconclusive = 0;
 
-        int  oa; // Open-Apple key status
-        
+        int  oa;
 
-        // Initialize the screen save/restore buffer
+
+        /* Réserver la sauvegarde SHR avant toute vue graphique ; arrêter si
+         * cette ressource obligatoire manque.
+         */
         if (!initScreenSaveBuffer()) {
             printf("Error: Unable to initialize screen save buffer\n");
-            keypress(); // wait for user input before exiting
+            keypress();
             destroyModel3D(model);
             return 1;
         }
 
+    /* Créer une session de chargement : bannière, nouveau modèle et
+     * ressources graphiques réutilisables.
+     */
     newmodel:
         {
             const char* title = "3D OBJ file explorer (version 1.0)";
@@ -89,7 +102,8 @@ segment "main";
         printf("A tribute to Robert DONY\n");
         printf("Author of \"Calcul des parties cachees\" (Masson, 1986)\n\n");
 
-        // Creer le modele 3D
+
+        /* Allouer les tableaux du modèle et traiter les échecs avant de poursuivre. */
         model = createModel3D();
         if (model == NULL) {
             printf("Error: Unable to allocate memory for 3D model\n");
@@ -100,29 +114,31 @@ segment "main";
             return 1;
         }
 
-        /* Initialize global projection scale to a sensible default (pixels per projected unit) */
+
+        /* Initialiser projection, diagnostics et palettes pour ce chargement. */
         s_global_proj_scale_fixed = INT_TO_FIXED(100);
 
-        // Initialize inconclusive pairs counter
-        inconclusive_pairs_count = 0; // clear inconclusive pairs
 
-        // Initialize palettes and palette table storage
+        inconclusive_pairs_count = 0;
+
+
         initPalettes();
 
+        /* Initialiser le Z-buffer ; tenter aussi le framebuffer offscreen
+         * sans arrêter ici en cas d'échec.
+         */
         int zresult =ZBuffer_Init();
-        // printf("ZBuffer_Init result: %d\n", zresult);
-        // printf ("zbuf_row[0] = %p\n", zbuf_row[0]);
-        // printf ("zbuf_row[199] = %p\n", zbuf_row[199]);
-        // keypress(); // wait for user input after initializing Z-buffer
-    
-        /* Initialize offscreen render buffer (optional) */
-        if (!Offscreen_Init()) {
-            /* non-fatal: continue without offscreen support */
-            // printf("Warning: Offscreen buffer init failed, continuing\n");
-        }
-    
 
-        // Ask for filename (loop until a non-empty filename is entered and the model loads)
+
+        if (!Offscreen_Init()) {
+
+
+        }
+
+
+        /* Demander un nom de fichier jusqu'au chargement réussi ; une saisie
+         * vide quitte le programme.
+         */
         while (1) {
             printf("Enter the filename to read (ENTER to exit): ");
             if (fgets(filename, sizeof(filename), stdin) != NULL) {
@@ -131,7 +147,7 @@ segment "main";
                     filename[len-1] = '\0';
                 }
             } else {
-                // EOF or input error - exit gracefully
+
                 printf("\nInput error or EOF. Exiting.\n");
                 destroyModel3D(model);
                 ZBuffer_Shutdown();
@@ -144,13 +160,16 @@ segment "main";
                 destroyModel3D(model);
                 ZBuffer_Shutdown();
                 Offscreen_Shutdown();
-                return 0; // Exit program when user presses ENTER with empty filename
+                return 0;
             }
 
-            // Try to load the model; if it fails, inform the user, reset model state, and re-prompt
+
+            /* Après un échec, essayer le suffixe .obj si absent ; recréer le
+             * modèle avant une nouvelle tentative.
+             */
             if (loadModel3D(model, filename) < 0) {
-                // Retry once with a ".obj" extension appended, so the user
-                // can type the filename without the extension
+
+
                 size_t flen = strlen(filename);
                 int already_has_ext = (flen >= 4 && strcmp(filename + flen - 4, ".obj") == 0);
                 int retry_failed = 1;
@@ -175,9 +194,10 @@ segment "main";
                     }
                 }
 
+                /* Abandonner cette tentative et revenir à une structure de modèle vierge. */
                 if (retry_failed) {
                     printf("\nError loading file '%s'. Please try again.\n", filename);
-                    // Destroy and recreate model to ensure clean state for next attempt
+
                     destroyModel3D(model);
                     model = createModel3D();
                     if (model == NULL) {
@@ -191,11 +211,14 @@ segment "main";
                     continue;
                 }
             }
-            // Successfully loaded; ask the user about the overlap scan
+
             printf("\nPerform 3D face intersection check? (y/N) ");
             fflush(stdout);
+            /* Proposer le diagnostic d'intersections 3D et consommer le
+             * reste de la ligne de réponse.
+             */
             int cc = getchar();
-            int reply = cc; /* remember first character */
+            int reply = cc;
             while (cc != '\n' && cc != EOF) cc = getchar();
             if (reply == 'y' || reply == 'Y') {
                 check_intersect(model);
@@ -203,35 +226,38 @@ segment "main";
             break;
         }
 
-        // Initialize observer params defaults and apply auto-fit at load when available
+
+        /* Appliquer les suggestions d'ajustement, puis permettre à
+         * l'utilisateur de remplacer les paramètres.
+         */
         params.angle_h = 30; params.angle_v = 20; params.angle_w = 0;
         if (model != NULL && model->auto_fit_ready) {
             params.distance = model->auto_suggested_distance;
             model->auto_proj_scale = model->auto_suggested_proj_scale;
-            s_global_proj_scale_fixed = model->auto_suggested_proj_scale; // sync global scale
+            s_global_proj_scale_fixed = model->auto_suggested_proj_scale;
             model->auto_fit_applied = 1;
             printf("Auto-fit applied at load (distance=%.4f proj_scale=%.2f)\n", FIXED_TO_FLOAT(model->auto_suggested_distance), FIXED_TO_FLOAT(model->auto_suggested_proj_scale));
 
-            // Normalize the auto-fit so that the observer distance becomes 150
-            // (keeps the apparent size unchanged by scaling vertices + projection scale)
+
+            /* Normaliser les métadonnées de distance et l'échelle du modèle
+             * selon la formule existante.
+             */
             normalizeAutoFitDistanceTo150(model);
-            // Ensure the observer distance used for rendering matches the normalized distance
+
             params.distance = model->auto_suggested_distance;
         } else {
             params.distance = FLOAT_TO_FIXED(30.0);
         }
-        // Get observer parameters (user can override defaults by typing values)
+
         getObserverParams(&params, model);
 
 
+    /* Recalculer transformation, métriques et ordre ; démarrer
+     * temporairement QuickDraw pour les méthodes de classement qui utilisent ses régions.
+     */
     bigloop:
-        /*
-         * Painters 3, 4 and 5 may use QuickDraw region operations during
-         * sorting. Start QuickDraw II without calling startgraph(), so the
-         * progress messages remain visible on the text screen.
-         *
-         * Shut QuickDraw down before startgraph() opens the rendering screen.
-         */
+
+
         {
             Handle qd_dp = NULL;
             Word qd_id = 0;
@@ -241,6 +267,9 @@ segment "main";
                             painter_mode == PAINTER_MODE_GEO ||
                             painter_mode == PAINTER_MODE_GEOV3);
 
+            /* Réserver la page directe Toolbox et gérer les erreurs de
+             * démarrage sans laisser le modèle alloué.
+             */
             if (needs_qd && !framePolyOnly) {
                 qd_id = userid();
                 qd_dp = NewHandle(0x300L, qd_id, 0xC015, NULL);
@@ -268,12 +297,18 @@ segment "main";
                 shroff();
             }
 
-            /* Exclude temporary QuickDraw startup/shutdown from sorting time. */
+
+            /* Mesurer uniquement le traitement du modèle, hors démarrage et
+             * arrêt temporaires de QuickDraw.
+             */
             last_process_time_start = GetTick();
             printf("Processing model...\n");
             processModelFast(model, &params, filename);
             last_process_time_end = GetTick();
 
+            /* Fermer QuickDraw temporaire et libérer sa page directe avant
+             * le démarrage graphique normal.
+             */
             if (qd_started) {
                 QDShutDown();
                 qd_err = toolerror();
@@ -288,103 +323,120 @@ segment "main";
             }
         }
 
+    /* Redessiner à partir de la vue déjà calculée ; ne pas retrier sauf
+     * commande revenant à bigloop.
+     */
     loopReDraw:
         {
         int key = 0;
         int r = 0;
 
         if (model->faces.face_count > 0) {
-            // Initialize QuickDraw
+
             startgraph(mode);
 
-            // Load the system palette into palettes[0] on first startup
+
+            /* Capturer une fois la palette système avant d'appliquer la palette choisie. */
             if (!palette0_loaded) {
                 palettes[0] = ReadPalette(0);
                 palette0_loaded = 1;
             }
 
-            // Apply the selected palette and draw the 3D object
+
             applyPalette(palette);
 
+            /* Dessiner les faces dans l'ordre courant, puis les
+             * superpositions optionnelles.
+             */
             draw:
-            if (jitter) drawPolygons_jitter(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count); 
-            // draw model, according to current faces sorted list.
+            if (jitter) drawPolygons_jitter(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count);
+
             else drawPolygons(model, model->faces.vertex_count, model->faces.face_count, model->vertices.vertex_count);
-            
-            // display available colors
-            if (colorpalette == 1) { 
-                DoColor(); 
+
+
+            if (colorpalette == 1) {
+                DoColor();
             }
 
-            // If there are inconclusive pairs and display is enabled, underline them on screen
+
             if (show_inconclusive && inconclusive_pairs_count > 0) {
-                frameInconclusivePairs(model);  
+                frameInconclusivePairs(model);
             }
-            // Wait for key press and get key code
 
-        getakey: 
-        r = getkeypress_openA(); // Get a key press and the Open-Apple status
+
+        /* Lire le caractère et le modificateur Open-Apple dans les deux
+         * octets du résultat.
+         */
+        getakey:
+        r = getkeypress_openA();
         key   = r & 0x00FF;
-        oa = (r >> 8) & 1;   // 1 if Open-Apple was pressed
+        oa = (r >> 8) & 1;
 
-        // these are the commands that are handled immediately without re-rendering the scene
+
+        /* Traiter d'abord les commandes qui restent dans la vue graphique active. */
         switch (key) {
-            case '*': // Space key
+            /* Sauvegarder une capture SHR sans recalculer ni redessiner le modèle. */
+            case '*':
                 MoveTo(3, 10);
-                saveNextScreenshot(); // save image to file here
-                goto getakey; // return to key press handling after saving screenshot, without re-rendering the scene
-            case 'G': // Cycle through palettes
+                saveNextScreenshot();
+                goto getakey;
+            /* Changer la palette matérielle directement ; la géométrie reste valide. */
+            case 'G':
             case 'g':
-                palette = (palette + 1) % 16; // Cycle through available palettes
+                palette = (palette + 1) % 16;
                 applyPalette(palette);
-                goto getakey; // return to key press handling after changing palette, without re-rendering the scene
+                goto getakey;
                 break;
-            
+
+            /* Choisir le remplissage puis redessiner avec le nouvel état de couleur. */
             case '>':
-                // saveScreen(); // save image to file here
+
                 screen2Black();
                 int c;
-                if (user_fill_color < 0) c = COL_FILL_DEFAULT; // Ensure a valid initial color index
-                else 
+                if (user_fill_color < 0) c = COL_FILL_DEFAULT;
+                else
                 c = user_fill_color;
                 c = colorChooser(0, &palette, c);
                 if (c >= 0) user_fill_color = c;
                 if (c == 16) {generate_random_colors(model->faces.face_count);}
-                // XXX
+
                 screen2Black();
                 goto draw;
 
+            /* Choisir le contour, y compris le choix spécial identique au remplissage. */
             case '<':
                 screen2Black();
                 c = user_frame_color;
-                if (c < 0) c = COL_FRAME; // Ensure a valid initial color index
+                if (c < 0) c = COL_FRAME;
                 c = colorChooser(1, &palette, c);
                 if (c >= 0) user_frame_color = c;
                 if (c == 16) {generate_random_colors(model->faces.face_count);}
                 screen2Black();
                 goto draw;
-            
-            // default:  // All other keys - redraw
-            //     goto loopReDraw;
+
+
         }
 
-// XXX    
-        // This commands just need to swap between text and graphical view (model or colors are unchanged)
-        // So saving and restoring screen memory is more efficient than re-rendering the entire scene.
-        if (key == ' ' || key == 'H' || key == 'h'|| key == 'F'|| key == 'f'|| key == 'M' 
+
+        /* Sauvegarder la mémoire SHR avant les vues textuelles ou les rendus
+         * alternatifs qui en ont besoin.
+         */
+        if (key == ' ' || key == 'H' || key == 'h'|| key == 'F'|| key == 'f'|| key == 'M'
             || key == 'm'|| key == 'O' || key == 'o' || key == 'U' || key == 'u') {
-        saveScreen(); // Save the current screen memory before switching to text view
-        // see below what these keys do after saving the screen memory
+        saveScreen();
+
         }
 
-        endgraph();         // Close QuickDraw
-        DoText();           // Show text screen
+        endgraph();
+        DoText();
         }
 
-        
-        // Handle keyboard input with switch statement
+
         switch (key) {
-            case 32:  // Space bar - display info and redraw
+            /* Afficher les paramètres, options et temps puis restaurer
+             * l'image sauvegardée.
+             */
+            case 32:
                 printf("===================================\n");
                 printf(" Model information and parameters\n");
                 printf("===================================\n");
@@ -421,44 +473,51 @@ segment "main";
                 printf("Free memory = %lu bytes\n", FreeMem());
                 printf("Press any key to continue...\n");
                 keypress();
-                // New approach: instead of re-rendering the entire scene, 
-                // we save the screen state before switching views and restore it afterward.
-                startgraph(mode);   // Reopen QuickDraw and SHGR screen
-                restoreScreen();    // Restore the previously saved screen memory
-                goto getakey; // return to key press handling
-                // This mush faster than re-rendering the entire scene with 
-                //goto loopReDraw;
 
-            case 59: // ';' - Run check_sort_repair (repair ordering) and wait for key so user can read results
+
+                startgraph(mode);
+                restoreScreen();
+                goto getakey;
+
+
+            /* Lancer la réparation complète de l'ordre puis redessiner la
+             * permutation obtenue.
+             */
+            case 59:
                 printf("Running check_sort_repair (ray_cast verification & minimal repair)...\n");
                 check_sort_repair(model, model->faces.face_count);
                 printf("Press any key to continue...\n");
                 keypress();
                 goto loopReDraw;
 
-            case 46: // '.' - Run check_sort_repair_fast (faster minimal repair using QD centroid)
+            /* Lancer la réparation rapide fondée sur le centroïde QuickDraw. */
+            case 46:
                 printf("Running check_sort_repair_fast (QD centroid + minimal repair)...\n");
                 check_sort_repair_fast(model, model->faces.face_count);
-                // printf("Press any key to continue...\n");
-                // keypress();
+
+
                 goto loopReDraw;
 
-            case 43:  // '+' - increase projection scale by 10% (applies to current scale)
+            /* Augmenter la projection de 10 %, borner l'échelle et
+             * recalculer seulement les coordonnées projetées et leurs
+             * bornes.
+             */
+            case 43:
                 if (model != NULL) {
-                    // '+' now adjusts projection scale by +10%
-                    // Compute new scale = current scale * 1.1 (fixed-point multiplication)
+
+
                     Fixed32 cur = s_global_proj_scale_fixed;
                     Fixed32 mul = FLOAT_TO_FIXED(1.1f);
                     Fixed32 new_scale = FIXED_MUL_64(cur, mul);
-                    // clamp
+
                     Fixed32 min_scale = FLOAT_TO_FIXED(1.0f);
                     Fixed32 max_scale = FLOAT_TO_FIXED(10000.0f);
                     if (new_scale < min_scale) new_scale = min_scale;
                     if (new_scale > max_scale) new_scale = max_scale;
                     s_global_proj_scale_fixed = new_scale;
-                    // sync to model field for visibility
+
                     model->auto_proj_scale = s_global_proj_scale_fixed;
-                    model->auto_fit_applied = 1; // treat scale as explicitly set
+                    model->auto_fit_applied = 1;
                     printf("Projection scale increased -> %.2f\n", FIXED_TO_FLOAT(s_global_proj_scale_fixed));
                 } else {
                     printf("No model loaded.\n");
@@ -466,9 +525,12 @@ segment "main";
                 compute2DFromObserver(model, params.angle_w);
                 goto loopReDraw;
 
-            case 45:  // '-' - decrease projection scale by 10% (applies to current scale)
+            /* Réduire la projection de 10 % avec les mêmes bornes ; ne pas
+             * modifier la distance observateur.
+             */
+            case 45:
                 if (model != NULL) {
-                    // '-' now adjusts projection scale by -10%
+
                     Fixed32 cur = s_global_proj_scale_fixed;
                     Fixed32 mul = FLOAT_TO_FIXED(0.9f);
                     Fixed32 new_scale = FIXED_MUL_64(cur, mul);
@@ -486,21 +548,26 @@ segment "main";
                 compute2DFromObserver(model, params.angle_w);
                 goto loopReDraw;
 
-            case 65:  // 'A' - decrease distance
-            case 97:  // 'a'
+            /* Rapprocher l'observateur de 10 %, ou de 50 % avec Open-Apple,
+             * puis recalculer toute la vue.
+             */
+            case 65:
+            case 97:
                 if (!oa) params.distance = params.distance - (params.distance / 10);
                 else params.distance = params.distance - (params.distance / 2);
                 printf("Distance decreased -> %.2f\n", FIXED_TO_FLOAT(params.distance));
                 goto bigloop;
 
-            case 90:  // 'Z' - increase distance  
-            case 122: // 'z'
+            /* Éloigner l'observateur avec le même choix de pas. */
+            case 90:
+            case 122:
                 if (!oa) params.distance = params.distance + (params.distance / 10);
                 else params.distance = params.distance + (params.distance / 2);
                 printf("Distance increased -> %.2f\n", FIXED_TO_FLOAT(params.distance));
                 goto bigloop;
 
-            case 21:  // Right arrow - increase horizontal angle
+            /* Tourner horizontalement de +10 degrés, ou +1 avec Open-Apple. */
+            case 21:
                 if (oa == 0) {
                     params.angle_h = normalize_deg(params.angle_h + 10);
                 } else {
@@ -508,7 +575,8 @@ segment "main";
                 }
                 goto bigloop;
 
-            case 8:   // Left arrow - decrease horizontal angle
+            /* Tourner horizontalement de -10 degrés, ou -1 avec Open-Apple. */
+            case 8:
                 if (oa == 0) {
                     params.angle_h = normalize_deg(params.angle_h - 10);
                 } else {
@@ -516,7 +584,8 @@ segment "main";
                 }
                 goto bigloop;
 
-            case 10:  // Down arrow - decrease vertical angle
+            /* Réduire l'angle vertical de 10 degrés, ou de 1 avec Open-Apple. */
+            case 10:
                 if (oa == 0) {
                     params.angle_v = normalize_deg(params.angle_v - 10);
                 } else {
@@ -524,7 +593,8 @@ segment "main";
                 }
                 goto bigloop;
 
-            case 11:  // Up arrow - increase vertical angle
+            /* Augmenter l'angle vertical avec le même choix de pas. */
+            case 11:
                 if (oa == 0) {
                     params.angle_v = normalize_deg(params.angle_v + 10);
                 } else {
@@ -532,8 +602,11 @@ segment "main";
                 }
                 goto bigloop;
 
-            case 87:  // 'W' - increase screen rotation angle
-            case 119: // 'w'
+            /* Augmenter la rotation dans le plan de l'écran ; recalculer les
+             * coordonnées observateur.
+             */
+            case 87:
+            case 119:
                 if (oa == 0) {
                     params.angle_w = normalize_deg(params.angle_w + 10);
                 } else {
@@ -541,8 +614,9 @@ segment "main";
                 }
                 goto bigloop;
 
-            case 88:  // 'X' - decrease screen rotation angle
-            case 120: // 'x'
+            /* Réduire la rotation dans le plan de l'écran. */
+            case 88:
+            case 120:
                 if (oa == 0) {
                     params.angle_w = normalize_deg(params.angle_w - 10);
                 } else {
@@ -550,51 +624,63 @@ segment "main";
                 }
                 goto bigloop;
 
-            /* 2D panning: E=left, R=right (R replaced revert), T=up, Y=down (and lowercase) */
-            case 69: /* 'E' */
-            case 101: /* 'e' */
-                if (!oa) pan_dx -= 10; /* pan left */
-                else pan_dx -= 1; /* pan left */
+
+            /* Déplacer le dessin vers la gauche de dix pixels, ou d'un pixel
+             * avec Open-Apple ; redessin seul.
+             */
+            case 69:
+            case 101:
+                if (!oa) pan_dx -= 10;
+                else pan_dx -= 1;
                 printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
                 goto loopReDraw;
 
-            case 82:  // 'R' - pan right (was revert; revert disabled)
-            case 114: // 'r'
-                if (!oa) pan_dx += 10; // move right by 10 pixels
-                else pan_dx += 1; // move right by 1 pixel
+            /* Déplacer le dessin vers la droite avec le même choix de pas. */
+            case 82:
+            case 114:
+                if (!oa) pan_dx += 10;
+                else pan_dx += 1;
                 printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
                 goto loopReDraw;
 
 
-            case 84: /* 'T' */
-            case 116: /* 't' */
-                if (!oa) pan_dy -= 10; /* pan up = decrease Y */
-                else pan_dy -= 1; /* pan up = decrease Y */
+            /* Déplacer le dessin vers le haut en réduisant pan_dy. */
+            case 84:
+            case 116:
+                if (!oa) pan_dy -= 10;
+                else pan_dy -= 1;
                 printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
                 goto loopReDraw;
 
-            case 89: /* 'Y' */
-            case 121: /* 'y' */
-                if (!oa) pan_dy += 10; /* pan down = increase Y */
-                else pan_dy += 1; /* pan down = increase Y */
+            /* Déplacer le dessin vers le bas en augmentant pan_dy. */
+            case 89:
+            case 121:
+                if (!oa) pan_dy += 10;
+                else pan_dy += 1;
                 printf("Pan offset -> (%d,%d)\n", pan_dx, pan_dy);
                 goto loopReDraw;
 
-            case 48: /* '0' - reset pan */
+            /* Annuler les deux décalages écran. */
+            case 48:
                 pan_dx = 0; pan_dy = 0;
                 printf("Pan reset -> (%d,%d)\n", pan_dx, pan_dy);
                 goto loopReDraw;
-        
-            case 67:  // 'C' - toggle color palette display
-            case 99:  // 'c'
-                colorpalette ^= 1; // Toggle between 0 and 1
+
+            /* Afficher ou masquer la palette superposée. */
+            case 67:
+            case 99:
+                colorpalette ^= 1;
                 goto loopReDraw;
 
-            case 71:  // 'G' - cycle the active QuickDraw palette
-            case 103:  // 'g'
-            // replaced by cycling the palette just after key press handling loop
+            /* Les commandes G/g sont déjà consommées par le premier switch ;
+             * ces labels partagent ici le chemin du shading.
+             */
+            case 71:
+            case 103:
 
-            case 33:  // '!' - toggle orientation shading
+
+            /* Activer ou désactiver les couleurs issues de l'orientation et redessiner. */
+            case 33:
                 shaded_by_orientation ^= 1;
                 printf("Orientation shading: %s\n", shaded_by_orientation ? "ON" : "OFF");
                 if (shaded_by_orientation && model != NULL) {
@@ -602,98 +688,117 @@ segment "main";
                 }
                 goto loopReDraw;
 
-            case 73:  // 'I' - toggle display of inconclusive face pairs
-            case 105: // 'i'
+            /* Afficher ou masquer les cadres des paires inconclusives. */
+            case 73:
+            case 105:
                 show_inconclusive ^= 1;
                 printf("Inconclusive pairs display: %s\n", show_inconclusive ? "ON" : "OFF");
                 goto loopReDraw;
 
-            case 74:  // 'J' - toggle jittered rendering
-            case 106: // 'j'
+            /* Basculer le rendu avec décalages jitter. */
+            case 74:
+            case 106:
                 jitter ^= 1;
                 printf("Jitter rendering: %s\n", jitter ? "ON" : "OFF");
                 goto loopReDraw;
 
-            case 68:  // 'D' - inspect face ordering and show misplaced faces
-            case 100: // 'd'
+            /* Ouvrir l'inspection des faces qui précèdent la face étudiée. */
+            case 68:
+            case 100:
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 inspect_faces_before(model, &params, filename);
                 goto loopReDraw;
 
-            case 86:  // 'V' - show a single face in filled mode
-            case 118: // 'v'
+            /* Ouvrir l'inspecteur de face et ses commandes de visibilité et de winding. */
+            case 86:
+            case 118:
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 showFace(model, &params, filename);
                 goto loopReDraw;
 
-            case 83: // 'S' - inspect faces that are AFTER target but should be BEFORE (new)
-            case 115: // 's'
+            /* Inspecter les faces placées après la cible. */
+            case 83:
+            case 115:
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 inspect_faces_after(model, &params, filename);
                 goto loopReDraw;
 
-            case 77: // 'M' - debug pair_plane_before
-            case 109: // 'm'
+            /* Exécuter le diagnostic de plans d'une paire puis restaurer
+             * l'image sauvegardée.
+             */
+            case 77:
+            case 109:
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
-                pair_plane_geometric_tests(model, -1, -1); // force type pair numbers
-			    // New approach: instead of re-rendering the entire scene, 
-                // we save the screen state before switching views and restore it afterward.
-                startgraph(mode);   // Reopen QuickDraw and SHGR screen
-                restoreScreen();    // Restore the previously saved screen memory
-                goto getakey; // return to key press handling
-                // This mush faster than re-rendering the entire scene with 
-                //goto loopReDraw;
+                pair_plane_geometric_tests(model, -1, -1);
 
 
-            case 76: // 'L' - show model with face ID labels at polygon centers
-            case 108: // 'l'
+                startgraph(mode);
+                restoreScreen();
+                goto getakey;
+
+
+            /* Afficher les identifiants des faces sur le modèle. */
+            case 76:
+            case 108:
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 display_model_face_ids(model, &params, filename);
                 goto loopReDraw;
 
-            case 49: // '1' - set FAST painter
+            /* Choisir FAST et vider les paires inconclusives avant retraitement. */
+            case 49:
                 painter_mode = PAINTER_MODE_FAST;
                 printf("Painter mode: FAST (simple face sorting only)\n");
-                inconclusive_pairs_count = 0; // clear inconclusive pairs in fast mode
+                inconclusive_pairs_count = 0;
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 50: // '2' - set BUBBLE SORT (Fixed32/64) painter
+            /* Choisir la méthode de classement BUBBLE SORT. */
+            case 50:
                 painter_mode = PAINTER_MODE_BUBBLE_SORT;
                 printf("Painter mode: BUBBLE SORT (full tests, Fixed32/64)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 51: // '3' - set NEWELL SANCHA (Fixed32/64) painter
+            /* Choisir la méthode de classement NEWELL SANCHA. */
+            case 51:
                 painter_mode = PAINTER_MODE_NEWELL_SANCHA;
                 printf("Painter mode: NEWELL SANCHA (full tests, Fixed32/64)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 52: // '4' - set GEO painter
+            /* Choisir GEO, implémenté par painter_geoV2. */
+            case 52:
                 painter_mode = PAINTER_MODE_GEO;
                 printf("Painter mode: GEO (geometry-only)\n");
                 printf("WARNING: This mode can be significantly slower than others with large models.\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
-            
-            case 53: // '5' - set GEO V3 painter
+
+            /* Choisir GEO V3, implémenté dans dony.c. */
+            case 53:
                 painter_mode = PAINTER_MODE_GEOV3;
                 printf("Painter mode: GEO V3 (inspired by R. DONY's book)\n");
                 printf("WARNING: This mode can be significantly slower than others with large models.\n");
-                goto bigloop; 
+                goto bigloop;
                 goto loopReDraw;
 
-            case 54: // '6' - set CORRECT painter (runs painter_correct)
+            /* Choisir la première correction locale d'ordre. */
+            case 54:
                 painter_mode = PAINTER_MODE_CORRECT;
                 printf("Painter mode: CORRECT (painter_correct)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
-            case 55: // '7' - set CORRECTV2 painter (runs painter_correctV2 with face splitting detection)
+            /* Choisir la seconde correction locale ; le libellé de
+             * l'interface ne prouve pas un découpage effectif.
+             */
+            case 55:
                 painter_mode = PAINTER_MODE_CORRECTV2;
                 printf("Painter mode: CORRECT V2 (painter_correctV2)\n");
                 if (model != NULL) { printf("Reprocessing model with current mode...\n"); goto bigloop; }
 
 
-            case 56: // '8' - quick random mode for both colors
+            /* Générer des couleurs de remplissage aléatoires ; le choix du
+             * contour reste inchangé.
+             */
+            case 56:
                 user_fill_color = 16;
-                // user_frame_color = 16; // uncomment if you want to randomize the frame color as well
+
                 if (model != NULL) {
                     generate_random_colors(model->faces.face_count);
                 }
@@ -701,20 +806,23 @@ segment "main";
                 goto loopReDraw;
 
 
-            case 57: // '9' - reset colors to default
+            /* Rétablir les couleurs par défaut, la palette système et le
+             * shading désactivé.
+             */
+            case 57:
                 user_fill_color = -1;
                 user_frame_color = -1;
-                palette = 0; // reset to system palette
-                shaded_by_orientation = 0; // disable orientation shading
+                palette = 0;
+                shaded_by_orientation = 0;
                 printf("Colors reset to defaults, palette reset to 0, shading OFF\n");
                 goto loopReDraw;
 
 
-                
-            // Z buffer scanline and fullscreen rendering
-
-            case 79:  // 'o' - Render model using scanline Z-buffer
-            case 111: // 'o'
+            /* Rendre la vue courante avec le Z-buffer scanline et mémoriser
+             * son temps en ticks.
+             */
+            case 79:
+            case 111:
                 startgraph(mode);
                 MoveTo(3, 10);
                 printf("Z-Buffer scanline rendering...\n");
@@ -722,15 +830,18 @@ segment "main";
                 renderModelScanlineZBuffer(model);
                 long endTime = GetTick();
                 last_ZB_SL_render_time = endTime - startTime;
-                goto getakey; // return to key press handling
+                goto getakey;
 
-            case 'U': // 'U' - Render model using fullscreen Z-buffer
-            case 'u': 
+            /* Rendre par Z-buffer plein écran : buffer offscreen par défaut,
+             * écran direct avec Open-Apple.
+             */
+            case 'U':
+            case 'u':
                 startgraph(mode);
                 MoveTo(3, 10);
                 if (!oa) printf("Z-Buffer fullscreen rendering (offscreen)...\n");
                 else printf("Z-Buffer fullscreen rendering (onscreen)...\n");
-                startTime = GetTick(); 
+                startTime = GetTick();
                 if (!oa) {
                     Offscreen_Clear();
                     renderModelFullscreenZBuffer_offscreen(model);
@@ -742,122 +853,137 @@ segment "main";
 
                 endTime = GetTick();
                 last_ZB_FS_render_time = endTime - startTime;
-                goto getakey; // return to key press handling                
+                goto getakey;
 
-            
-            case 80:  // 'P' - toggle frame-only polygon rendering
-            case 112: // 'p'
+
+            /* Basculer entre filaire et surfaces ; le retour aux surfaces
+             * impose un nouveau tri.
+             */
+            case 80:
+            case 112:
                 framePolyOnly ^= 1;
                 printf("Frame-only polygons: %s\n", framePolyOnly ? "ON" : "OFF");
                 if (!framePolyOnly) {
-                    // Switched back to filled polygons — re-run full processing to recompute depths & ordering
+
                     printf("Switching to filled mode: reprocessing model (sorting faces)...\n");
                     goto bigloop;
                 }
                 else {
-                    // Just redraw in frame-only mode
+
                     goto loopReDraw;
                 }
 
-            case 66:  // 'B' - toggle back-face culling (observer-space d<=0 test)
-            case 98:  // 'b'
+            /* Basculer le back-face culling puis recalculer les métriques et l'ordre. */
+            case 66:
+            case 98:
                 cull_back_faces ^= 1;
                 printf("Back-face culling: %s\n", cull_back_faces ? "ON" : "OFF");
                 if (model != NULL) {
                     printf("Reprocessing model with culling %s...\n", cull_back_faces ? "ON" : "OFF");
                     goto bigloop;
                 }
-                //goto loopReDraw;
 
-            case 70:  // 'F' - dump face equations to equ.csv
-            case 102: // 'f'
+
+            /* Exporter plans, coordonnées projetées et ordre courant dans
+             * trois fichiers, puis restaurer l'écran.
+             */
+            case 70:
+            case 102:
                 if (model != NULL) {
                     printf("Writing files...\n");
-                    // Ensure the current observer parameters are applied before dumping
-                    // processModelFast(model, &params, filename);
-                    // Use semicolon column separators and comma decimal separator
+
+
                     dumpFaceEquationsCSV(model, "Faces3D.csv", 1);
-                    // Also dump 2D per-face vertex coordinates to Faces2D.txt
+
                     dumpFace2DCoordinates(model, "Faces2D.txt");
-                    // Dump sorted face indices in painter output order
+
                     dumpSortedFaceIndices(model, "FacesOrder.txt");
                     printf("\nPress any key to continue...\n");
                     keypress();
                 }
-                // New approach: instead of re-rendering the entire scene, 
-                // we save the screen state before switching views and restore it afterward.
-                startgraph(mode);   // Reopen QuickDraw and SHGR screen
-                restoreScreen();    // Restore the previously saved screen memory
-                goto getakey; // return to key press handling
-                // This mush faster than re-rendering the entire scene with 
-                //goto loopReDraw;
 
-            case 78:  // 'N' - load new model
-            case 110: // 'n'
-                // Reset all parameters to startup defaults when loading a new model
+
+                startgraph(mode);
+                restoreScreen();
+                goto getakey;
+
+
+            /* Libérer le modèle et réinitialiser les options explicitement
+             * listées avant un nouveau chargement.
+             */
+            case 78:
+            case 110:
+
                 painter_mode = PAINTER_MODE_FAST;
                 pan_dx = 0; pan_dy = 0;
                 cull_back_faces = 1;
                 user_fill_color = -1;
                 user_frame_color = -1;
                 s_global_proj_scale_fixed = INT_TO_FIXED(100);
-                jitter = 0; /* reset jitter when loading new model */
+                jitter = 0;
                 destroyModel3D(model);
                 goto newmodel;
 
-            case 75:  // 'K' - edit angles/distance (no reload; ENTER may auto-fit)
-            case 107: // 'k'
+            /* Modifier les paramètres de vue sans relire le fichier OBJ. */
+            case 75:
+            case 107:
                 getObserverParams(&params, model);
                 printf("Observer parameters updated.\n");
                 goto bigloop;
-        
-            // display help (paged)
-            case 72:  // 'H'
-            case 104: // 'h'
+
+
+            /* Afficher l'aide paginée puis restaurer l'image sauvegardée. */
+            case 72:
+            case 104:
                 show_help_pager();
-                // New approach: instead of re-rendering the entire scene, 
-                // we save the screen state before switching views and restore it afterward.
-                startgraph(mode);   // Reopen QuickDraw and SHGR screen
-                restoreScreen();    // Restore the previously saved screen memory
-                goto getakey; // return to key press handling
-                // This mush faster than re-rendering the entire scene with 
-                //goto loopReDraw;
+
+
+                startgraph(mode);
+                restoreScreen();
+                goto getakey;
+
+
                 goto loopReDraw;
 
-            case 81: // 'Q' - interactive face-pair inspector (new)
-            case 113: // 'q'
+            /* Ouvrir l'inspecteur interactif de paires de faces. */
+            case 81:
+            case 113:
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
                 inspect_face_pair_ui(model);
                 goto loopReDraw;
 
-            case 47: // '/' - test projected overlap raster
+            /* Comparer les méthodes de chevauchement avec le benchmark intégré. */
+            case 47:
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
-                // test_all_projected_overlaps(model);
+
                 printf("Running projected overlap benchmark...\n");
-                // benchmark_projected_overlap(model, &params, 1); // Example with 10 angles
-                benchmark_projected_overlap_all(model, &params, 1); // Example with 10 angles
+
+                benchmark_projected_overlap_all(model, &params, 1);
                 keypress();
                 goto loopReDraw;
 
-                case 40: // '(' - show help (paged)
+                /* Changer la méthode de chevauchement puis retraiter le modèle. */
+                case 40:
                 overlap_method = select_overlap_method(overlap_method);
                 goto bigloop;
 
-            case 27:  // ESC - quit
+            /* Quitter la boucle et libérer les ressources suivies par le programme. */
+            case 27:
                 goto end;
-            
 
 
-                
-            default:  // All other keys - redraw
+            default:
                 goto loopReDraw;
-            
-        }
-        }  // End of loopReDraw block
 
+        }
+        }
+
+        /* Déverrouiller et libérer le polygone QuickDraw, le modèle et les
+         * buffers des rendus alternatifs.
+         */
         end:
-        // Cleanup and exit
-        // Dispose of the global polygon handle if it was allocated
+
+
         if (globalPolyHandle != NULL) {
             if (poly_handle_locked) {
                 HUnlock(globalPolyHandle);

@@ -1,96 +1,30 @@
-
 /*
- * PROJECTED POLYGON OVERLAP - APPLE IIGS
- * ======================================
+ * ============================================================================
+ *  overlap_raster.c — Chevauchement projeté, clipping et projection subpixel
+ * ============================================================================
  *
- * Purpose:
- *   Determine whether two projected 2D polygons overlap.
- *   An overlap requires a strictly positive intersection area.
- *   Contact along an edge or at a vertex is not sufficient.
+ *  Rôle :
+ *    Fournir les méthodes de chevauchement des faces projetées et les points
+ *    de comparaison employés par les outils d'ordre. Distinguer géométrie
+ *    continue, heuristiques avec seuils et échantillonnage raster.
  *
- * Implementations:
+ *  Organisation :
+ *    Regroupe le cache de projection fractionnaire, les prédicats de points
+ *    et segments, le clipping SH, les régions QuickDraw, les variantes
+ *    Simple/V1/V2/Max/Fixed64/Raster et leur benchmark. Le choix runtime est
+ *    indépendant du wrapper V2 à sélection compilée.
  *
- *   V1:
- *     projected_polygons_overlap_v1()
+ *  Dépendances et contraintes :
+ *    Inclus par engine.c ; utilise les types communs, les caches d'ordre et
+ *    les routines de ray casting déclarées auparavant. Le clipping par
+ *    demi-plans exige un clip convexe pour le cas général. Le chemin nommé
+ *    centroïde QuickDraw rend un centre de bbox. Buffers et diagnostics
+ *    partagés, non réentrants.
  *
- *   Simple overlap (used by painter sorting):
- *     projected_polygons_overlap_simple()
- *
- *   V2 original:
- *     projected_polygons_overlap_v2_original()
- *
- *   V2 Max:
- *     projected_polygons_overlap_v2_max()
- *
- *   Fixed64:
- *     projected_polygons_overlap_v2_fixed64()
- *
- *   Raster:
- *     projected_polygons_overlap_raster()
- *
- *   Raster x10:
- *     projected_polygons_overlap_raster_x10()
- *
- *   Runtime dispatcher (defaults to V1):
- *     projected_polygons_overlap()
- *
- *   Legacy V2 dispatcher:
- *     projected_polygons_overlap_v2()
- *
- * Benchmark:
- *     benchmark_projected_overlap_all()
- *
- * Validation:
- *   All six implementations were compared against an
- *   independent Python/Shapely geometric reference.
- *
- *   Test set:
- *     67 faces, 10 orientations, 22,110 polygon pairs.
- *
- *   Algorithm    Ticks    Errors vs Python
- *   --------------------------------------
- *   V1            3584          247
- *   V2 original  14331            0
- *   V2 Max        6841            0
- *   Fixed64       5988            0
- *   Raster         775          209
- *   Raster x10    3281          160
- *
- * Results:
- *   V2 original, V2 Max and Fixed64 produced identical
- *   results and agreed with Python on all 22,110 pairs.
- *
- *   Fixed64 was 2.39 times faster than V2 original
- *   and approximately 14% faster than V2 Max.
- *
- *   Raster was the fastest implementation, but missed
- *   209 positive-area intersections.
- *
- *   Raster x10 produced 81 false positives and
- *   79 false negatives.
- *
- * Recommendation:
- *   projected_polygons_overlap_v2_fixed64() offers
- *   the best measured performance among implementations
- *   matching the Python reference.
- *
- * Limitations:
- *   Validation applies only to the tested configurations.
- *   The Python reference uses floating-point geometry.
- *   Extremely small intersections have not been checked
- *   using exact rational arithmetic.
- *
- * Timing:
- *   Measured on Apple IIGS using GetTick() at 60 Hz.
- *   File I/O was excluded from timed sections.
+ * ============================================================================
  */
 
 
-/* Lazy normalized-projection cache. Ratios xo/zo and yo/zo are independent
- * of projection scale, including the temporary hierarchical x10 zoom.
- * Small heap blocks avoid a single large allocation on the IIGS; only vertices
- * actually used by fractional clipping are cached. No arrays live on the stack.
- */
 #define FRACTIONAL_CACHE_BLOCK_SIZE 256
 #define FRACTIONAL_CACHE_BLOCKS ((MAX_VERTICES + FRACTIONAL_CACHE_BLOCK_SIZE - 1) / FRACTIONAL_CACHE_BLOCK_SIZE)
 typedef struct {
@@ -103,12 +37,34 @@ static unsigned int fractional_cache_failed[FRACTIONAL_CACHE_BLOCKS];
 static unsigned int fractional_cache_generation = 0;
 static Model3D *fractional_cache_owner = NULL;
 
+/*
+ * ----------------------------------------------------------------------------
+ *  fractional_projection_cache_invalidate
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Invalider les rapports de projection et les caches d'ordre associés.
+ *
+ *  Paramètres :
+ *    [entrée] model, nouveau propriétaire.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Incrémente la génération en conservant les allocations ; au rebouclage,
+ *    efface stamps et échecs mémorisés.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void fractional_projection_cache_invalidate(Model3D *model)
 {
     int i;
+    /* Invalider aussi les métriques d'ordre dépendantes de cette transformation. */
     ordering_cache_invalidate(model);
     fractional_cache_owner = model;
     ++fractional_cache_generation;
+    /* Effacer les anciennes générations avant de réutiliser le stamp 1. */
     if (fractional_cache_generation == 0) {
         for (i = 0; i < FRACTIONAL_CACHE_BLOCKS; ++i) {
             if (fractional_cache[i]) memset(fractional_cache[i]->stamp, 0,
@@ -119,11 +75,35 @@ static void fractional_projection_cache_invalidate(Model3D *model)
     }
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  fractional_projection_cache_release
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Libérer les caches d'ordre et de projection appartenant à model.
+ *
+ *  Paramètres :
+ *    [entrée] model
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Le cache fractionnaire est libéré uniquement si son propriétaire
+ *    correspond ; tous les pointeurs obtenus deviennent invalides.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void fractional_projection_cache_release(Model3D *model)
 {
     int i;
+    /* Libérer d'abord les caches d'ordre, puis vérifier le propriétaire du
+     * cache fractionnaire.
+     */
     ordering_cache_release(model);
     if (fractional_cache_owner != model) return;
+    /* Libérer les blocs et remettre les métadonnées à zéro. */
     for (i = 0; i < FRACTIONAL_CACHE_BLOCKS; ++i) {
         free(fractional_cache[i]);
         fractional_cache[i] = NULL;
@@ -133,6 +113,32 @@ static void fractional_projection_cache_release(Model3D *model)
     fractional_cache_generation = 0;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  fractional_projection_cached
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Projeter un sommet en double en mémorisant xo/zo et yo/zo
+ *    indépendamment du zoom.
+ *
+ *  Paramètres :
+ *    [entrée] model ; v, indice base zéro valide ; scale, pixels par unité
+ *    projetée.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    *outx/*outy, pixels fractionnaires sans pan
+ *
+ *  Préconditions :
+ *    zo[v] non nul. Réserve des blocs de 256 sommets à la demande ; sans
+ *    cache disponible, calcule directement les rapports. Ne pas confondre la
+ *    borne du cache MAX_VERTICES avec une validation générale de v.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void fractional_projection_cached(Model3D *model, int v, double scale,
                                           double *outx, double *outy)
 {
@@ -141,6 +147,9 @@ static void fractional_projection_cached(Model3D *model, int v, double scale,
     double x, y;
     int block_index, slot;
     if (fractional_cache_owner != model) fractional_projection_cache_invalidate(model);
+    /* Localiser le bloc ou le réserver sans répéter son échec dans la même
+     * génération.
+     */
     if (v >= 0 && v < MAX_VERTICES) {
         block_index = v / FRACTIONAL_CACHE_BLOCK_SIZE;
         slot = v % FRACTIONAL_CACHE_BLOCK_SIZE;
@@ -151,6 +160,9 @@ static void fractional_projection_cached(Model3D *model, int v, double scale,
             if (!block) fractional_cache_failed[block_index] = fractional_cache_generation;
         }
     }
+    /* Réutiliser les rapports de cette vue ; à défaut, les recalculer sans
+     * stockage.
+     */
     if (block) {
         if (block->stamp[slot] != fractional_cache_generation) {
             block->x[slot] = (double)vtx->xo[v] / (double)vtx->zo[v];
@@ -159,18 +171,43 @@ static void fractional_projection_cached(Model3D *model, int v, double scale,
         }
         x = block->x[slot]; y = block->y[slot];
     } else {
-        /* Allocation failure is nonfatal: retain full subpixel precision. */
+
         x = (double)vtx->xo[v] / (double)vtx->zo[v];
         y = (double)vtx->yo[v] / (double)vtx->zo[v];
     }
+    /* Appliquer seulement l'échelle courante et le centrage écran aux
+     * rapports normalisés.
+     */
     *outx = (double)CENTRE_X + scale * x;
     *outy = (double)CENTRE_Y - scale * y;
 }
 
-/* Gather and normalize a fractional face once, then reuse its exact doubles.
- * The signed-area sum and reversal order match the uncached SH path. Copying
- * into the caller's workspace also protects subject data when clip aliases its
- * direct-mapped slot. Allocation failure only disables reuse, never precision.
+/*
+ * ----------------------------------------------------------------------------
+ *  fractional_face_gather
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Préparer le contour subpixel antihoraire d'une face et ses vecteurs
+ *    d'arêtes.
+ *
+ *  Paramètres :
+ *    [entrée] model, face, n et scale
+ *
+ *  Retour :
+ *    1 si contour exploitable, 0 si sommet derrière l'observateur ou aire
+ *    quasi nulle.
+ *
+ *  Sorties et effets de bord :
+ *    px/py de capacité n ; edge_x/edge_y reçoivent des pointeurs empruntés
+ *    au cache ou NULL.
+ *
+ *  Préconditions :
+ *    indices valides, n>=3 et scale cohérent avec l'échelle globale qui sert
+ *    de clé. Au plus 16 sommets sont mémorisés ; un échec de cache n'empêche
+ *    pas de retourner le contour dans les buffers fournis.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int fractional_face_gather(Model3D *model,int face,int n,double scale,
                                    double *px,double *py,
@@ -184,6 +221,7 @@ static int fractional_face_gather(Model3D *model,int face,int n,double scale,
     int i,prev,offset=faces->vertex_indices_ptr[face];
     *edge_x=*edge_y=NULL;
     if(fractional_cache_owner!=model)fractional_projection_cache_invalidate(model);
+    /* Chercher le contour avec ses tags exacts de vue, face, taille et échelle. */
     entry=&order_contours[(unsigned int)face & (ORDER_CONTOUR_SLOTS-1)];
     if(n<=ORDER_CONTOUR_MAX_VERTICES && entry->generation==order_cache_generation &&
        entry->face==face && entry->count==n && entry->scale==s_global_proj_scale_fixed){
@@ -193,11 +231,15 @@ static int fractional_face_gather(Model3D *model,int face,int n,double scale,
         *edge_y=entry->data+3*entry->capacity;
         return 1;
     }
+    /* Construire la projection et refuser une profondeur non positive. */
     for(i=0;i<n;++i){
         int v=faces->vertex_indices_buffer[offset+i]-1;
         if(vtx->zo[v]<=0)return 0;
         fractional_projection_cached(model,v,scale,&px[i],&py[i]);
     }
+    /* Réutiliser ou calculer l'aire orientée, puis inverser les coordonnées
+     * si nécessaire.
+     */
     winding=ordering_winding_slot(model,face);
     if(ordering_winding_hit(winding,face,s_global_proj_scale_fixed))area2=winding->area2;
     else {
@@ -217,6 +259,9 @@ static int fractional_face_gather(Model3D *model,int face,int n,double scale,
             t=py[i];py[i]=py[j];py[j]=t;
         }
     }
+    /* Limiter la mémorisation aux petits contours sans refuser les contours
+     * plus grands.
+     */
     if(n>ORDER_CONTOUR_MAX_VERTICES)return 1;
     if(entry->capacity<n){
         double *grown=NULL;
@@ -225,6 +270,9 @@ static int fractional_face_gather(Model3D *model,int face,int n,double scale,
         if(!grown){entry->failed_generation=order_cache_generation;return 1;}
         free(entry->data);entry->data=grown;entry->capacity=n;
     }
+    /* Mémoriser x/y et préparer les vecteurs du contour pour les découpages
+     * suivants.
+     */
     memcpy(entry->data,px,n*sizeof(double));
     memcpy(entry->data+entry->capacity,py,n*sizeof(double));
     *edge_x=entry->data+2*entry->capacity;
@@ -239,20 +287,61 @@ static int fractional_face_gather(Model3D *model,int face,int n,double scale,
     return 1;
 }
 
-/* Geometric helpers relocated from engine.c without changing their bodies. */
-/* Compute center of intersection of two faces' projected axis-aligned bboxes.
- * Returns 1 and writes (*outx,*outy) on success, 0 if no intersection or invalid ids.
+/*
+ * ----------------------------------------------------------------------------
+ *  compute_bbox_intersection_center
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Retourner le centre entier du rectangle commun des boîtes de deux
+ *    faces.
+ *
+ *  Paramètres :
+ *    [entrée] model et f1/f2
+ *
+ *  Retour :
+ *    1 en cas de rectangle commun, 0 sinon.
+ *
+ *  Sorties et effets de bord :
+ *    outx/outy.
+ *
+ *  Fonctionnement :
+ *    Ce point peut être hors des deux polygones.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int compute_bbox_intersection_center(Model3D* model, int f1, int f2, int *outx, int *outy) {
     if (!model || !outx || !outy) return 0;
     int ix0, iy0, ix1, iy1;
+    /* Exiger un rectangle commun avant de moyenner ses bornes. */
     if (!compute_bbox_intersection(model, f1, f2, &ix0, &iy0, &ix1, &iy1)) return 0;
     *outx = (ix0 + ix1) / 2;
     *outy = (iy0 + iy1) / 2;
     return 1;
 }
-/* Compute axis-aligned integer intersection bbox of projected face bboxes.
- * Returns 1 and fills (*ix0,*iy0,*ix1,*iy1) on success, 0 if no intersection.
+/*
+ * ----------------------------------------------------------------------------
+ *  compute_bbox_intersection
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Calculer le rectangle commun aux boîtes projetées de deux faces.
+ *
+ *  Paramètres :
+ *    [entrée] model, f1/f2 base zéro
+ *
+ *  Retour :
+ *    1 si les intervalles ont un point commun, 0 sinon ou arguments
+ *    invalides.
+ *
+ *  Sorties et effets de bord :
+ *    ix0/iy0/ix1/iy1.
+ *
+ *  Fonctionnement :
+ *    Accepte les contacts d'aire nulle ; les sorties ne sont écrites qu'en
+ *    réussite.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int compute_bbox_intersection(Model3D* model, int f1, int f2, int *ix0, int *iy0, int *ix1, int *iy1) {
     if (!model || !ix0 || !iy0 || !ix1 || !iy1) return 0;
@@ -260,30 +349,54 @@ static int compute_bbox_intersection(Model3D* model, int f1, int f2, int *ix0, i
     if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
     int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
     int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+    /* Prendre les maxima des minima et les minima des maxima. */
     int a0 = (minx1 > minx2) ? minx1 : minx2;
     int a1 = (maxx1 < maxx2) ? maxx1 : maxx2;
     int b0 = (miny1 > miny2) ? miny1 : miny2;
     int b1 = (maxy1 < maxy2) ? maxy1 : maxy2;
+    /* Rejeter seulement une séparation stricte, puis publier les bornes. */
     if (a0 > a1 || b0 > b1) return 0;
     *ix0 = a0; *iy0 = b0; *ix1 = a1; *iy1 = b1;
     return 1;
 }
-/* Integer point-in-polygon test using ray-crossing on integer vertex arrays.
- * Returns 1 if point (px,py) is inside or on edge, 0 otherwise.
+/*
+ * ----------------------------------------------------------------------------
+ *  point_in_poly_arrays_int
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester un point entier par parité des traversées d'un rayon horizontal.
+ *
+ *  Paramètres :
+ *    [entrée] px/py ; n ; vx/vy de longueur n.
+ *
+ *  Retour :
+ *    0 ou 1 ; n<3 rend 0.
+ *
+ *  Fonctionnement :
+ *    Un sommet exactement égal rend 1, mais les autres contacts de contour
+ *    ne sont pas traités uniformément comme intérieur. Produits 64 bits
+ *    après différences natives int : ne pas présenter cette routine comme
+ *    exacte sur tout le domaine 16 bits.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const int vy[]) {
     if (n < 3) return 0;
     int inside = 0;
+    /* Compter les croisements en évitant la division par produit croisé ;
+     * traiter les sommets égaux à part.
+     */
     for (int i = 0, j = n - 1; i < n; j = i++) {
         int xi = vx[i], yi = vy[i];
         int xj = vx[j], yj = vy[j];
-        /* Check if point is exactly on a vertex */
+
         if (px == xi && py == yi) return 1;
-        /* Ray crossing: test if edge (j->i) crosses horizontal line at py */
+
         int yi_gt_py = (yi > py);
         int yj_gt_py = (yj > py);
         if (yi_gt_py != yj_gt_py) {
-            /* Compute intersection X coordinate in integer-safe way: xi + (py - yi) * (xj - xi) / (yj - yi) */
+
             long long dx = (long long)(xj - xi);
             long long dy = (long long)(yj - yi);
             long long lhs = (long long)(px - xi) * dy;
@@ -294,76 +407,165 @@ static int point_in_poly_arrays_int(int px, int py, int n, const int vx[], const
     return inside;
 }
 
-/* Screen inputs are signed 16-bit; widened differences need at most 17 bits.
- * Exact 32x32 assembly products replace general 64-bit multiplication.
+/*
+ * ----------------------------------------------------------------------------
+ *  orient_ll
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Calculer l'orientation signée de trois points entiers A, B et C.
+ *
+ *  Paramètres :
+ *    [entrée] ax/ay, bx/by, cx/cy.
+ *
+ *  Retour :
+ *    Déterminant 64 bits, nul si colinéaires.
+ *
+ *  Fonctionnement :
+ *    Utilise le multiplicateur partagé de produits bruts ; signe positif
+ *    pour C à gauche de AB dans le repère des coordonnées fournies.
+ *
+ * ----------------------------------------------------------------------------
  */
 static long long orient_ll(int ax,int ay,int bx,int by,int cx,int cy) {
+    /* Former les différences en long avant les deux produits 32x32. */
     return fixed_product32_fast((long)bx-ax,(long)cy-ay)
          - fixed_product32_fast((long)by-ay,(long)cx-ax);
 }
+/*
+ * ----------------------------------------------------------------------------
+ *  on_seg_ll
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester si C appartient à la boîte fermée du segment AB.
+ *
+ *  Paramètres :
+ *    [entrée] ax/ay, bx/by, cx/cy.
+ *
+ *  Retour :
+ *    Booléen, sans effet de bord.
+ *
+ *  Fonctionnement :
+ *    Ne teste pas la colinéarité : l'appelant doit aussi vérifier
+ *    l'orientation nulle.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int on_seg_ll(int ax,int ay,int bx,int by,int cx,int cy) {
+    /* Comparer les coordonnées aux deux intervalles fermés indépendamment du
+     * sens du segment.
+     */
     return ((ax<=cx && cx<=bx)||(bx<=cx && cx<=ax)) &&
            ((ay<=cy && cy<=by)||(by<=cy && cy<=ay));
 }
 
 
 /*
- * Return 1 only when the interiors of the two projected segments
- * strictly cross.
+ * ----------------------------------------------------------------------------
+ *  segs_intersect_int_fixed64
+ * ----------------------------------------------------------------------------
  *
- * The following cases are NOT considered intersections:
- *   - endpoint touching endpoint
- *   - endpoint touching the other segment
- *   - collinear segments
- *   - partially or fully overlapping collinear segments
+ *  Rôle :
+ *    Tester une intersection propre de deux segments entiers.
  *
- * This intentionally uses no pixel tolerance. The decision is based
- * exclusively on the integer projected coordinates.
+ *  Paramètres :
+ *    [entrée] x1/y1 et x2/y2 pour AB, x3/y3 et x4/y4 pour CD.
  *
- * A strict crossing occurs only when:
- *   - C and D are strictly on opposite sides of AB, and
- *   - A and B are strictly on opposite sides of CD.
+ *  Retour :
+ *    1 si les extrémités sont strictement de côtés opposés dans les deux
+ *    sens, 0 sinon.
  *
- * If any orientation is zero, the case is therefore a contact or
- * collinear case and is not considered an overlap here.
+ *  Fonctionnement :
+ *    Exclut contacts d'extrémité et recouvrements colinéaires. Les
+ *    déterminants emploient les produits 64 bits partagés du moteur.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int segs_intersect_int_fixed64(
     int x1, int y1, int x2, int y2,
     int x3, int y3, int x4, int y4)
 {
+    /* Vérifier les deux changements stricts de signe ; une orientation nulle
+     * ne passe pas le test.
+     */
     long long o1 = orient_ll(x1,y1,x2,y2,x3,y3);
     long long o2 = orient_ll(x1,y1,x2,y2,x4,y4);
     long long o3,o4;
-    /* Two points on the same side already disprove a strict crossing. */
+
     if(!((o1>0 && o2<0)||(o1<0 && o2>0)))return 0;
     o3=orient_ll(x3,y3,x4,y4,x1,y1);
     o4=orient_ll(x3,y3,x4,y4,x2,y2);
     return (o3>0 && o4<0)||(o3<0 && o4>0);
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  segs_intersect_int
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester une intersection propre de deux segments entiers.
+ *
+ *  Paramètres :
+ *    [entrée] x1/y1 et x2/y2 pour AB, x3/y3 et x4/y4 pour CD.
+ *
+ *  Retour :
+ *    1 si les extrémités sont strictement de côtés opposés dans les deux
+ *    sens, 0 sinon.
+ *
+ *  Fonctionnement :
+ *    Exclut contacts d'extrémité et recouvrements colinéaires. Les
+ *    déterminants emploient les produits 64 bits partagés du moteur.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int segs_intersect_int(int x1,int y1,int x2,int y2,int x3,int y3,int x4,int y4) {
+    /* Déléguer intégralement au prédicat 64 bits pour conserver cette
+     * interface historique.
+     */
     return segs_intersect_int_fixed64(x1,y1,x2,y2,x3,y3,x4,y4);
 }
+/*
+ * ----------------------------------------------------------------------------
+ *  point_in_poly_int
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester l'intérieur strict d'une face projetée à un point entier.
+ *
+ *  Paramètres :
+ *    [entrée] px/py, faces/vtx, f à base zéro, n longueur valide de sa
+ *    liste.
+ *
+ *  Retour :
+ *    Parité 0/1, avec rejet explicite du contour ; n<=0 rend 0.
+ *
+ *  Fonctionnement :
+ *    Utilise une intersection par division entière en long ; les différences
+ *    restent des int natifs. N'est pas équivalent à la variante tableaux
+ *    pour les bords.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* vtx, int f, int n) {
     int cnt=0,off=faces->vertex_indices_ptr[f];
     int i,vi,xi,yi;
     if(n<=0)return 0;
     vi=faces->vertex_indices_buffer[off]-1;
     xi=vtx->x2d[vi];yi=vtx->y2d[vi];
+    /* Parcourir le cycle ; exclure le point sur une arête avant le test de parité. */
     for(i=0;i<n;++i){
         int next=i+1,vj,xj,yj;
         if(next==n)next=0;
         vj=faces->vertex_indices_buffer[off+next]-1;
         xj=vtx->x2d[vj];yj=vtx->y2d[vj];
-        /* Most edges cannot contain the point: reject by bounds before the
-         * exact determinant. Contacts remain outside as in the original test.
-         */
+
+
         if(on_seg_ll(xi,yi,xj,yj,px,py) && orient_ll(xi,yi,xj,yj,px,py)==0)return 0;
         if((yi>py)!=(yj>py)){
-            /* Preserve the original 16-bit coordinate differences and signed
-             * truncation toward zero. Their product fits signed 32 bits, so
-             * the original 64-bit multiply/divide is unnecessary here.
-             */
+
+
             int dx=xj-xi,dpy=py-yi,dy=yj-yi;
             long crossing=(long)dx*(long)dpy/(long)dy+(long)xi;
             if((long)px<crossing)cnt^=1;
@@ -372,15 +574,35 @@ static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* 
     }
     return cnt;
 }
-/* Return 1 if faces f1 and f2 have identical 2D vertex sequences (allowing rotation
- * and reversed order). Comparison uses exact integer 2D coordinates. */
+/*
+ * ----------------------------------------------------------------------------
+ *  faces_vertices_equal
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Comparer deux contours projetés modulo rotation cyclique et inversion.
+ *
+ *  Paramètres :
+ *    [entrée] faces/vtx et f1/f2.
+ *
+ *  Retour :
+ *    1 si les suites de coordonnées entières sont égales dans un des deux
+ *    sens, 0 sinon.
+ *
+ *  Fonctionnement :
+ *    Ne compare pas la profondeur, ni l'identité OBJ des sommets ; une
+ *    égalité projetée n'est pas une égalité 3D.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1, int f2) {
     int n1 = faces->vertex_count[f1];
     int n2 = faces->vertex_count[f2];
     if (n1 != n2 || n1 <= 0) return 0;
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
-    /* Forward rotation check */
+
+    /* Essayer toutes les origines cycliques dans le sens direct. */
     for (int shift = 0; shift < n1; ++shift) {
         int ok = 1;
         for (int k = 0; k < n1; ++k) {
@@ -391,11 +613,12 @@ static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1
         }
         if (ok) return 1;
     }
-    /* Reverse rotation check */
+
     for (int shift = 0; shift < n1; ++shift) {
         int ok = 1;
         for (int k = 0; k < n1; ++k) {
             int idx1 = faces->vertex_indices_buffer[off1 + k] - 1;
+            /* Comparer ensuite les coordonnées dans le sens inverse. */
             int idx2 = faces->vertex_indices_buffer[off2 + ((shift - k + n1) % n1)] - 1;
             if (idx1 < 0 || idx2 < 0) { ok = 0; break; }
             if (vtx->x2d[idx1] != vtx->x2d[idx2] || vtx->y2d[idx1] != vtx->y2d[idx2]) { ok = 0; break; }
@@ -406,14 +629,46 @@ static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1
 }
 
 
+/*
+ * ----------------------------------------------------------------------------
+ *  compute_intersection_centroid_ordered_fixed_work
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Découper un sujet par les demi-plans du clip et calculer un point
+ *    central.
+ *
+ *  Paramètres :
+ *    [entrée] model, subj/clip à base zéro ; shared_work, espace emprunté
+ *    assez grand ou NULL pour allocation locale.
+ *
+ *  Retour :
+ *    1 si résultat produit, 0 sinon ; dans le chemin entier, 1 peut
+ *    accompagner une aire nulle.
+ *
+ *  Sorties et effets de bord :
+ *    outx/outy facultatifs et out_area2 obligatoire pour le chemin entier ;
+ *    fractional_x, fractional_y et fractional_area2, tous trois non NULL,
+ *    activent le chemin subpixel en double.
+ *
+ *    caches et diagnostics globaux ; ne libère jamais shared_work.
+ *
+ *  Fonctionnement :
+ *    Malgré « fixed », le clipping intermédiaire utilise des doubles. Les
+ *    entrées entières sont arrondies après clipping, puis l'aire et le
+ *    centroïde utilisent des sommes entières ; le mode fractionnaire
+ *    conserve la précision subpixel. Précondition géométrique : clip convexe
+ *    pour l'intersection générale correcte par Sutherland-Hodgman. Limite de
+ *    travail DEBUG_CLIP_MAX=512 : les écritures excédentaires sont
+ *    tronquées, sans reconstruction générale d'un contour concave.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2, double* shared_work, double* fractional_x, double* fractional_y, double* fractional_area2) {
-    /* Robust integer implementation for diagnostics and fixed-area comparisons.
-     * - Clips `subj` by `clip` using Sutherland–Hodgman (double intermediates).
-     * - Produces integer output vertices (rounded), computes signed raw area2
-     *   (shoelace: 2 * pixel-area) and centroid (integer-rounded).
-     * - Returns 1 if a clipped polygon (>=3 verts) was produced; 0 otherwise.
-     * - Writes *out_area2 in **pixel^2** units (raw_area2).  This matches
-     *   compute_intersection_centroid_ordered_qd_fixed and simplifies callers.
+
+
+    /* Vérifier les faces et les longueurs avant d'organiser les espaces de
+     * travail.
      */
     if (!model || out_area2 == NULL) return 0;
     FaceArrays3D* faces = &model->faces;
@@ -424,12 +679,8 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     if (sn < 3 || cn < 3) {
         debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; return 0;
     }
-    /* Watchdog and iteration-cap disabled for repro testing (temporary). */
-    /* Gather integer input polygons (screen coords) */
-    /* Borrow reusable, double-aligned workspace from the entry-point wrapper.
-     * Integer diagnostics alone reserve and populate the trailing integer arrays.
-     * A direct caller without shared workspace retains the allocation fallback.
-     */
+
+
     double *work_storage;
     double *precise_sx, *precise_sy, *precise_cx, *precise_cy;
     double *clip_edge_x=NULL,*clip_edge_y=NULL;
@@ -442,6 +693,9 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
                     + (fractional ? 2L * cn : 0L));
     long integer_bytes = fractional ? 0L :
         (long)sizeof(int) * (2L * sn + 2L * cn + 2L * DEBUG_CLIP_MAX);
+    /* Répartir un bloc entre les quatre buffers double et les listes
+     * entières éventuelles.
+     */
     work_storage = shared_work ? shared_work : (double*)malloc(work_bytes + integer_bytes);
     if (!work_storage) {
         debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0;
@@ -451,9 +705,12 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     buf_y1 = buf_x1 + DEBUG_CLIP_MAX;
     buf_x2 = buf_y1 + DEBUG_CLIP_MAX;
     buf_y2 = buf_x2 + DEBUG_CLIP_MAX;
+    /* Organiser les buffers selon que le chemin conserve les doubles ou
+     * requiert des listes entières.
+     */
     if (fractional) {
         sx = sy = cx = cy = out_px = out_py = NULL;
-        /* Gather the subject directly into SH's first input buffers. */
+
         precise_sx = buf_x1;precise_sy = buf_y1;
         precise_cx = work_storage + 4L * DEBUG_CLIP_MAX;
         precise_cy = precise_cx + cn;
@@ -464,6 +721,7 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         out_px = output_storage;out_py = out_px + DEBUG_CLIP_MAX;
         precise_sx = precise_sy = precise_cx = precise_cy = NULL;
     }
+    /* Lire les projections entières existantes si le mode subpixel est désactivé. */
     if (!fractional) {
     for (int i = 0; i < sn; ++i) {
         int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[subj] + i] - 1;
@@ -474,11 +732,12 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         cx[i] = vtx->x2d[vi]; cy[i] = vtx->y2d[vi];
     }
     }
-    /* The ordering path must not inherit integer projection error, even at
-     * the temporary x10 scale. Project observer coordinates directly into
-     * double arrays; only integer diagnostics use the cached screen vertices.
-     */
+
+
     if (fractional) {
+        /* En subpixel, construire les contours normalisés et réutiliser les
+         * vecteurs du clip.
+         */
         double scale = (double)s_global_proj_scale_fixed / (double)FIXED_SCALE;
         double *unused_edge_x,*unused_edge_y;
         if (scale <= 0.0 ||
@@ -491,9 +750,12 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             return 0;
         }
     }
-    /* Normalize winding: ensure both polygons use CCW orientation so SH is deterministic
-     * regardless of the input vertex order. If signed area < 0, reverse vertex order. */
+
+
     if (!fractional) {
+        /* Normaliser le winding des deux contours entiers pour conserver le
+         * demi-plan gauche.
+         */
         long long area2_subj = 0;
         int fast_subj = (sn <= 64);
         int wi;
@@ -520,14 +782,17 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
                 prev = wi;
             }
         }
-        /* record signed subject area for repro pair */
+
         if (area2_subj < 0) {
-            /* reverse subj arrays in-place */
+
             for (int a = 0, b = sn - 1; a < b; ++a, --b) {
                 int tx = sx[a]; sx[a] = sx[b]; sx[b] = tx;
                 int ty = sy[a]; sy[a] = sy[b]; sy[b] = ty;
             }
         }
+        /* Normaliser également le winding du clip pour que tous ses
+         * demi-plans suivent la même convention.
+         */
         long long area2_clip = 0;
         int fast_clip = (cn <= 64);
         if (fast_clip) {
@@ -554,17 +819,20 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             }
         }
         if (area2_clip < 0) {
-            /* reverse clip arrays in-place */
+
             for (int a = 0, b = cn - 1; a < b; ++a, --b) {
                 int tx = cx[a]; cx[a] = cx[b]; cx[b] = tx;
                 int ty = cy[a]; cy[a] = cy[b]; cy[b] = ty;
             }
         }
     }
-    /* Optional detailed debug dump for failing cases (writes centroidlog.txt) */
+
+    /* Le pointeur de log reste NULL dans cette implémentation ; les
+     * écritures conditionnelles sont inactives.
+     */
     FILE* dlog = NULL;
     if (!fractional && ((debug_overlap_subj == subj && debug_overlap_clip == clip) || (subj == 12 && clip == 50))) {
-        //dlog = fopen("centroidlog.txt", "w");
+
         if (dlog) {
             fprintf(dlog, "--- compute_intersection_centroid_ordered_fixed debug (subj=%d clip=%d) ---\n", subj, clip);
             fprintf(dlog, "input subj verts (count=%d):\n", sn);
@@ -579,7 +847,8 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         buf_x1[i] = (double)sx[i];
         buf_y1[i] = (double)sy[i];
     }
-    /* Sutherland-Hodgman: each vertex side is evaluated once per clip edge. */
+
+    /* Découper successivement le contour courant par chaque arête du clip. */
     for (int ci = 0; ci < cn && cur_n > 0; ++ci) {
         int ci2 = ci + 1;
         double cx1d, cy1d, ex, ey;
@@ -590,7 +859,7 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         if (ci2 == cn) ci2 = 0;
         cx1d = fractional ? precise_cx[ci] : (double)cx[ci];
         cy1d = fractional ? precise_cy[ci] : (double)cy[ci];
-        /* Cached deltas use the identical normalized endpoints/subtraction. */
+
         ex = clip_edge_x ? clip_edge_x[ci] :
              (fractional ? precise_cx[ci2] : (double)cx[ci2]) - cx1d;
         ey = clip_edge_y ? clip_edge_y[ci] :
@@ -605,12 +874,14 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             int inside2;
             if (sj == cur_n) sj = 0;
             sx2d = buf_x1[sj]; sy2d = buf_y1[sj];
-            /* Closing endpoint is the first vertex: reuse the exact stored
-             * side instead of repeating two double products/subtractions.
-             */
+
+
             side2 = (sj==0)?first_side:
                     ex * (sy2d - cy1d) - ey * (sx2d - cx1d);
             inside2 = (side2 >= 0.0);
+            /* Émettre le sommet intérieur ou l'intersection lors d'un
+             * changement de côté ; respecter la capacité du buffer.
+             */
             if (inside1 && inside2) {
                 if (out_n_tmp < DEBUG_CLIP_MAX) {
                     buf_x2[out_n_tmp] = sx2d;
@@ -619,12 +890,8 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
                 }
             } else if (inside1 != inside2) {
                 double dx = sx2d - sx1d, dy = sy2d - sy1d;
-                /* The fractional path already evaluated both signed sides.
-                 * At a crossing, t = side1/(side1-side2). Reusing them avoids
-                 * repeating four double products and their coordinate differences.
-                 * Opposite signs make the denominator an addition of magnitudes,
-                 * avoiding cancellation. Keep legacy diagnostic arithmetic intact.
-                 */
+
+
                 double denom = fractional ? side1 - side2 : dx * ey - dy * ex;
                 double t = 0.0;
                 double ix, iy;
@@ -651,7 +918,7 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             inside1 = inside2;
         }
         cur_n = out_n_tmp;
-        /* Swap input/output buffers instead of copying vertices. */
+
         {
             double *tmp;
             tmp = buf_x1; buf_x1 = buf_x2; buf_x2 = tmp;
@@ -663,10 +930,10 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             fflush(dlog);
         }
     }
-    /* Ordering path: compute directly on the unrounded clipping result.
-     * Translate to the first vertex before accumulating area/centroid terms,
-     * reducing cancellation when a narrow intersection lies far off-screen.
-     * Integer diagnostic callers retain the original rounding path below.
+
+
+    /* Calculer aire et centroïde subpixel autour d'une origine locale pour
+     * réduire la perte numérique.
      */
     if (fractional_x && fractional_y && fractional_area2) {
         double area2 = 0.0, nx = 0.0, ny = 0.0;
@@ -692,7 +959,7 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         if (fabs(area2) <= 1e-12) {
             if (dlog) fclose(dlog);
             if (!shared_work) free(work_storage);
-            return 0; /* Shared edge/point or numerically degenerate contour. */
+            return 0;
         }
         *fractional_x = ox + nx / (3.0 * area2);
         *fractional_y = oy + ny / (3.0 * area2);
@@ -702,7 +969,10 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         return 1;
     }
 
-    /* Round and remove duplicate/colinear vertices into out_px/out_py */
+
+    /* Pour la voie entière, arrondir puis retirer doublons adjacents et
+     * points colinéaires.
+     */
     int final_n = 0;
     for (int i = 0; i < cur_n; ++i) {
         int px = (int)floor(buf_x1[i] + 0.5);
@@ -732,7 +1002,7 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         if (!shared_work) free(work_storage);
         return 0;
     }
-    /* Copy to debug buffers */
+
     if (final_n > DEBUG_CLIP_MAX) final_n = DEBUG_CLIP_MAX;
     for (int i = 0; i < final_n; ++i) { debug_clip_fixed_vx[i] = out_px[i]; debug_clip_fixed_vy[i] = out_py[i]; }
     debug_clip_fixed_vcount = final_n;
@@ -741,13 +1011,17 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         for (int i = 0; i < final_n; ++i) fprintf(dlog, "%d %d\n", out_px[i], out_py[i]);
         fflush(dlog);
     }
-    /* Fast path: all rounded vertices are on the 320x200 screen.
-     * With at most 32 vertices, each centroid numerator is bounded by
-     * 32 * (2*319) * (319*199), which fits in signed 32-bit long.
-     * Keep the original 64-bit path for every other case. */
+
+
+    /* Calculer aire orientée et moments ; prendre les sommes 32 bits
+     * seulement sous les bornes vérifiées.
+     */
     long long raw_area2_signed = 0;
     long long cx_num = 0, cy_num = 0;
     {
+        /* Prouver les bornes de taille et de coordonnées avant de réduire
+         * les moments de surface à des sommes 32 bits.
+         */
         int fast32 = (final_n <= 32);
         int i;
         if (fast32) {
@@ -788,6 +1062,9 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             }
         }
     }
+    /* Rendre une aire nulle et un sommet comme point de repli pour un
+     * contour dégénéré.
+     */
     if (raw_area2_signed == 0) {
         debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; *out_area2 = 0;
         if (dlog) { fprintf(dlog, "raw_area2_signed == 0 -> degenerate polygon\n"); fflush(dlog); }
@@ -799,14 +1076,19 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     long long abs_raw = (raw_area2_signed >= 0) ? raw_area2_signed : -raw_area2_signed;
     debug_clip_raw_area2 = abs_raw;
     debug_clip_fixed_area = fabs((double)raw_area2_signed) * 0.5;
-    /* Centroid formula: C = (1/(6*A)) * sum((xi+xj)*cross), with raw_area2_signed == 2*A
-     * => Cx = cx_num / (3 * raw_area2_signed)
+
+
+    /* Normaliser le signe du dénominateur et arrondir le centroïde avec une
+     * division 32 bits si prouvée sûre.
      */
     long long numer_x = cx_num;
     long long numer_y = cy_num;
     long long denom = 3 * raw_area2_signed;
     if (denom < 0) { denom = -denom; numer_x = -numer_x; numer_y = -numer_y; }
     long long cx_i, cy_i;
+    /* Choisir la division courte seulement si dénominateur, numérateurs et
+     * ajout du demi-pas sont représentables.
+     */
     if (denom <= 2147483647LL &&
         numer_x >= -2147483647LL && numer_x <= 2147483647LL &&
         numer_y >= -2147483647LL && numer_y <= 2147483647LL) {
@@ -814,7 +1096,7 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         long nx32 = (long)numer_x;
         long ny32 = (long)numer_y;
         long half32 = d32 / 2;
-        /* Do not overflow signed long during rounding. */
+
         if ((nx32 >= 0 ? nx32 : -nx32) <= 2147483647L - half32 &&
             (ny32 >= 0 ? ny32 : -ny32) <= 2147483647L - half32) {
             long x32 = (nx32 >= 0) ? (nx32 + half32) / d32
@@ -832,12 +1114,33 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         cy_i = (numer_y >= 0) ? (numer_y + denom/2) / denom : -((-numer_y + denom/2) / denom);
     }
     if (outx) *outx = (int)cx_i; if (outy) *outy = (int)cy_i;
-    /* Return raw area2 in pixel^2 (absolute value of signed raw_area2). */
+
     if (out_area2) *out_area2 = (long long)abs_raw;
     if (!shared_work) free(work_storage);
     return 1;
 }
-/* Integer diagnostic entry point: reuse workspace without changing outputs. */
+/*
+ * ----------------------------------------------------------------------------
+ *  compute_intersection_centroid_ordered_fixed
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Appeler le clipping ordonné entier avec un espace de travail réutilisé.
+ *
+ *  Paramètres :
+ *    [entrée] model, subj/clip
+ *
+ *  Retour :
+ *    Résultat du noyau, dont 1 peut accompagner une aire nulle.
+ *
+ *  Sorties et effets de bord :
+ *    outx/outy facultatifs, out_area2 obligatoire.
+ *
+ *    cache de workspace et diagnostics globaux ; mémoire non transférée à
+ *    l'appelant.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
     FaceArrays3D *faces;
     double *work;
@@ -848,6 +1151,7 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
     if (subj < 0 || clip < 0 || subj >= faces->face_count || clip >= faces->face_count) return 0;
     sn=faces->vertex_count[subj];cn=faces->vertex_count[clip];
     if (order_cache_owner != model) ordering_cache_invalidate(model);
+    /* Dimensionner puis obtenir le workspace partagé. */
     bytes=(long)sizeof(double)*(4L*DEBUG_CLIP_MAX)
          +(long)sizeof(int)*(2L*sn+2L*cn+2L*DEBUG_CLIP_MAX);
     work=ordering_workspace(bytes);
@@ -855,11 +1159,33 @@ static int compute_intersection_centroid_ordered_fixed(Model3D* model, int subj,
         debug_clip_fixed_vcount=0;debug_clip_raw_area2=0;debug_clip_fixed_area=0.0;*out_area2=0;
         return 0;
     }
+    /* Laisser au noyau le clipping, l'arrondi et les conventions de résultat. */
     return compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, work, NULL, NULL, NULL);
 }
-/* Fractional centroid for face ordering. No pixel rounding or minimum
- * pixel-area threshold: any nondegenerate SH intersection can select a ray.
- * Unlike the integer diagnostic helper, failure does not invent a bbox point.
+/*
+ * ----------------------------------------------------------------------------
+ *  compute_intersection_centroid_fractional_tryboth
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Essayer le clipping subpixel dans les deux sens sans arrondir le
+ *    centroïde.
+ *
+ *  Paramètres :
+ *    [entrée] model, subj/clip
+ *
+ *  Retour :
+ *    1 si un sens réussit, 0 sinon.
+ *
+ *  Sorties et effets de bord :
+ *    outx/outy et out_area2, double de l'aire positive en pixels carrés.
+ *
+ *  Fonctionnement :
+ *    Réutilise un workspace partagé ; l'inversion sujet/clip n'annule pas
+ *    les limites de convexité du clipping. Aucune modification des
+ *    coordonnées entières du modèle.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int compute_intersection_centroid_fractional_tryboth(Model3D *model,
         int subj, int clip, double *outx, double *outy, double *out_area2)
@@ -878,10 +1204,12 @@ static int compute_intersection_centroid_fractional_tryboth(Model3D *model,
     if (sn < 3 || cn < 3 || sn > DEBUG_CLIP_MAX || cn > DEBUG_CLIP_MAX) return 0;
     ORDER_COUNT(sh_calls);
     if (order_cache_owner != model) ordering_cache_invalidate(model);
-    /* Either clipping order fits: only its clip polygon needs extra arrays. */
+
+    /* Réserver un workspace couvrant les deux longueurs possibles de clip. */
     bytes = (long)sizeof(double) * (4L * DEBUG_CLIP_MAX + 2L * (sn>cn?sn:cn));
     work = ordering_workspace(bytes);
     if (!work) return 0;
+    /* Essayer le sens fourni puis son inverse uniquement si le premier échoue. */
     ok = compute_intersection_centroid_ordered_fixed_work(model, subj, clip,
              NULL, NULL, &ignored_area2, work, outx, outy, out_area2);
     if (!ok) ok = compute_intersection_centroid_ordered_fixed_work(model, clip, subj,
@@ -889,15 +1217,40 @@ static int compute_intersection_centroid_fractional_tryboth(Model3D *model,
     return ok;
 }
 
-/* Try both clipping orders: call compute_intersection_centroid_ordered_fixed(subj,clip)
- * and if it produces fewer than 3 output vertices, try compute_intersection_centroid_ordered_fixed(clip,subj).
- * This keeps existing callers intact and provides a single-call fallback for UI/diagnostic use.
+/*
+ * ----------------------------------------------------------------------------
+ *  compute_intersection_centroid_ordered_fixed_tryboth
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Essayer le clipping entier puis chercher un point de repli commun.
+ *
+ *  Paramètres :
+ *    [entrée] model, subj/clip
+ *
+ *  Retour :
+ *    0 sur arguments/réserve invalides ; 1 peut désigner uniquement un repli
+ *    avec out_area2=0 et out_fallback=1.
+ *
+ *  Sorties et effets de bord :
+ *    outx/outy facultatifs, out_area2 obligatoire, out_fallback facultatif.
+ *
+ *  Fonctionnement :
+ *    Après les deux sens SH, essaye le centre de bbox puis une grille 3x3 à
+ *    l'intérieur strict des deux faces. Si rien ne convient, rend quand même
+ *    le centre disponible. L'appelant doit tester l'aire ou le drapeau, pas
+ *    seulement le booléen de retour.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2, int* out_fallback) {
     if (!model || out_area2 == NULL) return 0;
+    /* Initialiser le marqueur puis réserver un seul espace pour les deux
+     * essais SH.
+     */
     if (out_fallback) *out_fallback = 0;
-    /* Allocate the clipping workspace once, including for a reversed retry.
-     * Both orders require exactly the same total storage. */
+
+
     {
         FaceArrays3D* f = &model->faces;
         int sn, cn;
@@ -924,21 +1277,22 @@ static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, i
             *out_area2 = 0;
             return 0;
         }
-    /* Try primary order first */
+
+    /* Le nombre de sommets de diagnostic, et non le seul booléen, détermine
+     * si l'essai ordonné est retenu.
+     */
     res = compute_intersection_centroid_ordered_fixed_work(model, subj, clip, outx, outy, out_area2, shared_work, NULL, NULL, NULL);
     if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0;  return res; }
-    /* Try reversed order */
+
     res2 = compute_intersection_centroid_ordered_fixed_work(model, clip, subj, outx, outy, out_area2, shared_work, NULL, NULL, NULL);
     if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0;  return res2; }
 
     }
-    /* No drawable clipped polygon found in either order — perform bbox/sample fallback
-     * (mirror the inspector behavior): find a sample point inside the integer
-     * intersection bbox that lies inside both polygons; otherwise use bbox center.
-     * Report fallback via out_fallback (nullable).
-     */
+
+
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
+    /* Chercher un point intérieur commun dans le rectangle d'intersection. */
     int ix0=0, iy0=0, ix1=0, iy1=0;
     int found = 0;
     if (compute_bbox_intersection(model, subj, clip, &ix0, &iy0, &ix1, &iy1)) {
@@ -954,7 +1308,7 @@ static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, i
             }
         }
     } else {
-        /* Fallback to intersecting per-face bboxes if compute_bbox_intersection failed */
+
         ix0 = faces->minx[subj] > faces->minx[clip] ? faces->minx[subj] : faces->minx[clip];
         ix1 = faces->maxx[subj] < faces->maxx[clip] ? faces->maxx[subj] : faces->maxx[clip];
         iy0 = faces->miny[subj] > faces->miny[clip] ? faces->miny[subj] : faces->miny[clip];
@@ -971,21 +1325,48 @@ static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, i
             }
         }
     }
-    if (!found) { /* final fallback: center of the intersection bbox */
+    /* Faute de point validé, conserver un centre de repli sans prétendre à
+     * une aire positive.
+     */
+    if (!found) {
         if (outx) *outx = (ix0 + ix1) / 2;
         if (outy) *outy = (iy0 + iy1) / 2;
     }
-    /* Report fallback and clear clipped-polygon diagnostics */
+
+    /* Signaler le repli et annuler toutes les valeurs d'aire du diagnostic. */
     if (out_fallback) *out_fallback = 1;
     debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0;
     debug_clip_centroid_x = outx ? *outx : 0; debug_clip_centroid_y = outy ? *outy : 0;
-    if (out_area2) *out_area2 = 0; /* no polygon area */
+    if (out_area2) *out_area2 = 0;
     return 1;
 }
-/* Alternative implementation using QuickDraw regions (faster to reason about for
- * overlapping faces and robust to colinear/edge-sharing cases). This does NOT
- * compute the exact area-centroid, it returns the center of the region bbox.
- * Returns 1 and sets (*outx,*outy) and *out_area2 (bbox area) on success, 0 on no-overlap.
+/*
+ * ----------------------------------------------------------------------------
+ *  compute_intersection_region_bbox
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Construire l'intersection de deux régions QuickDraw et en lire la bbox.
+ *
+ *  Paramètres :
+ *    [entrée] model, subj/clip
+ *
+ *  Retour :
+ *    Région commune détectée, ou 0 si échec.
+ *
+ *  Sorties et effets de bord :
+ *    ix0/iy0/ix1/iy1
+ *
+ *    out_area2.
+ *
+ *  Préconditions :
+ *    QuickDraw initialisé. Alloue trois régions et deux polygones. Attention
+ *    : out_area2 contient le produit largeur*hauteur de la bbox, pas le
+ *    double de l'aire de la région. Les tableaux sont lus sans pan ; les
+ *    ressources QuickDraw sont libérées avant retour sur les chemins pris en
+ *    charge.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, int* ix0, int* iy0, int* ix1, int* iy1, long long* out_area2) {
     if (!model || !ix0 || !iy0 || !ix1 || !iy1) return 0;
@@ -995,10 +1376,11 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
     int n1 = faces->vertex_count[subj];
     int n2 = faces->vertex_count[clip];
     if (n1 <= 0 || n2 <= 0) return 0;
-    /* Vertex index offsets used later */
+
     int off1 = faces->vertex_indices_ptr[subj];
     int off2 = faces->vertex_indices_ptr[clip];
-    /* Compute per-face bounding boxes (used to clamp the region bbox) */
+
+    /* Mesurer les boîtes projetées nécessaires aux replis de cette routine. */
     int minx1, maxx1, miny1, maxy1;
     {
         int vi = faces->vertex_indices_buffer[off1] - 1;
@@ -1023,7 +1405,10 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
             if (wy < miny2) miny2 = wy; if (wy > maxy2) maxy2 = wy;
         }
     }
-    /* Logging removed: region debug logs were deleted per request */
+
+    /* Réserver les trois régions et libérer celles obtenues si la réserve
+     * est partielle.
+     */
     RegionHndl r1 = NewRgn();
     RegionHndl r2 = NewRgn();
     RegionHndl r3 = NewRgn();
@@ -1033,8 +1418,11 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
         if (r3) DisposeRgn(r3);
         return 0;
     }
-    /* Build region for subj — construct polygon then FramePoly into r1 */
+
     {
+        /* Enregistrer le premier contour dans une région en préservant
+         * l'état du crayon.
+         */
         Handle subj_poly = OpenPoly();
         off1 = faces->vertex_indices_ptr[subj];
         int v0 = faces->vertex_indices_buffer[off1] - 1;
@@ -1049,8 +1437,9 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
         SetPenState(&ps_subj);
         KillPoly(subj_poly);
     }
-    /* Build region for clip — construct polygon then FramePoly into r2 */
+
     {
+        /* Construire la région du second contour avant l'intersection. */
         Handle clip_poly = OpenPoly();
         off2 = faces->vertex_indices_ptr[clip];
         int w0 = faces->vertex_indices_buffer[off2] - 1;
@@ -1065,12 +1454,12 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
         SetPenState(&ps_clip);
         KillPoly(clip_poly);
     }
-    /* Intersection */
+
     SectRgn(r1, r2, r3);
-    /* runs-based parsing removed — QuickDraw region header bbox (r3->rgnBBox) is authoritative */
+
     int has = 0;
     if (!EmptyRgn(r3)) {
-        /* Read region header (size + bbox words) from r3 */
+
         HLock((Handle)r3);
         short* sp = (short*)(*r3);
         int w0 = (int)sp[0];
@@ -1078,27 +1467,24 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
         if (w0 >= 10 && (w0/2) >= 5) {
             raw_top = (int)sp[1]; raw_left = (int)sp[2]; raw_bottom = (int)sp[3]; raw_right = (int)sp[4];
         } else {
-            /* Fallback: use first four words as before */
+
             raw_top = (int)sp[0]; raw_left = (int)sp[1]; raw_bottom = (int)sp[2]; raw_right = (int)sp[3];
         }
-        /* Normalize X and Y orientations into (left,top,right,bottom) from header */
+
         int h_top = (raw_top < raw_bottom) ? raw_top : raw_bottom;
         int h_bottom = (raw_top < raw_bottom) ? raw_bottom : raw_top;
         int h_left = (raw_left < raw_right) ? raw_left : raw_right;
         int h_right = (raw_left < raw_right) ? raw_right : raw_left;
-        /* runs parsing removed — use region header bbox (r3->rgnBBox) directly */
-        /* Use the region header bbox (r3->rgnBBox) as authoritative for the QD region rectangle.
-         * Keep runs parsing only for diagnostics (do not override the region header bbox). */
+
+
         *ix0 = h_left; *iy0 = h_top; *ix1 = h_right; *iy1 = h_bottom;
         if (*ix0 <= *ix1 && *iy0 <= *iy1) {
+            /* Estimer la taille par l'aire de bbox ; ce champ ne représente
+             * pas l'aire exacte de région.
+             */
             if (out_area2) *out_area2 = (long long)((*ix1 - *ix0) * (*iy1 - *iy0));
-            /* Paint region for visual confirmation (apply current pan so visual matches overlays) */
-            // PenState ps_dbg; GetPenState(&ps_dbg); SetSolidPenPat(COL_YELLOW);
-            // /* shift the QuickDraw region by the global pan so PaintRgn draws at the
-            //    same position as the other overlays which apply `pan_dx/pan_dy` at
-            //    render time */
-            // OffsetRgn(r3, pan_dx, pan_dy);
-            // PaintRgn(r3); SetPenState(&ps_dbg);
+
+
             HUnlock((Handle)r3);
             DisposeRgn(r1); DisposeRgn(r2); DisposeRgn(r3);
             return 1;
@@ -1109,8 +1495,33 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
     return has;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  compute_intersection_centroid_ordered_qd_fixed
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Retourner le centre de bbox de l'intersection QuickDraw de deux faces.
+ *
+ *  Paramètres :
+ *    [entrée] model, subj/clip
+ *
+ *  Retour :
+ *    1 si la région fournit un résultat, 0 sinon.
+ *
+ *  Sorties et effets de bord :
+ *    outx/outy et out_area2.
+ *
+ *  Fonctionnement :
+ *    Le nom historique est trompeur : ce n'est pas un centroïde de surface.
+ *    out_area2 est l'aire de bbox, pas un double d'aire. QuickDraw doit être
+ *    initialisé.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int compute_intersection_centroid_ordered_qd_fixed(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2) {
     int ix0,iy0,ix1,iy1; long long a2=0;
+    /* Exiger la région avant de moyenner ses bornes entières. */
     if (!compute_intersection_region_bbox(model, subj, clip, &ix0, &iy0, &ix1, &iy1, &a2)) return 0;
     if (outx) *outx = (ix0 + ix1) / 2;
     if (outy) *outy = (iy0 + iy1) / 2;
@@ -1119,15 +1530,36 @@ static int compute_intersection_centroid_ordered_qd_fixed(Model3D* model, int su
 }
 
 
- /* Original overlap implementations relocated from engine.c.
- * These functions remain static because overlap_raster.c is
- * textually included by engine.c, preserving one translation unit.
- * Keep the original arithmetic and decision logic unchanged.
- */
 segment "ordering";
 
-/* V1 overlap test. Retains the original arithmetic and decisions.
- * This implementation is used by the painter and the six-way benchmark.
+/*
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap_v1
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester le chevauchement avec les filtres et heuristiques historiques
+ *    V1.
+ *
+ *  Paramètres :
+ *    [entrée] model, f1/f2 valides et métriques à jour.
+ *
+ *  Retour :
+ *    1 pour chevauchement retenu, 0 pour rejet, cas non concluants ou garde
+ *    temporelle.
+ *
+ *  Sorties et effets de bord :
+ *    compteurs, diagnostics, cache de clipping et lecture de GetTick.
+ *
+ *  Fonctionnement :
+ *    Après boîtes et tests de segments/échantillons, recourt au clipping et
+ *    vérifie ses aires avec seuils et bornes. N'est pas équivalent à un test
+ *    géométrique exact.
+ *
+ *    Le watchdog nommé MS compare directement des ticks ; ne pas le décrire
+ *    en millisecondes.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
 {
@@ -1138,12 +1570,11 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
     int n2 = faces->vertex_count[f2];
     if (n1 < 3 || n2 < 3)
         return 0;
-    /* Instrumentation */
+
+    /* Démarrer instrumentation et garde temporelle avant le rejet de boîtes. */
     overlapCheckCount++;
-    /*
-     * Watchdog: bail out conservatively if this pair takes
-     * pathologically long.
-     */
+
+
     long proj_start_tick = GetTick();
     const long PROJ_OVERLAP_WATCHDOG_MS = 1000;
     int minx1 = faces->minx[f1];
@@ -1154,11 +1585,8 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
     int maxx2 = faces->maxx[f2];
     int miny2 = faces->miny[f2];
     int maxy2 = faces->maxy[f2];
-    /*
-     * Step 1: whole-polygon AABB rejection.
-     *
-     * Touching only at an edge or point is not considered overlap.
-     */
+
+
     if (maxx1 <= minx2 ||
         maxx2 <= minx1 ||
         maxy1 <= miny2 ||
@@ -1168,9 +1596,8 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
     }
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
-    /*
-     * Precompute all edges of f2.
-     */
+
+
     int f2_precomputed = (n2 <= MAX_FACE_VERTICES);
     int f2_cx[MAX_FACE_VERTICES];
     int f2_cy[MAX_FACE_VERTICES];
@@ -1180,6 +1607,9 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
     int f2_maxx[MAX_FACE_VERTICES];
     int f2_miny[MAX_FACE_VERTICES];
     int f2_maxy[MAX_FACE_VERTICES];
+    /* Préparer les arêtes de la seconde face pour réutiliser leurs
+     * coordonnées et bornes.
+     */
     if (f2_precomputed) {
         int j;
         for (j = 0; j < n2; ++j) {
@@ -1211,12 +1641,9 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
             f2_maxy[j] = (cy > dy) ? cy : dy;
         }
     }
-    /*
-     * Step 2: edge-vs-edge strict intersection.
-     *
-     * segs_intersect_int() must detect only genuine crossings.
-     * Vertex contacts, shared edges and tangencies do not count.
-     */
+
+
+    /* Chercher des indices de chevauchement sans encore valider une aire commune. */
     int candidate = 0;
     {
         int i;
@@ -1292,9 +1719,8 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                         cminy = (cy < dy) ? cy : dy;
                         cmaxy = (cy > dy) ? cy : dy;
                     }
-                    /*
-                     * Edge AABB quick rejection.
-                     */
+
+
                     if (amaxx <= cminx ||
                         cmaxx <= aminx ||
                         amaxy <= cminy ||
@@ -1319,10 +1745,10 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                 return 1;
         }
     }
-    /*
-     * Step 3: vertex containment.
-     *
-     * Boundary points are outside according to point_in_poly_int().
+
+
+    /* Sans croisement propre, chercher un sommet strictement intérieur ; les
+     * recherches suivantes affinent le cas resté indécis.
      */
     if (!candidate) {
         int ii;
@@ -1400,22 +1826,12 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
             }
         }
     }
-    /*
-     * Step 4: identical polygons.
-     *
-     * IMPORTANT:
-     *
-     * Do NOT return 0 here when no strict crossing or vertex
-     * containment was found.
-     *
-     * Two projected polygons can have a positive common area
-     * without either condition being detected, particularly when
-     * they share vertices or edges.
-     *
-     * In that situation the sampling and exact clipping stages
-     * below are allowed to make the final decision.
-     */
+
+
     if (!candidate) {
+        /* Reconnaître des contours projetés égaux, sans en déduire une
+         * égalité des faces 3D.
+         */
         if (faces_vertices_equal(
                 faces,
                 vtx,
@@ -1425,9 +1841,8 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
             return 1;
         }
     }
-    /*
-     * Steps 5-7: sampling followed by exact clipping.
-     */
+
+
     {
         int oxmin;
         int oxmax;
@@ -1450,9 +1865,8 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
         {
             return 0;
         }
-        /*
-         * Step 5: center of intersection bbox.
-         */
+
+
         {
             int cx;
             int cy;
@@ -1471,9 +1885,8 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                 return 1;
             }
         }
-        /*
-         * Step 6: adaptive 3 x 3 sampling.
-         */
+
+
         {
             int ixmin;
             int ixmax;
@@ -1481,6 +1894,9 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
             int iymax;
             int W;
             int H;
+            /* Sonder la zone de boîtes commune pour confirmer un intérieur
+             * partagé avant le clipping.
+             */
             int sample_accept;
             int N;
             int sx;
@@ -1534,11 +1950,13 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                 return 1;
             }
         }
-        /*
-         * Step 7: exact Fixed64 Sutherland-Hodgman clipping.
-         */
+
+
         overlapClipCalls++;
         {
+            /* Préparer les seuils d'aire et une borne maximale liée à la
+             * bbox pour filtrer les résultats numériques aberrants.
+             */
             unsigned long long min_area2_fixed;
             unsigned long long bbox_limit;
             min_area2_fixed =
@@ -1569,10 +1987,8 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                     bbox_pixels *
                     scale2;
             }
-            /*
-             * First clipping order:
-             * f1 clipped by f2.
-             */
+
+
             {
                 int tx;
                 int ty;
@@ -1606,15 +2022,17 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                      debug_clip_fixed_vcount >= 3 &&
                      area2_1 >= min_area2_fixed &&
                      area2_1 <= bbox_limit);
+                /* Accepter le premier clipping seulement si taille de
+                 * contour et aire satisfont les seuils ; sinon essayer le
+                 * sens inverse.
+                 */
                 if (valid1) {
                     overlapClipAccept++;
                     return 1;
                 }
             }
-            /*
-             * Second clipping order:
-             * f2 clipped by f1.
-             */
+
+
             {
                 int tx2;
                 int ty2;
@@ -1646,6 +2064,9 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                      debug_clip_fixed_vcount >= 3 &&
                      area2_2 >= min_area2_fixed &&
                      area2_2 <= bbox_limit);
+                /* Valider séparément l'aire obtenue par l'inversion
+                 * sujet/clip.
+                 */
                 if (valid2) {
                     overlapClipAccept++;
                     return 1;
@@ -1653,59 +2074,30 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
             }
         }
     }
+    /* Rendre un rejet si aucun chemin heuristique n'a validé le chevauchement. */
     return 0;
 }
 /*
-/*
- * projected_polygons_overlap_simple (legacy / simple overlap test)
- * ---------------------------------------------------------------
- * Purpose:
- *  - Provide a fast, legacy-style screen-space overlap test used historically
- *    by the renderer. It implements a straightforward sequence of inexpensive
- *    checks and avoids the more costly sampling+clipping steps found in the
- *    stricter `projected_polygons_overlap` implementation.
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap_simple
+ * ----------------------------------------------------------------------------
  *
- * Algorithm summary (simple):
- *  1) Axis-aligned bbox quick-reject (if bboxes are disjoint -> NON-overlap)
- *  2) Edge-vs-edge *proper* intersection tests with per-edge bbox quick-reject
- *     (returns overlap on any proper intersection; colinear or endpoint-touching
- *     do not count as proper intersection)
- *  3) Containment checks via ray-casting for vertices that fall inside the
- *     other's bbox (points on edges count as OUTSIDE)
- *  - Returns 1 for detected intersection/containment, 0 otherwise.
+ *  Rôle :
+ *    Tester rapidement croisements propres et inclusion stricte de sommets.
  *
- * Performance & semantics:
- *  - This variant is faster and tends to accept borderline overlaps (including
- *    small/degenerate cases) because it does not enforce a minimum clipped area
- *    threshold. It is thus useful for compatibility and to avoid strict rejections
- *    that can cause ordering artifacts in some meshes.
+ *  Paramètres :
+ *    [entrée] model, f1/f2 valides
  *
- * projected_polygons_overlap (strict / precise overlap test)
- * ----------------------------------------------------------
- * Purpose:
- *  - A more conservative and precise overlap test that reduces false positives
- *    for touching or sub-pixel intersections.
+ *  Retour :
+ *    Booléen.
  *
- * Algorithm summary (strict):
- *  1) Axis-aligned bbox quick-reject (same as simple)
- *  2) Edge intersection + containment quick checks; if these indicate a candidate
- *     intersection, the function samples a 3×3 grid of interior pixel centers in
- *     the integer intersection bbox (fast acceptance if any sample lies inside
- *     both polygons).
- *  3) If sampling fails, the strict algorithm performs exact polygon clipping
- *     (Sutherland–Hodgman) and computes the clipped polygon area. The overlap
- *     is accepted only if the clipped area >= MIN_INTERSECTION_AREA_PIXELS (1.0).
+ *  Fonctionnement :
+ *    Aucun recours au clipping. Les contacts seuls ne suffisent pas. Peut
+ *    manquer les contours coïncidents ou certains chevauchements dont tous
+ *    les sommets sont sur le contour ; les filtres de boîtes d'arêtes et
+ *    divisions entières définissent ses limites.
  *
- * Rationale & guidance:
- *  - Use `projected_polygons_overlap_simple` when you need legacy/compat behavior
- *    (performance or to reproduce older rendering decisions).
- *  - Use `projected_polygons_overlap` when you require conservative detection
- *    that treats touching-only or tiny intersections as NON-overlap.
- *
- * Backwards compatibility:
- *  - Historically some callers used the name `projected_polygons_overlapV0` to
- *    refer to the legacy behavior. `projected_polygons_overlap_simple` preserves
- *    that semantics. An alias may be provided for compatibility.
+ * ----------------------------------------------------------------------------
  */
 static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
     if (!model) return 0;
@@ -1716,13 +2108,13 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
     if (n1 < 3 || n2 < 3) return 0;
     int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
     int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
+    /* Écarter les boîtes séparées avant les tests d'arêtes. */
     if (maxx1 < minx2 || maxx2 < minx1 || maxy1 < miny2 || maxy2 < miny1) return 0;
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
-    /* Edge-vs-edge proper intersection with per-edge bbox quick-reject.
-     * This avoids expensive orientation tests for clearly separated edges.
-     * We use <= in bbox checks so that touching-only edges are treated as
-     * non-overlapping (consistent with the semantics). */
+
+
+    /* Chercher une intersection propre entre les deux contours. */
     for (int i = 0; i < n1; ++i) {
         int i2 = (i+1) % n1;
         int va = faces->vertex_indices_buffer[off1 + i] - 1;
@@ -1739,16 +2131,16 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
             int dx = vtx->x2d[vd], dy = vtx->y2d[vd];
             int cminx = cx < dx ? cx : dx; int cmaxx = cx > dx ? cx : dx;
             int cminy = cy < dy ? cy : dy; int cmaxy = cy > dy ? cy : dy;
-            /* quick reject if edge AABBs do not overlap (<= to consider touching as non-overlap) */
+
             if (amaxx <= cminx || cmaxx <= aminx || amaxy <= cminy || cmaxy <= aminy) continue;
             if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) return 1;
         }
     }
-    /* Containment tests: check *all* vertices of poly1 against poly2, and vice versa.
-     * This avoids missing a containment when the polygon's first vertex lies on a shared
-     * boundary point (touching) which is treated as outside. Only checks the candidate
-     * point's bbox first (cheap) before the full ray-cast in point_in_poly_int, skipping
-     * expensive loops for points obviously outside the other polygon's bbox. */
+
+
+    /* Essayer ensuite les sommets de chaque face strictement à l'intérieur
+     * de l'autre.
+     */
     for (int ii = 0; ii < n1; ++ii) {
         int vid = faces->vertex_indices_buffer[off1 + ii] - 1;
         if (vid < 0 || vid >= vtx->vertex_count) continue;
@@ -1770,33 +2162,29 @@ segment "raster_overlap";
 
 static int projected_polygons_overlap_raster(Model3D* model, int f1, int f2);
 /*
- * projected_polygons_overlap_raster
- * =================================
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap_raster_x10
+ * ----------------------------------------------------------------------------
  *
- * Raster-space overlap test independent of QuickDraw.
+ *  Rôle :
+ *    Tester le chevauchement raster après un grossissement temporaire par
+ *    dix.
  *
- * The function returns 1 when at least one screen pixel has its center
- * strictly inside both projected polygons.
+ *  Paramètres :
+ *    [entrée] model, f1/f2
  *
- * Pixel centers are represented in doubled integer coordinates:
+ *  Retour :
+ *    Booléen raster, pas une aire géométrique exacte.
  *
- *     pixel (x,y) center = (2*x + 1, 2*y + 1)
+ *  Fonctionnement :
+ *    Effets temporaires : échelle, coordonnées et boîtes de la paire,
+ *    restaurées après le test.
  *
- * Polygon vertices are therefore also multiplied by 2. This avoids
- * floating-point and fixed-point arithmetic completely.
+ *  Préconditions :
+ *    profondeurs non nulles et indices valides.
  *
- * Important semantics:
- *
- *   - vertex touching vertex        -> no overlap
- *   - vertex touching an edge       -> no overlap
- *   - shared edge only              -> no overlap
- *   - simple tangency               -> no overlap
- *   - positive common raster area   -> overlap
- *
- * This function does not require QuickDraw and therefore also works
- * while the program is in text mode.
+ * ----------------------------------------------------------------------------
  */
-
 static int projected_polygons_overlap_raster_x10(
     Model3D* model,
     int f1,
@@ -1809,12 +2197,8 @@ static int projected_polygons_overlap_raster_x10(
     if (!model)
         return 0;
     faces = &model->faces;
-    /*
-     * Fast rejection before high-resolution reprojection.
-     *
-     * A positive gap is required to reject a pair.
-     * Touching bounding boxes must still be tested at x10.
-     */
+
+
     if (faces->maxx[f1] < faces->minx[f2] ||
         faces->maxx[f2] < faces->minx[f1] ||
         faces->maxy[f1] < faces->miny[f2] ||
@@ -1822,10 +2206,12 @@ static int projected_polygons_overlap_raster_x10(
     {
         return 0;
     }
+    /* Préparer le grossissement après le premier rejet de boîtes. */
     test_scale =
         FIXED_MUL_64(
             s_global_proj_scale_fixed,
             FLOAT_TO_FIXED(10.0f));
+    /* Sauvegarder et reprojeter la paire, tester puis restaurer les données. */
     rch_patch_pair_at_scale(
         model, f1, f2, test_scale, &patch);
     result =
@@ -1835,28 +2221,34 @@ static int projected_polygons_overlap_raster_x10(
         model, &patch, f1, f2);
     return result;
 }
-/*
- * Return 1 if the two projected polygons share at least one
- * interior screen pixel.
- */
- /*
- * Maximum number of horizontal intersections for one polygon.
- *
- * A horizontal scanline cannot normally intersect a simple polygon
- * more times than the polygon has edges.
- */
+
+
 #define RASTER_MAX_INTERSECTIONS MAX_FACE_VERTICES
 
 
 /*
- * Sort a small array of long integers.
+ * ----------------------------------------------------------------------------
+ *  raster_sort_long
+ * ----------------------------------------------------------------------------
  *
- * Face vertex counts are normally small, so insertion sort is
- * sufficient and avoids any library dependency.
+ *  Rôle :
+ *    Trier une courte liste d'intersections par insertion croissante.
+ *
+ *  Paramètres :
+ *    [entrée-sortie] values de longueur count.
+ *
+ *  Retour :
+ *    Aucun ; aucune allocation.
+ *
+ *  Fonctionnement :
+ *    Les valeurs égales conservent leur ordre de rencontre.
+ *
+ * ----------------------------------------------------------------------------
  */
 static void raster_sort_long(long* values, int count)
 {
     int i;
+    /* Insérer chaque valeur dans le préfixe déjà trié. */
     for (i = 1; i < count; ++i) {
         long v;
         int j;
@@ -1871,16 +2263,26 @@ static void raster_sort_long(long* values, int count)
 }
 
 /*
- * Return 1 if two open X intervals contain at least one common
- * pixel center.
+ * ----------------------------------------------------------------------------
+ *  raster_intervals_share_pixel
+ * ----------------------------------------------------------------------------
  *
- * All coordinates are doubled.
+ *  Rôle :
+ *    Tester si deux intervalles ouverts contiennent un centre de pixel
+ *    commun.
  *
- * Pixel centers are odd coordinates:
+ *  Paramètres :
+ *    [entrée] a1/a2 et b1/b2 en coordonnées doublées ; ordre quelconque des
+ *    bornes.
  *
- *     ..., 2*x+1, ...
+ *  Retour :
+ *    1 si leur intersection contient un entier impair strictement entre les
+ *    deux limites, 0 sinon.
  *
- * Boundaries themselves are excluded.
+ *  Fonctionnement :
+ *    Exclut les contacts sur les limites.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int raster_intervals_share_pixel(
     long a1,
@@ -1891,6 +2293,7 @@ static int raster_intervals_share_pixel(
     long left;
     long right;
     long first;
+    /* Normaliser l'ordre des deux intervalles. */
     if (a1 > a2) {
         long t = a1;
         a1 = a2;
@@ -1907,47 +2310,19 @@ static int raster_intervals_share_pixel(
     right =
         (a2 < b2) ?
         a2 : b2;
-    /*
-     * Open intervals:
-     *
-     *     left < x < right
-     */
+
+
     if (left >= right)
         return 0;
-    /*
-     * Find the first odd integer strictly greater than left.
-     *
-     * Odd doubled coordinates correspond exactly to pixel centers.
-     */
+
+
+    /* Chercher le premier entier impair strictement après la borne gauche. */
     first = left + 1;
     if ((first & 1L) == 0)
         ++first;
     return (first < right);
 }
-/*
- * Exact incremental raster scanline intersection.
- *
- * The edge maintains the Euclidean quotient and remainder of:
- *
- *     N / D
- *
- * where:
- *
- *     N = (scan_y - y1) * dx
- *     D = abs(dy)
- *
- * Euclidean division guarantees:
- *
- *     N = quotient * D + remainder
- *     0 <= remainder < D
- *
- * The original C division truncates toward zero.
- * For negative N with a nonzero remainder, the result is
- * therefore quotient + 1 rather than quotient.
- *
- * Each scanline advances scan_y by 2, so N advances by
- * 2 * dx. No division is required during scanline traversal.
- */
+
 
 typedef struct {
     long x1;
@@ -1961,9 +2336,27 @@ typedef struct {
     long start_y;
 } RasterPreparedEdge;
 /*
- * Initialize Euclidean quotient and remainder.
+ * ----------------------------------------------------------------------------
+ *  raster_euclidean_divide
+ * ----------------------------------------------------------------------------
  *
- * divisor must be positive.
+ *  Rôle :
+ *    Effectuer une division euclidienne avec reste positif ou nul.
+ *
+ *  Paramètres :
+ *    [entrée] numerator signé 64 bits, divisor strictement positif
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    *quotient et *remainder en long.
+ *
+ *  Fonctionnement :
+ *    Corrige le quotient tronqué de C quand le reste est négatif ; le
+ *    quotient final doit tenir dans long.
+ *
+ * ----------------------------------------------------------------------------
  */
 static void raster_euclidean_divide(
     long long numerator,
@@ -1975,6 +2368,7 @@ static void raster_euclidean_divide(
     long long r;
     q = numerator / (long long)divisor;
     r = numerator % (long long)divisor;
+    /* Transformer la division tronquée de C en division par défaut. */
     if (r < 0) {
         --q;
         r += divisor;
@@ -1983,22 +2377,28 @@ static void raster_euclidean_divide(
     *remainder = (long)r;
 }
 /*
- * Prepare all non-horizontal edges.
+ * ----------------------------------------------------------------------------
+ *  raster_prepare_edges_incremental
+ * ----------------------------------------------------------------------------
  *
- * The incremental state is initialized at the first
- * scanline in the common bounding-box range.
- */
-/*
- * Prepare polygon edges for exact incremental rasterization.
+ *  Rôle :
+ *    Préparer les arêtes actives pour des lignes raster successives.
  *
- * Each edge is initialized with:
+ *  Paramètres :
+ *    [entrée] model, face, scan_ymin inclus et scan_ymax exclu
  *
- *   - its initial Euclidean quotient and remainder;
- *   - the Euclidean quotient and remainder of its
- *     per-scanline numerator increment.
+ *  Retour :
+ *    Nombre préparé.
  *
- * This allows constant-time scanline advancement while
- * preserving the original integer division results.
+ *  Sorties et effets de bord :
+ *    edges, capacité au moins le nombre d'arêtes.
+ *
+ *  Fonctionnement :
+ *    Travaille en coordonnées doublées, échantillonne aux centres y*2+1 et
+ *    ignore les horizontales. Les quotients et restes permettent d'avancer
+ *    sans redédivision.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int raster_prepare_edges_incremental(
     Model3D* model,
@@ -2015,6 +2415,7 @@ static int raster_prepare_edges_incremental(
     long range_max = (long)(scan_ymax - 1) * 2L + 1L;
     int count = 0;
     int i;
+    /* Lire chaque arête, ignorer les horizontales et celles hors de la plage. */
     for (i = 0; i < n; ++i) {
         int i2 = (i + 1) % n;
         int va =
@@ -2037,40 +2438,35 @@ static int raster_prepare_edges_incremental(
             continue;
         ymin = (y1 < y2) ? y1 : y2;
         ymax = (y1 > y2) ? y1 : y2;
-        /*
-         * Reject edges that cannot intersect any scanline
-         * within the common vertical bounding-box range.
-         */
+
+
         if (ymax <= range_min ||
             ymin > range_max)
         {
             continue;
         }
+        /* Normaliser le diviseur positif et préparer la première
+         * intersection et son incrément.
+         */
         e = &edges[count];
         e->x1 = x1;
         e->ymin = ymin;
         e->ymax = ymax;
-        /*
-         * Normalize the divisor to a positive value.
-         */
+
+
         if (dy < 0) {
             dy = -dy;
             dx = -dx;
         }
         e->divisor = dy;
-        /*
-         * First active pixel-center scanline.
-         *
-         * Polygon vertices have even doubled Y values,
-         * while scanlines have odd doubled Y values.
-         */
+
+
         first_y = range_min;
         if (first_y < ymin)
             first_y = ymin + 1L;
         e->start_y = first_y;
-        /*
-         * Initial quotient and remainder.
-         */
+
+
         numerator =
             (long long)(first_y - y1) *
             (long long)dx;
@@ -2079,13 +2475,8 @@ static int raster_prepare_edges_incremental(
             dy,
             &e->quotient,
             &e->remainder);
-        /*
-         * Decompose the per-scanline increment:
-         *
-         *     step = 2 * dx
-         *
-         * The remainder is always nonnegative.
-         */
+
+
         step = (long long)dx * 2LL;
         raster_euclidean_divide(
             step,
@@ -2097,28 +2488,30 @@ static int raster_prepare_edges_incremental(
     return count;
 }
 /*
- * Advance an edge by one pixel-center scanline.
+ * ----------------------------------------------------------------------------
+ *  raster_advance_edge
+ * ----------------------------------------------------------------------------
  *
- * The Euclidean quotient and remainder are updated
- * without performing a division.
+ *  Rôle :
+ *    Avancer une arête préparée d'une ligne raster.
  *
- * For projected polygon edges, abs(dx) may be larger
- * than abs(dy), so multiple quotient corrections
- * can be necessary.
- */
-/*
- * Advance an edge by one pixel-center scanline.
+ *  Paramètres :
+ *    [entrée-sortie] e.
  *
- * The step has already been decomposed into a Euclidean
- * quotient and remainder during edge preparation.
+ *  Retour :
+ *    Aucun.
  *
- * Exactly one remainder correction may be necessary.
- * No multiplication or division is performed here.
+ *  Fonctionnement :
+ *    Ajoute quotient et reste du pas, puis propage une unité au quotient si
+ *    le reste atteint le diviseur positif.
+ *
+ * ----------------------------------------------------------------------------
  */
 static void raster_advance_edge(
     RasterPreparedEdge* e)
 {
     long remainder;
+    /* Mettre à jour la fraction incrémentale avec une seule correction de retenue. */
     e->quotient += e->step_quotient;
     remainder =
         e->remainder + e->step_remainder;
@@ -2129,27 +2522,59 @@ static void raster_advance_edge(
     e->remainder = remainder;
 }
 /*
- * Return the same integer intersection as the original
- * C expression:
+ * ----------------------------------------------------------------------------
+ *  raster_edge_intersection
+ * ----------------------------------------------------------------------------
  *
- *     x1 + (long)(num / dy)
+ *  Rôle :
+ *    Lire l'intersection entière tronquée vers zéro d'une arête préparée.
  *
- * The stored quotient uses Euclidean division, so the
- * negative non-integral case requires correction.
+ *  Paramètres :
+ *    [entrée] e
+ *
+ *  Retour :
+ *    X doublé.
+ *
+ *  Fonctionnement :
+ *    Corrige le quotient euclidien négatif lorsqu'un reste subsiste, puis
+ *    ajoute l'origine x1. Aucun effet de bord.
+ *
+ * ----------------------------------------------------------------------------
  */
 static long raster_edge_intersection(
     const RasterPreparedEdge* e)
 {
     long q = e->quotient;
+    /* Convertir le quotient par défaut en quotient tronqué avant l'addition de x1. */
     if (q < 0 && e->remainder != 0)
         ++q;
     return e->x1 + q;
 }
 /*
- * Compute all intersections on the current scanline.
+ * ----------------------------------------------------------------------------
+ *  raster_incremental_scanline
+ * ----------------------------------------------------------------------------
  *
- * Edge states are advanced only when the scanline is
- * at or beyond the edge's first active scanline.
+ *  Rôle :
+ *    Extraire et trier les intersections d'une ligne à partir d'arêtes
+ *    préparées.
+ *
+ *  Paramètres :
+ *    [entrée-sortie] edges
+ *
+ *    [entrée] edge_count et y entier
+ *
+ *  Retour :
+ *    Nombre d'intersections.
+ *
+ *  Sorties et effets de bord :
+ *    intersections, capacité edge_count.
+ *
+ *  Fonctionnement :
+ *    Avance les arêtes actives d'un pas ; les appels doivent suivre la
+ *    progression de lignes attendue.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int raster_incremental_scanline(
     RasterPreparedEdge* edges,
@@ -2160,6 +2585,7 @@ static int raster_incremental_scanline(
     long scan_y = ((long)y * 2L) + 1L;
     int count = 0;
     int i;
+    /* Activer les arêtes à leur première ligne et les exclure à ymax. */
     for (i = 0; i < edge_count; ++i) {
         RasterPreparedEdge* e = &edges[i];
         if (scan_y < e->start_y)
@@ -2168,22 +2594,41 @@ static int raster_incremental_scanline(
             intersections[count++] =
                 raster_edge_intersection(e);
         }
-        /*
-         * Advance after using the current intersection.
-         */
+
+
         if (scan_y < e->ymax)
             raster_advance_edge(e);
     }
+    /* Trier les intersections pour l'appariement pair/impair des spans. */
     raster_sort_long(intersections, count);
     return count;
 }
 /*
- * Optimized raster polygon overlap test.
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap_raster
+ * ----------------------------------------------------------------------------
  *
- * Uses exact incremental scanline intersections.
+ *  Rôle :
+ *    Chercher un centre de pixel strictement couvert par les deux faces.
  *
- * No 64-bit division is performed inside the
- * scanline traversal.
+ *  Paramètres :
+ *    [entrée] model, f1/f2 et boîtes à jour.
+ *
+ *  Retour :
+ *    Booléen raster ; 0 aussi pour faces trop courtes ou dépassant
+ *    RASTER_MAX_INTERSECTIONS.
+ *
+ *  Fonctionnement :
+ *    Prépare les arêtes, parcourt les lignes de bbox communes et compare les
+ *    spans pair/impair. Un chevauchement subpixel peut être absent de cet
+ *    échantillonnage.
+ *
+ *  Limites :
+ *    si la première face n'a pas deux intersections sur une ligne, la
+ *    seconde n'est pas avancée sur cette ligne ; ne pas généraliser
+ *    l'exactitude.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int projected_polygons_overlap_raster(
     Model3D* model,
@@ -2211,11 +2656,13 @@ static int projected_polygons_overlap_raster(
     n2 = faces->vertex_count[f2];
     if (n1 < 3 || n2 < 3)
         return 0;
+    /* Contrôler la capacité locale des listes d'arêtes et d'intersections. */
     if (n1 > RASTER_MAX_INTERSECTIONS ||
         n2 > RASTER_MAX_INTERSECTIONS)
     {
         return 0;
     }
+    /* Calculer la zone commune des boîtes sans la limiter au viewport matériel. */
     xmin =
         (faces->minx[f1] > faces->minx[f2]) ?
         faces->minx[f1] :
@@ -2237,6 +2684,7 @@ static int projected_polygons_overlap_raster(
     {
         return 0;
     }
+    /* Préparer les fractions incrémentales des deux contours. */
     edge_count1 =
         raster_prepare_edges_incremental(
             model,
@@ -2255,6 +2703,7 @@ static int projected_polygons_overlap_raster(
             edges2);
     if (edge_count2 < 2)
         return 0;
+    /* Échantillonner les lignes et chercher un centre commun aux paires de spans. */
     for (y = ymin; y < ymax; ++y) {
         int count1;
         int count2;
@@ -2266,6 +2715,9 @@ static int projected_polygons_overlap_raster(
                 edge_count1,
                 y,
                 intersections1);
+        /* Le chemin saute cette ligne sans avancer les arêtes de la seconde
+         * face si la première n'a pas assez d'intersections.
+         */
         if (count1 < 2)
             continue;
         count2 =
@@ -2294,20 +2746,54 @@ static int projected_polygons_overlap_raster(
 }
 
 
-/* General simple-polygon overlap test, including concave faces.
- * Returns 1 only for intersection with positive area.
- * No triangulation, rasterization or polygon clipping.
- * Assumes simple polygon contours (no self-intersections).
- * Uses double intermediates to avoid 16-bit integer overflow.
+/*
+ * ----------------------------------------------------------------------------
+ *  overlap_v2_cross
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Calculer le déterminant orienté de AB et AP en double.
+ *
+ *  Paramètres :
+ *    [entrée] ax/ay, bx/by et px/py.
+ *
+ *  Retour :
+ *    (bx-ax)*(py-ay)-(by-ay)*(px-ax).
+ *
+ *  Fonctionnement :
+ *    Aucun état modifié ; zéro signifie colinéaire selon l'arithmétique
+ *    double.
+ *
+ * ----------------------------------------------------------------------------
  */
-
 static double overlap_v2_cross(double ax, double ay, double bx, double by,
                                double px, double py)
 {
+    /* Conserver la même convention d'orientation dans les variantes flottantes. */
     return (bx-ax)*(py-ay) - (by-ay)*(px-ax);
 }
 
-/* -1 = boundary, 0 = outside, 1 = strictly inside. */
+/*
+ * ----------------------------------------------------------------------------
+ *  overlap_v2_point_in_face
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Classer un point double par rapport au contour projeté entier d'une
+ *    face.
+ *
+ *  Paramètres :
+ *    [entrée] model, face valide et px/py.
+ *
+ *  Retour :
+ *    -1 sur le contour, 1 intérieur, 0 extérieur.
+ *
+ *  Fonctionnement :
+ *    Parité du rayon horizontal et test explicite de colinéarité. La
+ *    variante optimisée filtre le test de bord par la boîte de l'arête.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int overlap_v2_point_in_face(Model3D *model, int face,
                                     double px, double py)
 {
@@ -2321,6 +2807,7 @@ static int overlap_v2_point_in_face(Model3D *model, int face,
     vtx = &model->vertices;
     n = faces->vertex_count[face];
     off = faces->vertex_indices_ptr[face];
+    /* Parcourir les arêtes en distinguant bord et parité intérieure. */
     inside = 0;
     for (i = 0; i < n; ++i) {
         j = (i + 1 == n) ? 0 : i + 1;
@@ -2343,10 +2830,31 @@ static int overlap_v2_point_in_face(Model3D *model, int face,
     return inside;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  overlap_v2_proper_cross
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester un croisement strict de segments doubles AB et CD.
+ *
+ *  Paramètres :
+ *    [entrée] quatre couples ax/ay, bx/by, cx/cy, dx/dy.
+ *
+ *  Retour :
+ *    1 si les deux paires de déterminants ont des signes strictement
+ *    opposés, 0 sinon.
+ *
+ *  Fonctionnement :
+ *    Exclut contacts et colinéarité ; aucun état modifié.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int overlap_v2_proper_cross(double ax, double ay, double bx, double by,
                                    double cx, double cy, double dx, double dy)
 {
     double c1,c2,c3,c4;
+    /* Tester les côtés dans les deux sens sans accepter de déterminant nul. */
     c1=overlap_v2_cross(ax,ay,bx,by,cx,cy);
     c2=overlap_v2_cross(ax,ay,bx,by,dx,dy);
     if (!((c1 > 0.0 && c2 < 0.0) ||
@@ -2357,9 +2865,26 @@ static int overlap_v2_proper_cross(double ax, double ay, double bx, double by,
             (c3 < 0.0 && c4 > 0.0));
 }
 
-/* Test tiny offsets on both sides of edge midpoints. This handles
- * coincident polygons and overlapping interiors along common edges.
- * Coordinates are integer pixels; 1/1024 pixel is the probe offset.
+/*
+ * ----------------------------------------------------------------------------
+ *  overlap_v2_edge_probes
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Chercher un point intérieur commun près du milieu des arêtes des deux
+ *    faces.
+ *
+ *  Paramètres :
+ *    [entrée] model, f1/f2 valides.
+ *
+ *  Retour :
+ *    1 si une sonde est strictement dans les deux faces, 0 sinon.
+ *
+ *  Fonctionnement :
+ *    Deux côtés sont essayés à une distance normalisée par |dx|+|dy| et
+ *    1024. Échantillonnage heuristique, pas une preuve d'absence.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int overlap_v2_edge_probes(Model3D *model, int f1, int f2)
 {
@@ -2370,6 +2895,7 @@ static int overlap_v2_edge_probes(Model3D *model, int f1, int f2)
     int side;
     faces=&model->faces;
     vtx=&model->vertices;
+    /* Essayer chaque arête des deux contours ; ignorer celles de longueur nulle. */
     for (pass=0; pass<2; ++pass) {
         f = pass ? f2 : f1;
         n = faces->vertex_count[f];
@@ -2384,6 +2910,9 @@ static int overlap_v2_edge_probes(Model3D *model, int f1, int f2)
             scale=((dx<0.0)?-dx:dx)+((dy<0.0)?-dy:dy);
             if (scale==0.0) continue;
             mx=(ax+bx)*0.5; my=(ay+by)*0.5;
+            /* Sonder de part et d'autre du milieu avec la même convention
+             * d'appartenance stricte.
+             */
             for (side=-1; side<=1; side+=2) {
                 px=mx+side*(-dy)/scale/1024.0;
                 py=my+side*dx/scale/1024.0;
@@ -2396,12 +2925,37 @@ static int overlap_v2_edge_probes(Model3D *model, int f1, int f2)
     return 0;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap_v2_original
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester le chevauchement projeté par V2 original en double.
+ *
+ *  Paramètres :
+ *    [entrée] model et f1/f2 valides
+ *
+ *  Retour :
+ *    1 si un test trouve une zone commune, 0 sinon ou face trop courte.
+ *
+ *  Fonctionnement :
+ *    Rejette d'abord les boîtes sans intérieur commun, puis essaye
+ *    croisements propres, sommets strictement intérieurs et sondes près des
+ *    milieux d'arêtes. Les seules touches de contours ne suffisent pas. Ne
+ *    calcule pas l'aire d'intersection et ne modifie pas le modèle ; les
+ *    variantes ne doivent pas être fusionnées sans comparaison de leurs
+ *    limites numériques.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int projected_polygons_overlap_v2_original(Model3D *model, int f1, int f2)
 {
     FaceArrays3D *faces;
     VertexArrays3D *vtx;
     int n1,n2,off1,off2,i,j,i2,j2,va,vb,vc,vd;
     double ax,ay,bx,by,cx,cy,dx,dy;
+    /* Valider le modèle et les longueurs avant les filtres de boîtes. */
     if (!model) return 0;
     faces=&model->faces;
     vtx=&model->vertices;
@@ -2413,6 +2967,9 @@ static int projected_polygons_overlap_v2_original(Model3D *model, int f1, int f2
         faces->maxy[f2]<=faces->miny[f1]) return 0;
     off1=faces->vertex_indices_ptr[f1];
     off2=faces->vertex_indices_ptr[f2];
+    /* Chercher les croisements propres entre les contours avant les
+     * inclusions et les sondes.
+     */
     for (i=0;i<n1;++i) {
         i2=(i+1==n1)?0:i+1;
         va=faces->vertex_indices_buffer[off1+i]-1;
@@ -2428,7 +2985,7 @@ static int projected_polygons_overlap_v2_original(Model3D *model, int f1, int f2
             if (overlap_v2_proper_cross(ax,ay,bx,by,cx,cy,dx,dy)) return 1;
         }
     }
-    /* Strict containment, including concave polygons. */
+
     for (i=0;i<n1;++i) {
         va=faces->vertex_indices_buffer[off1+i]-1;
         if (overlap_v2_point_in_face(model,f2,
@@ -2443,17 +3000,54 @@ static int projected_polygons_overlap_v2_original(Model3D *model, int f1, int f2
 }
 
 
-/* Optimized V2. Same geometric tests and floating-point expressions.
- * Intended for ORCA/C (C89, 16-bit int). No fixed vertex-count limit.
+/*
+ * ----------------------------------------------------------------------------
+ *  overlap_v2_opt_cross
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Calculer le déterminant orienté de AB et AP en double.
+ *
+ *  Paramètres :
+ *    [entrée] ax/ay, bx/by et px/py.
+ *
+ *  Retour :
+ *    (bx-ax)*(py-ay)-(by-ay)*(px-ax).
+ *
+ *  Fonctionnement :
+ *    Aucun état modifié ; zéro signifie colinéaire selon l'arithmétique
+ *    double.
+ *
+ * ----------------------------------------------------------------------------
  */
-
 static double overlap_v2_opt_cross(double ax, double ay, double bx, double by,
                                    double px, double py)
 {
+    /* Conserver la même convention d'orientation dans les variantes flottantes. */
     return (bx-ax)*(py-ay) - (by-ay)*(px-ax);
 }
 
-/* -1: boundary, 0: outside, 1: strictly inside. */
+/*
+ * ----------------------------------------------------------------------------
+ *  overlap_v2_opt_point_in_face
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Classer un point double par rapport au contour projeté entier d'une
+ *    face.
+ *
+ *  Paramètres :
+ *    [entrée] model, face valide et px/py.
+ *
+ *  Retour :
+ *    -1 sur le contour, 1 intérieur, 0 extérieur.
+ *
+ *  Fonctionnement :
+ *    Parité du rayon horizontal et test explicite de colinéarité. La
+ *    variante optimisée filtre le test de bord par la boîte de l'arête.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int overlap_v2_opt_point_in_face(Model3D *model, int face,
                                         double px, double py)
 {
@@ -2472,6 +3066,7 @@ static int overlap_v2_opt_point_in_face(Model3D *model, int face,
     y2d = vtx->y2d;
     n = faces->vertex_count[face];
     off = faces->vertex_indices_ptr[face];
+    /* Parcourir les arêtes en distinguant bord et parité intérieure. */
     inside = 0;
 
     j = indices[off+n-1]-1;
@@ -2483,7 +3078,7 @@ static int overlap_v2_opt_point_in_face(Model3D *model, int face,
         bx = (double)x2d[j];
         by = (double)y2d[j];
 
-        /* Only points within the edge bounds can lie on its boundary. */
+
         minx = (ax < bx) ? ax : bx;
         maxx = (ax > bx) ? ax : bx;
         miny = (ay < by) ? ay : by;
@@ -2502,27 +3097,67 @@ static int overlap_v2_opt_point_in_face(Model3D *model, int face,
 }
 
 
-/* ORCA/C C89, 16-bit int. No change to the V2 geometric predicates. */
-/* Compile in the same translation unit as Model3D definitions. */
+/*
+ * ----------------------------------------------------------------------------
+ *  ovmax_cross
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Calculer le déterminant orienté de AB et AP en double.
+ *
+ *  Paramètres :
+ *    [entrée] ax/ay, bx/by et px/py.
+ *
+ *  Retour :
+ *    (bx-ax)*(py-ay)-(by-ay)*(px-ax).
+ *
+ *  Fonctionnement :
+ *    Aucun état modifié ; zéro signifie colinéaire selon l'arithmétique
+ *    double.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static double ovmax_cross(double ax,double ay,double bx,double by,double px,double py)
 {
+    /* Conserver la même convention d'orientation dans les variantes flottantes. */
     return (bx-ax)*(py-ay)-(by-ay)*(px-ax);
 }
 
-/* All polygon data is passed once, avoiding repeated model/face lookups. */
+/*
+ * ----------------------------------------------------------------------------
+ *  ovmax_inside
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Classer un point double avec les tableaux projetés passés directement.
+ *
+ *  Paramètres :
+ *    [entrée] ids à base un ; xs/ys ; off/n décrivant une face non vide ;
+ *    px/py.
+ *
+ *  Retour :
+ *    -1 bord, 1 intérieur, 0 extérieur.
+ *
+ *  Fonctionnement :
+ *    Aucun état modifié. Conserve le sommet précédent pour limiter les
+ *    lectures d'indices.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int ovmax_inside(const int *ids,const int *xs,const int *ys,
                         int off,int n,double px,double py)
 {
     int i,k,prev,inside;
     double ax,ay,bx,by,ix;
     inside=0;
+    /* Initialiser le cycle au dernier sommet, puis tester bord et parité. */
     prev=ids[off+n-1]-1;
     bx=(double)xs[prev]; by=(double)ys[prev];
     for(i=0;i<n;++i) {
         k=ids[off+i]-1;
         ax=bx; ay=by;
         bx=(double)xs[k]; by=(double)ys[k];
-        /* Identical boundary predicate, without four min/max calculations. */
+
         if ((px>=ax && px<=bx || px>=bx && px<=ax) &&
             (py>=ay && py<=by || py>=by && py<=ay) &&
             ovmax_cross(ax,ay,bx,by,px,py)==0.0) return -1;
@@ -2534,11 +3169,32 @@ static int ovmax_inside(const int *ids,const int *xs,const int *ys,
     return inside;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  ovmax_probe
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Sonder les milieux d'arêtes dans la variante à tableaux directs.
+ *
+ *  Paramètres :
+ *    [entrée] ids base un, xs/ys, off1/n1 et off2/n2.
+ *
+ *  Retour :
+ *    Booléen de point strictement commun.
+ *
+ *  Fonctionnement :
+ *    Même déplacement double normalisé de 1/1024 que V2 original. Ne modifie
+ *    ni les tableaux ni les projections.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int ovmax_probe(const int *ids,const int *xs,const int *ys,
                        int off1,int n1,int off2,int n2)
 {
     int pass,off,n,i,next,va,vb,side;
     double ax,ay,bx,by,dx,dy,scale,mx,my,px,py;
+    /* Parcourir les deux contours et essayer les deux côtés de chaque milieu. */
     for(pass=0;pass<2;++pass) {
         off=pass?off2:off1;
         n=pass?n2:n1;
@@ -2563,6 +3219,31 @@ static int ovmax_probe(const int *ids,const int *xs,const int *ys,
     return 0;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap_v2_max
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester le chevauchement projeté par V2 Max avec pointeurs locaux et
+ *    rejets par boîtes d'arêtes.
+ *
+ *  Paramètres :
+ *    [entrée] model et f1/f2 valides
+ *
+ *  Retour :
+ *    1 si un test trouve une zone commune, 0 sinon ou face trop courte.
+ *
+ *  Fonctionnement :
+ *    Rejette d'abord les boîtes sans intérieur commun, puis essaye
+ *    croisements propres, sommets strictement intérieurs et sondes près des
+ *    milieux d'arêtes. Les seules touches de contours ne suffisent pas. Ne
+ *    calcule pas l'aire d'intersection et ne modifie pas le modèle ; les
+ *    variantes ne doivent pas être fusionnées sans comparaison de leurs
+ *    limites numériques.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int projected_polygons_overlap_v2_max(Model3D *model,int f1,int f2)
 {
     FaceArrays3D *faces;
@@ -2572,6 +3253,7 @@ static int projected_polygons_overlap_v2_max(Model3D *model,int f1,int f2)
     int iax,iay,ibx,iby,icx,icy,idx,idy;
     int minax,maxax,minay,maxay;
     double ax,ay,bx,by,cx,cy,dx,dy,c1,c2,c3,c4;
+    /* Valider le modèle et les longueurs avant les filtres de boîtes. */
     if(!model) return 0;
     faces=&model->faces;
     n1=faces->vertex_count[f1]; n2=faces->vertex_count[f2];
@@ -2587,6 +3269,9 @@ static int projected_polygons_overlap_v2_max(Model3D *model,int f1,int f2)
     off2=faces->vertex_indices_ptr[f2];
     va=ids[off1+n1-1]-1;
     ibx=xs[va]; iby=ys[va];
+    /* Chercher les croisements propres entre les contours avant les
+     * inclusions et les sondes.
+     */
     for(i=0;i<n1;++i) {
         iax=ibx; iay=iby;
         va=ids[off1+i]-1;
@@ -2629,26 +3314,56 @@ static int projected_polygons_overlap_v2_max(Model3D *model,int f1,int f2)
 }
 
 
-/* Experimental fixed-point / integer-only V2 for compilers with 64-bit integers.
- * IMPORTANT: ORCA/C classic may not support 'long long'. This source is a
- * reference implementation, NOT verified as directly compilable in ORCA/C.
- * All geometric decisions are exact for signed 16-bit screen coordinates.
- * No floating point, no divisions in the polygon tests.
- * Include after Model3D definitions.
- */
-
 typedef signed long long ovf64;
 
+/*
+ * ----------------------------------------------------------------------------
+ *  ovf_cross
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Calculer le déterminant de trois points entiers avec intermédiaires
+ *    ovf64.
+ *
+ *  Paramètres :
+ *    [entrée] ax/ay, bx/by, px/py.
+ *
+ *  Retour :
+ *    Déterminant signé ; aucun état modifié.
+ *
+ *  Fonctionnement :
+ *    Les conversions précèdent les différences pour éviter leur débordement
+ *    en int.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static ovf64 ovf_cross(int ax,int ay,int bx,int by,int px,int py)
 {
+    /* Élargir chaque coordonnée avant soustraction et multiplication. */
     return ((ovf64)bx-ax)*((ovf64)py-ay)
          - ((ovf64)by-ay)*((ovf64)px-ax);
 }
 
-/* Point coordinates are rational nx/d,ny/d; d is strictly positive.
- * This avoids the rounding inherent in a 32.32 fixed-point division.
- * All intermediate operations fit signed 64 bits for 16-bit input coords
- * when the probe is constructed by ovf_probe().
+/*
+ * ----------------------------------------------------------------------------
+ *  ovf_inside
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Classer un point rationnel par rapport à un contour projeté entier.
+ *
+ *  Paramètres :
+ *    [entrée] ids base un, xs/ys, off/n ; nx/ny numérateurs et d
+ *    dénominateur positif.
+ *
+ *  Retour :
+ *    -1 bord, 1 intérieur, 0 extérieur.
+ *
+ *  Fonctionnement :
+ *    Utilise des produits ovf64 sans division. L'appelant doit garantir que
+ *    ces produits restent représentables.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int ovf_inside(const int *ids,const int *xs,const int *ys,
                       int off,int n,ovf64 nx,ovf64 ny,ovf64 d)
@@ -2657,6 +3372,9 @@ static int ovf_inside(const int *ids,const int *xs,const int *ys,
     int ax,ay,bx,by;
     ovf64 c, lhs, rhs;
     inside=0;
+    /* Parcourir le contour en comparant les coordonnées multipliées par le
+     * dénominateur.
+     */
     prev=ids[off+n-1]-1;
     bx=xs[prev]; by=ys[prev];
     for(i=0;i<n;++i) {
@@ -2673,9 +3391,8 @@ static int ovf_inside(const int *ids,const int *xs,const int *ys,
             if(c==0) return -1;
         }
         if (((ovf64)ay*d>ny)!=((ovf64)by*d>ny)) {
-            /* Equivalent to ray crossing, with no division.
-             * Orientation of denominator determines inequality direction.
-             */
+
+
             c=((ovf64)bx-ax)*rhs-((ovf64)by-ay)*lhs;
             if (((by>ay) && c>0) || ((by<ay) && c<0)) inside=!inside;
         }
@@ -2683,12 +3400,36 @@ static int ovf_inside(const int *ids,const int *xs,const int *ys,
     return inside;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  ovf_probe
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Chercher des sondes rationnelles communes près des milieux d'arêtes.
+ *
+ *  Paramètres :
+ *    [entrée] ids base un, xs/ys, off1/n1 et off2/n2.
+ *
+ *  Retour :
+ *    Booléen.
+ *
+ *  Fonctionnement :
+ *    Encode les décalages normalisés avec d=2048*(|dx|+|dy|), puis appelle
+ *    ovf_inside. Évite les divisions flottantes ; reste une stratégie de
+ *    sondage fini.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int ovf_probe(const int *ids,const int *xs,const int *ys,
                      int off1,int n1,int off2,int n2)
 {
     int pass,off,n,i,j,va,vb,side;
     int ax,ay,bx,by;
     ovf64 dx,dy,scale,d,nx,ny;
+    /* Construire deux sondes rationnelles par arête non nulle et exiger leur
+     * inclusion stricte dans les deux faces.
+     */
     for(pass=0;pass<2;++pass) {
         off=pass?off2:off1;
         n=pass?n2:n1;
@@ -2701,9 +3442,8 @@ static int ovf_probe(const int *ids,const int *xs,const int *ys,
             scale=(dx<0)?-(ovf64)dx:dx;
             scale+=(dy<0)?-(ovf64)dy:dy;
             if(scale==0) continue;
-            /* midpoint +/- perpendicular/(1024*Manhattan length)
-             * represented as exact rational, not rounded fixed point.
-             */
+
+
             d=2048*scale;
             for(side=-1;side<=1;side+=2) {
                 nx=((ovf64)ax+bx)*1024*scale-side*(ovf64)dy*2;
@@ -2716,6 +3456,31 @@ static int ovf_probe(const int *ids,const int *xs,const int *ys,
     return 0;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap_v2_fixed64
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Tester le chevauchement projeté par Fixed64 avec déterminants et sondes
+ *    rationnelles.
+ *
+ *  Paramètres :
+ *    [entrée] model et f1/f2 valides
+ *
+ *  Retour :
+ *    1 si un test trouve une zone commune, 0 sinon ou face trop courte.
+ *
+ *  Fonctionnement :
+ *    Rejette d'abord les boîtes sans intérieur commun, puis essaye
+ *    croisements propres, sommets strictement intérieurs et sondes près des
+ *    milieux d'arêtes. Les seules touches de contours ne suffisent pas. Ne
+ *    calcule pas l'aire d'intersection et ne modifie pas le modèle ; les
+ *    variantes ne doivent pas être fusionnées sans comparaison de leurs
+ *    limites numériques.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int projected_polygons_overlap_v2_fixed64(Model3D *model,int f1,int f2)
 {
     FaceArrays3D *faces;
@@ -2725,6 +3490,7 @@ static int projected_polygons_overlap_v2_fixed64(Model3D *model,int f1,int f2)
     int ax,ay,bx,by,cx,cy,dx,dy;
     int minax,maxax,minay,maxay;
     ovf64 c1,c2,c3,c4;
+    /* Valider le modèle et les longueurs avant les filtres de boîtes. */
     if(!model) return 0;
     faces=&model->faces;
     n1=faces->vertex_count[f1]; n2=faces->vertex_count[f2];
@@ -2740,6 +3506,9 @@ static int projected_polygons_overlap_v2_fixed64(Model3D *model,int f1,int f2)
     off2=faces->vertex_indices_ptr[f2];
     va=ids[off1+n1-1]-1;
     bx=xs[va]; by=ys[va];
+    /* Chercher les croisements propres entre les contours avant les
+     * inclusions et les sondes.
+     */
     for(i=0;i<n1;++i) {
         ax=bx; ay=by;
         va=ids[off1+i]-1;
@@ -2776,15 +3545,32 @@ static int projected_polygons_overlap_v2_fixed64(Model3D *model,int f1,int f2)
 }
 
 
-/* Select the implementation without changing existing callers.
- * 1: original floating-point V2 (reference)
- * 2: optimized floating-point V2 Max
- * 3: exact-rational Fixed64 (previous default)
- */
 #define OVERLAP_V2_IMPLEMENTATION 3
 
+/*
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap_v2
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Choisir à la compilation une implémentation historique de V2.
+ *
+ *  Paramètres :
+ *    [entrée] model, f1/f2
+ *
+ *  Retour :
+ *    Booléen de la variante choisie.
+ *
+ *  Fonctionnement :
+ *    OVERLAP_V2_IMPLEMENTATION vaut 1 original, 2 Max ou 3 Fixed64 ; valeur
+ *    invalide interdite par #error. Ce wrapper est distinct du choix runtime
+ *    overlap_method.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int projected_polygons_overlap_v2(Model3D *model,int f1,int f2)
 {
+/* Déléguer à la variante sélectionnée sans calcul supplémentaire. */
 #if OVERLAP_V2_IMPLEMENTATION == 1
     return projected_polygons_overlap_v2_original(model,f1,f2);
 #elif OVERLAP_V2_IMPLEMENTATION == 2
@@ -2797,7 +3583,6 @@ static int projected_polygons_overlap_v2(Model3D *model,int f1,int f2)
 }
 
 
-/* Runtime overlap method selection. V1 is the default. */
 #define OVERLAP_SIMPLE      0
 #define OVERLAP_V1          1
 #define OVERLAP_V2          2
@@ -2808,9 +3593,31 @@ static int projected_polygons_overlap_v2(Model3D *model,int f1,int f2)
 
 static int overlap_method = OVERLAP_V1;
 
-/* Unified entry point for all normal overlap tests. */
+/*
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Choisir la méthode de chevauchement configurée à l'exécution.
+ *
+ *  Paramètres :
+ *    [entrée] model, f1/f2 ; overlap_method global.
+ *
+ *  Retour :
+ *    Booléen de la méthode.
+ *
+ *  Fonctionnement :
+ *    Sept choix : Simple, V1, V2 original, V2 Max, Fixed64, Raster, Raster
+ *    x10. Une valeur inconnue prend V1. Les garanties diffèrent, notamment
+ *    géométrie continue, seuils heuristiques et échantillonnage de centres
+ *    de pixels.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int projected_polygons_overlap(Model3D *model, int f1, int f2)
 {
+    /* Répartir les méthodes sans convertir leurs résultats en une aire commune. */
     switch (overlap_method) {
     case OVERLAP_SIMPLE:
         return projected_polygons_overlap_simple(model, f1, f2);
@@ -2830,9 +3637,28 @@ static int projected_polygons_overlap(Model3D *model, int f1, int f2)
     return projected_polygons_overlap_v1(model, f1, f2);
 }
 
-/* Text-only UI. Returns the chosen method, or current_method on cancel. */
-/* GEO V3 memoization: keep dispatcher diagnostics and false/watchdog results
- * unchanged elsewhere. Method and scale are part of the exact directed key.
+/*
+ * ----------------------------------------------------------------------------
+ *  projected_polygons_overlap_cached
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Mémoriser uniquement les chevauchements positifs pour la méthode de classement.
+ *
+ *  Paramètres :
+ *    [entrée] model, f1/f2 orientés
+ *
+ *  Retour :
+ *    Booléen.
+ *
+ *  Sorties et effets de bord :
+ *    cache et compteurs optionnels.
+ *
+ *  Fonctionnement :
+ *    Clé : vue, paire, projection et méthode runtime. Un résultat nul peut
+ *    être un échec de ressource ou de garde, donc n'est pas conservé.
+ *
+ * ----------------------------------------------------------------------------
  */
 static int projected_polygons_overlap_cached(Model3D *model, int f1, int f2)
 {
@@ -2840,17 +3666,43 @@ static int projected_polygons_overlap_cached(Model3D *model, int f1, int f2)
     int result;
     if (!model) return 0;
     ORDER_COUNT(overlap_calls);
+    /* Chercher une entrée exacte pour le contexte courant. */
     entry=ordering_pair_slot(model, order_overlap_pairs, f1, f2);
     if (ordering_pair_hit(entry, f1, f2, s_global_proj_scale_fixed, (unsigned int)overlap_method)) {
         ORDER_COUNT(overlap_hits);
         return entry->result;
     }
+    /* Calculer puis mémoriser seulement les résultats positifs. */
     result=projected_polygons_overlap(model,f1,f2);
     if (result) ordering_pair_store(entry,f1,f2,s_global_proj_scale_fixed,
                                    (unsigned int)overlap_method,result);
     return result;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  select_overlap_method
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Demander un choix runtime de méthode sans modifier directement l'état
+ *    global.
+ *
+ *  Paramètres :
+ *    [entrée] current_method, ramené à V1 si invalide.
+ *
+ *  Retour :
+ *    Méthode 0..6 ; entrée vide, zéro ou EOF conserve le choix.
+ *
+ *  Sorties et effets de bord :
+ *    terminal uniquement.
+ *
+ *  Fonctionnement :
+ *    Vérifie les caractères résiduels après strtol et redemande après
+ *    erreur.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int select_overlap_method(int current_method)
 {
     static const char *names[7] = {
@@ -2866,6 +3718,7 @@ static int select_overlap_method(int current_method)
         current_method > OVERLAP_RASTER_X10)
         current_method = OVERLAP_V1;
 
+    /* Présenter le menu jusqu'à une saisie valide ou une annulation. */
     for (;;) {
         printf("\nOVERLAP DETECTION METHOD\n\n");
 
@@ -2879,12 +3732,15 @@ static int select_overlap_method(int current_method)
         if (fgets(user_choice, sizeof(user_choice), stdin) == NULL)
             return current_method;
 
-        /* Return alone cancels immediately. */
+
         if (user_choice[0] == '\n' ||
             user_choice[0] == '\r' ||
             user_choice[0] == '\0')
             return current_method;
 
+        /* Valider la conversion entière et le reste de la ligne avant
+         * d'accepter le numéro.
+         */
         choice = strtol(user_choice, &end, 10);
 
         if (end == user_choice) {
@@ -2909,15 +3765,35 @@ static int select_overlap_method(int current_method)
         printf("Invalid selection.\n");
     }
 }
-/* Six-way benchmark: timing excludes logging and projection.
- * Each algorithm is timed over all pairs as a single block.
- * The subsequent export pass is deliberately outside the timed blocks.
- */
+
+
 #define OVERLAP_BENCH_ALGOS 6
 #define OVERLAP_BENCH_REPEAT 1
 
+/*
+ * ----------------------------------------------------------------------------
+ *  overlap_bench_call
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Appeler une des six méthodes chronométrées du benchmark.
+ *
+ *  Paramètres :
+ *    [entrée] model, f1/f2 ; algorithm 0..5 : V1, original, Max, Fixed64,
+ *    Raster, Raster x10.
+ *
+ *  Retour :
+ *    Booléen normalisé ; 0 pour numéro invalide.
+ *
+ *  Fonctionnement :
+ *    Cette numérotation diffère du menu runtime à sept choix qui inclut
+ *    Simple.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static int overlap_bench_call(Model3D *model, int f1, int f2, int algorithm)
 {
+    /* Choisir directement la méthode sans passer par overlap_method. */
     switch (algorithm) {
     case 0: return projected_polygons_overlap_v1(model,f1,f2) != 0;
     case 1: return projected_polygons_overlap_v2_original(model,f1,f2) != 0;
@@ -2929,6 +3805,32 @@ static int overlap_bench_call(Model3D *model, int f1, int f2, int algorithm)
     return 0;
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ *  benchmark_projected_overlap_all
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Comparer six méthodes sur toutes les paires et plusieurs orientations.
+ *
+ *  Paramètres :
+ *    [entrée] model, params, angle_count proposé (10 si non positif),
+ *    modifiable au clavier entre 1 et 10000.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Écrase overlap.all.txt. Génère des angles déterministes, recalcule les
+ *    projections et métriques, chronomètre des blocs répétés hors écritures
+ *    disque puis exporte décisions et contours pour référence externe. Les
+ *    désaccords ne désignent pas à eux seuls la méthode correcte ; aucun
+ *    oracle géométrique n'est exécuté ici. Les angles params sont restaurés
+ *    à la fin, mais les tableaux de la dernière vue ne sont pas recalculés
+ *    pour ces angles restaurés dans cette fonction.
+ *
+ * ----------------------------------------------------------------------------
+ */
 static void benchmark_projected_overlap_all(Model3D *model,
                                             ObserverParams *params,
                                             int angle_count)
@@ -2949,6 +3851,7 @@ static void benchmark_projected_overlap_all(Model3D *model,
     Fixed32 scale, cx, cy;
 
     if (!model || !params) return;
+    /* Valider le nombre d'orientations avant d'ouvrir le fichier de benchmark. */
     if (angle_count <= 0) angle_count = 10;
     printf("Number of model positions [%d]: ", angle_count);
     if (!fgets(angle_input_buf, sizeof(angle_input_buf), stdin)) return;
@@ -2970,6 +3873,7 @@ static void benchmark_projected_overlap_all(Model3D *model,
     if (n <= 0 || nf < 2) return;
     log = fopen("overlap.all.txt", "w");
     if (!log) { printf("Cannot open overlap.all.txt\n"); return; }
+    /* Conserver les angles initiaux et la projection. */
     old_h = params->angle_h;
     old_v = params->angle_v;
     scale = s_global_proj_scale_fixed;
@@ -2982,12 +3886,16 @@ static void benchmark_projected_overlap_all(Model3D *model,
     fprintf(log,"Timing: block GetTick, repeats=%d, no disk I/O inside timed blocks\n",
             OVERLAP_BENCH_REPEAT);
 
+    /* Générer les orientations et recalculer les données nécessaires aux méthodes. */
     for (a = 0; a < angle_count; ++a) {
         Fixed32 ch, sh, cv, sv, m00, m01, m02;
         Fixed32 m10, m11, m12, m20, m21, m22;
         long angle_ticks[OVERLAP_BENCH_ALGOS] = {0,0,0,0,0,0};
         unsigned long angle_diffs = 0;
         int h, v;
+        /* Générer les angles avec une graine déterministe pour rendre les
+         * comparaisons reproductibles.
+         */
         seed = seed * 1664525UL + 1013904223UL;
         h = (int)((seed >> 8) % 360UL);
         seed = seed * 1664525UL + 1013904223UL;
@@ -2996,7 +3904,7 @@ static void benchmark_projected_overlap_all(Model3D *model,
         params->angle_v = v;
         ch = cos_deg_int(h); sh = sin_deg_int(h);
         cv = cos_deg_int(v); sv = sin_deg_int(v);
-        /* Same rotation matrix as processModelFast when angle_w == 0. */
+
         m00 = FIXED_NEG(sh); m01 = ch; m02 = 0;
         m10 = FIXED_NEG(FIXED_MUL_64(ch, sv));
         m11 = FIXED_NEG(FIXED_MUL_64(sh, sv));
@@ -3029,11 +3937,17 @@ static void benchmark_projected_overlap_all(Model3D *model,
         }
         calculateFaceDepths(model, NULL, nf);
 
-        /* Time all pairs in one block per algorithm. */
+
+        /* Chronométrer chaque méthode dans des blocs séparés des écritures
+         * disque.
+         */
         for (alg = 0; alg < OVERLAP_BENCH_ALGOS; ++alg) {
             long t = GetTick();
             unsigned long checksum = 0;
             for (rep = 0; rep < OVERLAP_BENCH_REPEAT; ++rep) {
+                /* Comparer toutes les paires de faces et enregistrer les
+                 * décisions ainsi que leurs contours projetés.
+                 */
                 for (f1 = 0; f1 < nf-1; ++f1) {
                     for (f2 = f1+1; f2 < nf; ++f2) {
                         checksum += (unsigned long)
@@ -3046,7 +3960,7 @@ static void benchmark_projected_overlap_all(Model3D *model,
             timing_sink += checksum;
         }
 
-        /* Export every pair and its coordinates, outside timing. */
+
         for (f1 = 0; f1 < nf-1; ++f1) {
             for (f2 = f1+1; f2 < nf; ++f2) {
                 int values[OVERLAP_BENCH_ALGOS];
@@ -3084,6 +3998,9 @@ static void benchmark_projected_overlap_all(Model3D *model,
         printf("Angle %d/%d: %lu pairs exported\n",a+1,angle_count,
                (unsigned long)nf*(unsigned long)(nf-1)/2UL);
     }
+    /* Écrire le bilan puis restaurer les champs d'angles sans retraiter ici
+     * la vue.
+     */
     fprintf(log,"\nSUMMARY\nPairs tested: %lu\nDisagreements: %lu\n",
             tested,disagreements);
     fprintf(log,"V1 ticks: %ld; positives: %lu\n",total_ticks[0],positives[0]);
