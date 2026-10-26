@@ -188,7 +188,8 @@ static void dony_ray_pair_record(DonyRayPairs *cache, int p, int q,
  *    Aucun.
  *
  *  Algorithme :
- *    insertion binaire puis memmove ; les clés égales restent dans leur
+ *    insertion binaire puis déplacement stable partagé ; les clés égales
+ *    restent dans leur
  *    ordre initial. Une clé déjà à sa place évite la recherche.
  *
  * ----------------------------------------------------------------------------
@@ -210,8 +211,8 @@ static void sort_by_zmax(int *sorted,Fixed32 *z_max,int nf)
             if(z_max[sorted[mid]]>=depth)lo=mid+1;
             else hi=mid;
         }
-        memmove(&sorted[lo+1],&sorted[lo],(size_t)(i-lo)*sizeof(int));
-        sorted[lo]=key;
+        /* Déplacer la clé par la même primitive stable que les autres listes. */
+        (void)move_element_remove_and_insert(sorted, nf, i, lo);
     }
 }
 

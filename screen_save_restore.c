@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- *  screen_save_restore.c — Sauvegarde, restauration et effacement SHR
+ *  screen_save_restore.c — Sauvegarde, restauration et effacement SHGR
  * ============================================================================
  *
  *  Rôle :
@@ -88,7 +88,7 @@ int initScreenSaveBuffer(void)
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Copier la zone SHR vers le buffer préalablement alloué.
+ *    Copier la zone SHGR vers le buffer préalablement alloué.
  *
  *  Paramètres :
  *    Aucun paramètre explicite.
@@ -152,7 +152,7 @@ void saveScreen(void)
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Restaurer la zone SHR depuis la dernière sauvegarde.
+ *    Restaurer la zone SHGR depuis la dernière sauvegarde.
  *
  *  Paramètres :
  *    Aucun paramètre explicite.
@@ -190,7 +190,7 @@ void restoreScreen(void)
 
         lda #SCREEN_SIZE-1
     restore_mvn:
-        /* Restaurer les 32768 octets, y compris la zone SHR située après les pixels. */
+        /* Restaurer les 32768 octets, y compris la zone SHGR située après les pixels. */
         mvn 0x00,0xE1
 
         plb
@@ -207,7 +207,7 @@ static unsigned int screen_clear_last_offset;
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Effacer les premières lignes de pixels de l'écran SHR 320x200.
+ *    Effacer les premières lignes de pixels de l'écran SHGR 320x200.
  *
  *  Paramètres :
  *    [entrée] line_count : nombre de lignes depuis le haut ; une valeur
@@ -219,7 +219,7 @@ static unsigned int screen_clear_last_offset;
  *  Sorties et effets de bord :
  *    Met à zéro 160 octets par ligne depuis $E1:2000. Les tables SCB et
  *    palettes ne sont pas modifiées. Ne gère pas graph_changed : l'appelant
- *    conserve la responsabilité du cycle de rendu et de sauvegarde SHR.
+ *    conserve la responsabilité du cycle de rendu et de sauvegarde SHGR.
  *
  *  Fonctionnement :
  *    Borne la hauteur puis calcule l'offset du dernier mot. Le noyau 16 bits
@@ -235,7 +235,7 @@ static unsigned int screen_clear_last_offset;
  */
 static void screenClearTopLines(int line_count)
 {
-    /* Limiter l'écriture à la zone de pixels, sans toucher aux tables SHR. */
+    /* Limiter l'écriture à la zone de pixels, sans toucher aux tables SHGR. */
     if (line_count <= 0) return;
     if (line_count > 200) line_count = 200;
     screen_clear_last_offset = (unsigned int)(line_count * 160 - 2);

@@ -1,6 +1,6 @@
 # Explorateur OBJ 3D pour Apple IIgs
 
-Ce projet charge, oriente et examine des modèles Wavefront OBJ sur Apple IIgs en affichage SHR 320 × 200 à seize couleurs. Il compare sept variantes de l’algorithme du peintre et plusieurs rendus par Z-buffer. Ses inspecteurs permettent d’étudier les ambiguïtés de visibilité, les plans des faces et les différences entre méthodes.
+Ce projet charge, oriente et examine des modèles Wavefront OBJ sur Apple IIgs en affichage SHGR 320 × 200 à seize couleurs. Il compare sept variantes de l’algorithme du peintre et plusieurs rendus par Z-buffer. Ses inspecteurs permettent d’étudier les ambiguïtés de visibilité, les plans des faces et les différences entre méthodes.
 
 Il rend hommage à **Robert Dony**, auteur de *Calcul des parties cachées*, Masson, 1986.
 
@@ -44,8 +44,8 @@ Les lettres acceptent majuscules et minuscules. Les commandes des inspecteurs pe
 | `N` | Nouveau chargement et réinitialisation des options explicitement prévues dans `main`. |
 | `1` à `7` | Choix de la méthode de classement, selon la table suivante. |
 | `O` | Z-buffer scanline V3. |
-| `U` | Z-buffer plein écran dans un framebuffer RAM, puis transfert SHR. |
-| Open-Apple + `U` | Z-buffer plein écran directement vers SHR. |
+| `U` | Z-buffer plein écran dans un framebuffer RAM, puis transfert SHGR. |
+| Open-Apple + `U` | Z-buffer plein écran directement vers SHGR. |
 | `P` | Filaire / surfaces ; le retour aux surfaces refait le traitement et le tri. |
 | `B` | Back-face culling, puis retraitement. |
 | `G` / `C` | Palette suivante / affichage des échantillons de couleurs. |
@@ -62,7 +62,7 @@ Les lettres acceptent majuscules et minuscules. Les commandes des inspecteurs pe
 | `(` | Choix de la méthode de chevauchement projeté. |
 | `/` | Benchmark des six méthodes comparées, export dans `overlap.all.txt`. |
 | `F` | Export de `Faces3D.csv`, `Faces2D.txt` et `FacesOrder.txt`. |
-| `*` | Capture brute SHR, premier nom disponible de `screen000.PIC` à `screen999.PIC`. |
+| `*` | Capture brute SHGR, premier nom disponible de `screen000.PIC` à `screen999.PIC`. |
 | `H` | Aide paginée ; Échap sort de l’aide. |
 | Échap | Sortie du programme. |
 
@@ -130,12 +130,12 @@ Le programme forme une unité de compilation par inclusions de fichiers C ; ses 
 | `dony.c`, `dony_scan_asm.c` | GEO V3 et rejet rapide des candidats. |
 | `geo_relation_asm.c`, `face_depth_asm.c` | Classification par plan ; métriques et Newell. |
 | `overlap_raster.c` | Chevauchement, clipping, régions, projection subpixel et benchmark. |
-| `zbuffer_scanline.c` | Rendu scanline V3, avec ou sans biais, et écriture d’un pixel SHR. |
+| `zbuffer_scanline.c` | Rendu scanline V3, avec ou sans biais, et écriture d’un pixel SHGR. |
 | `zbuffer_common.c` | Interpolation entière des codes de profondeur et noyau assembleur commun aux spans direct/offscreen. |
 | `zbuffer_fullscreen.c`, `.h` | Z-buffer et rendu direct avec contours sur plan. |
-| `zbuffer_fullscreen_offscreen.c` | Rendu en RAM et transfert vers SHR. |
-| `screen_save_restore.c` | Copie de 32768 octets SHR pour les vues temporaires et effacement paramétrable des lignes du haut. |
-| `color.c`, `asm.h` | Sélecteur de couleurs ; clavier et soft switches SHR. |
+| `zbuffer_fullscreen_offscreen.c` | Rendu en RAM et transfert vers SHGR. |
+| `screen_save_restore.c` | Copie de 32768 octets SHGR pour les vues temporaires et effacement paramétrable des lignes du haut. |
+| `color.c`, `asm.h` | Sélecteur de couleurs ; clavier et soft switches SHGR. |
 | `DEPLOY.py` | Compilation Golden Gate, lien et déploiement dans les images disque. |
 
 Les tableaux de coordonnées sont parallèles : objet `x/y/z`, observateur `xo/yo/zo` en 16.16, puis `x2d/y2d` en pixels. Les faces sont à base zéro ; les indices de sommets dans leur buffer restent à base un. `vertex_indices_ptr` contient des offsets dans ce buffer. Le pan s’applique au dessin et ne modifie pas les coordonnées de projection.
@@ -176,3 +176,5 @@ Les anciennes réparations complète et rapide sont archivées à la fin de `old
 Avant chaque échange, les 200 lignes de pixels sont effacées, puis le modèle est redessiné en fil de fer, avec la face P en vert clair et Q en orange. Deux lignes courtes proposent d’afficher P devant Q (« Draw face P in front of face Q »), puis les commandes. Cela correspond à dessiner Q avant P dans la permutation arrière-vers-avant. Les paires sans chevauchement selon la méthode configurée sont ignorées avant toute proposition, y compris en mode automatique. `N` ignore la proposition, Échap arrête en conservant les échanges déjà acceptés, Retour active l’application automatique des suivantes ; une autre touche applique l’échange courant. Le bilan compte propositions, échanges appliqués et refus. Les limites anti-cycle de GEO V3 restent actives : une proposition n’est pas une preuve exhaustive de correction géométrique. Les commandes S/D et Q restent disponibles pour l’examen manuel.
 
 Les vues S/D, Q, V, le repair et l’affichage des identifiants partagent la sauvegarde de visibilité, du mode filaire et du culling. Chaque outil conserve son cycle QuickDraw. Les actions volontaires de V sur les faces sont intégrées à la sauvegarde pour rester effectives à la fermeture. Un échec de sauvegarde annule la vue proprement.
+
+Les déplacements stables d’une face réutilisent les primitives communes : insertion par zmax, insertion Newell-Sancha et corrections du snapshot CORRECT V2. La variante avec positions inverses maintient aussi cette table. Les échanges de deux faces de GEO V3 et les échanges de voisins restent distincts des insertions stables.

@@ -5,7 +5,7 @@
  * ============================================================================
  *
  *  Rôle :
- *    Gérer la table de profondeur plein écran et dessiner directement en SHR
+ *    Gérer la table de profondeur plein écran et dessiner directement en SHGR
  *    les surfaces et leurs contours, avec un plan affine de codes Z commun
  *    aux deux passes.
  *
@@ -375,7 +375,7 @@ UWORD16 ZBuffer_QuantizeInvZ(float inv_z)
 }
 
 #define ZB_Z_BIAS    0.0005f
-#define ZB_SHR_BASE  0xE12000UL
+#define ZB_SHGR_BASE  0xE12000UL
 
 typedef struct {
     long x;
@@ -722,7 +722,7 @@ static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY,
     sx0 = x0 + pan_dx;
     raw = ZBuffer_PlaneAt(plane, (long)sx0, (long)screenY);
     zspan_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
-    zspan_p_pptr = ZB_SHR_BASE + (unsigned long)screenY * 160UL +
+    zspan_p_pptr = ZB_SHGR_BASE + (unsigned long)screenY * 160UL +
                 (unsigned long)(sx0 >> 1);
     zspan_p_odd = sx0 & 1;
     zspan_p_zl = ZBuffer_PlaneCode(raw);

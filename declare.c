@@ -539,7 +539,7 @@ static FaceArrays3D* qsort_faces_ptr_for_cmp = NULL;
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Encoder une couleur RGB dans le mot $0RGB du matériel SHR.
+ *    Encoder une couleur RGB dans le mot $0RGB du matériel SHGR.
  *
  *  Paramètres :
  *    [entrée] r, g et b, composantes entières bornées ici à [0,15].
@@ -682,6 +682,11 @@ static void compute_face_plane(Model3D* model, int fidx,
                                double *a, double *b, double *c, double *d,
                                int coordinate_mode);
 
+/* Déplacements stables communs ; insert_idx désigne la position finale. */
+static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx);
+static int move_element_remove_and_insert_pos(int *arr, int n, int from,
+                                               int insert_idx, int *pos_of_face);
+
 static int geometric_face_relation(Model3D* model, int f1, int f2);
 static int geo_face_order(Model3D* model, int f1, int f2);
 int projected_polygons_overlap(Model3D* model, int f1, int f2);
@@ -707,7 +712,7 @@ void drawPixel(int x, int y, int color);
 void DoColor(void);
 void DoText(void);
 static void show_help_pager(void);
-void saveSHRAsRawPic(const char *filename);
+void saveSHGRAsRawPic(const char *filename);
 void saveNextScreenshot(void);
 void setProDOSFileType(const char* filename, int fileType, long auxType);
 

@@ -11,7 +11,7 @@
  *  Organisation :
  *    La fonction main distingue le chargement, le retraitement géométrique,
  *    le redessin, l'attente clavier et la libération par des labels. Les
- *    vues textuelles temporaires réutilisent la sauvegarde SHR pour éviter
+ *    vues textuelles temporaires réutilisent la sauvegarde SHGR pour éviter
  *    un nouveau rendu.
  *
  *  Dépendances et contraintes :
@@ -46,7 +46,7 @@ segment "main";
  *    0 à la sortie normale ; 1 sur les chemins d'erreur traités ici.
  *
  *  Fonctionnement :
- *    Possède le modèle et coordonne QuickDraw, palettes, sauvegarde SHR et
+ *    Possède le modèle et coordonne QuickDraw, palettes, sauvegarde SHGR et
  *    Z-buffers. Les labels séparent chargement (newmodel), retraitement
  *    géométrique (bigloop), redessin (loopReDraw/draw), attente clavier
  *    (getakey) et libération (end). Les données numériques restent dans le
@@ -70,7 +70,7 @@ segment "main";
         int  oa;
 
 
-        /* Réserver la sauvegarde SHR avant toute vue graphique ; arrêter si
+        /* Réserver la sauvegarde SHGR avant toute vue graphique ; arrêter si
          * cette ressource obligatoire manque.
          */
         if (!initScreenSaveBuffer()) {
@@ -294,7 +294,7 @@ segment "main";
                     return 1;
                 }
                 qd_started = 1;
-                shroff();
+                shgroff();
             }
 
 
@@ -375,7 +375,7 @@ segment "main";
 
         /* Traiter d'abord les commandes qui restent dans la vue graphique active. */
         switch (key) {
-            /* Sauvegarder une capture SHR sans recalculer ni redessiner le modèle. */
+            /* Sauvegarder une capture SHGR sans recalculer ni redessiner le modèle. */
             case '*': /* Touche : * */
                 MoveTo(3, 10);
                 saveNextScreenshot();
@@ -418,7 +418,7 @@ segment "main";
         }
 
 
-        /* Sauvegarder la mémoire SHR avant les vues textuelles ou les rendus
+        /* Sauvegarder la mémoire SHGR avant les vues textuelles ou les rendus
          * alternatifs qui en ont besoin.
          */
         if (key == ' ' || key == 'H' || key == 'h'|| key == 'F'|| key == 'f'|| key == 'M'

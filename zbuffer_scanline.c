@@ -16,7 +16,7 @@
  *    couleurs effectives et drawPixel.
  *
  *  Dépendances et contraintes :
- *    Inclus par engine.c ; écran SHR 320x200, deux pixels par octet.
+ *    Inclus par engine.c ; écran SHGR 320x200, deux pixels par octet.
  *    Sans culling, la variante active emploie un biais. Les
  *    buffers statiques et paquets de spans sont non réentrants ; la mémoire
  *    Z seule ne résume pas leur consommation totale.
@@ -103,7 +103,7 @@ int getFaceFrameColor(int face_id, int fill_color) {
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Écrire directement un pixel SHR 320x200 en préservant son voisin.
+ *    Écrire directement un pixel SHGR 320x200 en préservant son voisin.
  *
  *  Paramètres :
  *    [entrée] x dans [0,319], y dans [0,199], color masqué sur quatre bits.
@@ -126,7 +126,7 @@ void drawPixel(int x, int y, int color)
 
     color &= 0x0F;
 
-    /* Calculer l'offset d'octet dans la banque SHR. */
+    /* Calculer l'offset d'octet dans la banque SHGR. */
     offset = y * 160 + (x >> 1);
 
     asm {
@@ -179,7 +179,7 @@ typedef UWORD16 SLZWord;
 #define SL_Z_ROUND 0x800L
 #define SL_Z_BIAS 0.0005f
 
-#define SL_SHR_BASE 0xE12000UL
+#define SL_SHGR_BASE 0xE12000UL
 #define SL_TARGET_MAX_CODE 65000.0f
 
 static SLZWord sl_zline[SCREEN_WIDTH];
@@ -631,7 +631,7 @@ static void SL_PaintSpan(int x0, int x1, int screenY,
     /* Préparer les pointeurs de la ligne Z et de l'écran au premier pixel. */
     sx0 = x0 + pan_dx;
     sl_p_zptr = (unsigned long)(sl_zline + sx0);
-    sl_p_pptr = SL_SHR_BASE + (unsigned long)screenY * 160UL + (unsigned long)(sx0 >> 1);
+    sl_p_pptr = SL_SHGR_BASE + (unsigned long)screenY * 160UL + (unsigned long)(sx0 >> 1);
     sl_p_odd = sx0 & 1;
     sl_p_zl = z0;
     sl_p_cl = frameColor;

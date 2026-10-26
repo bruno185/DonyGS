@@ -1,11 +1,11 @@
 /*
  * ============================================================================
- *  asm.h — Clavier et commutation SHR — Primitives 65C816
+ *  asm.h — Clavier et commutation SHGR — Primitives 65C816
  * ============================================================================
  *
  *  Rôle :
  *    Accéder directement au clavier Apple IIgs, à l'état Open-Apple et aux
- *    soft switches d'affichage SHR. Fournir aussi une signature de registres
+ *    soft switches d'affichage SHGR. Fournir aussi une signature de registres
  *    utilisable par un breakpoint d'émulateur.
  *
  *  Organisation :
@@ -150,11 +150,11 @@ loop:
 
 /*
  * ----------------------------------------------------------------------------
- *  shroff
+ *  shgroff
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Désactiver l'affichage SHR en écrivant $41 dans $00C029.
+ *    Désactiver l'affichage SHGR en écrivant $41 dans $00C029.
  *
  *  Paramètres :
  *    Aucun paramètre explicite.
@@ -168,7 +168,7 @@ loop:
  *
  * ----------------------------------------------------------------------------
  */
-asm shroff ()
+asm shgroff ()
         {
         sep #0x20
         /* Écriture matérielle sur un octet ; REP impose ensuite les tailles de sortie. */

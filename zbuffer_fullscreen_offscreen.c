@@ -6,7 +6,7 @@
  *
  *  Rôle :
  *    Rendre le modèle dans un framebuffer RAM de 32000 octets, puis
- *    transférer les pixels vers SHR en une copie MVN, en utilisant le
+ *    transférer les pixels vers SHGR en une copie MVN, en utilisant le
  *    Z-buffer géré par zbuffer_fullscreen.c.
  *
  *  Organisation :
@@ -191,7 +191,7 @@ void Offscreen_Clear(void)
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Copier le framebuffer RAM vers les 32000 octets de pixels SHR.
+ *    Copier le framebuffer RAM vers les 32000 octets de pixels SHGR.
  *
  *  Paramètres :
  *    Aucun paramètre explicite.

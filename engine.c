@@ -3549,17 +3549,8 @@ void painter_newell_sancha(Model3D* model, int face_count)
  * positions déplacées.
  */
 do_move:
-            {
-                int tmp;
-                int k;
-                tmp = sorted[j];
-                for (k = j; k > i; --k) {
-                    sorted[k] = sorted[k - 1];
-                    pos[sorted[k]] = k;
-                }
-                sorted[i] = tmp;
-                pos[tmp] = i;
-            }
+            /* Insertion stable avec mise à jour de toutes les positions inverses. */
+            (void)move_element_remove_and_insert_pos(sorted, face_count, j, i, pos);
 
             changed = 1;
             continue;
@@ -4232,20 +4223,8 @@ static int painter_correct(Model3D* model, int face_count, int use_v2) {
                         int from = pos_of_face[bf];
                         int to = pos_of_face[ff] + 1;
                         if (from < to) to--;
-                        if (from != to) {
-                            int tmp = snapshot[from];
-                            if (from < to) {
-                                for (int s = from; s < to; ++s) { snapshot[s] = snapshot[s+1]; pos_of_face[snapshot[s]] = s; }
-                                snapshot[to] = tmp; pos_of_face[tmp] = to;
-                            } else {
-                                for (int s = from; s > to; --s) { snapshot[s] = snapshot[s-1]; pos_of_face[snapshot[s]] = s; }
-                                snapshot[to] = tmp; pos_of_face[tmp] = to;
-                            }
-
-                            total_moves++;
-                        } else {
-
-                        }
+                        /* La primitive commune maintient le snapshot et sa table inverse. */
+                        total_moves += move_element_remove_and_insert_pos(snapshot, n, from, to, pos_of_face);
 
                     }
                 }
@@ -6229,7 +6208,7 @@ void display_model_face_ids(Model3D* model, ObserverParams* params, const char* 
     inspection_view_end(model, &view);
 }
 
-/* Palettes logicielles et matérielles, effacement SHR et shading par
+/* Palettes logicielles et matérielles, effacement SHGR et shading par
  * orientation.
  */
 segment "color";
@@ -6405,7 +6384,7 @@ void DoColor() {
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Mettre à zéro les mots SHR parcourus par la boucle d'effacement.
+ *    Mettre à zéro les mots SHGR parcourus par la boucle d'effacement.
  *
  *  Paramètres :
  *    Aucun paramètre explicite.
@@ -8525,7 +8504,7 @@ static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename) {
     printf("Wrote sorted face indices to %s (%d faces)\n", txt_filename, face_count);
 }
 
-/* Aide textuelle, métadonnées GS/OS et captures SHR brutes. */
+/* Aide textuelle, métadonnées GS/OS et captures SHGR brutes. */
 segment "utilities";
 /*
  * ----------------------------------------------------------------------------
@@ -8647,14 +8626,14 @@ static void show_help_pager(void) {
  *    Aucun.
  *
  *  Fonctionnement :
- *    Appelle shroff et émet le caractère 12 sur stdout. Ne ferme pas
+ *    Appelle shgroff et émet le caractère 12 sur stdout. Ne ferme pas
  *    QuickDraw ; l'appelant gère séparément son cycle de vie.
  *
  * ----------------------------------------------------------------------------
  */
 void DoText() {
-        /* Désactiver SHR avant le contrôle texte d'effacement. */
-        shroff();
+        /* Désactiver SHGR avant le contrôle texte d'effacement. */
+        shgroff();
         putchar((char) 12);
 }
 /*
@@ -8693,15 +8672,15 @@ void setProDOSFileType(const char* filename, int fileType, long auxType) {
     pb.optionList = 0;
     SetFileInfoGS(&pb);
 }
-#define SHR_BASE        0xE12000UL
-#define SHR_SIZE        32768UL
+#define SHGR_BASE        0xE12000UL
+#define SHGR_SIZE        32768UL
 /*
  * ----------------------------------------------------------------------------
- *  saveSHRAsRawPic
+ *  saveSHGRAsRawPic
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Écrire la zone SHR brute dans un fichier PIC non compressé.
+ *    Écrire la zone SHGR brute dans un fichier PIC non compressé.
  *
  *  Paramètres :
  *    [entrée] filename
@@ -8710,20 +8689,20 @@ void setProDOSFileType(const char* filename, int fileType, long auxType) {
  *    Aucun.
  *
  *  Fonctionnement :
- *    Lit SHR_SIZE octets depuis SHR_BASE, écrase le fichier et affecte le
+ *    Lit SHGR_SIZE octets depuis SHGR_BASE, écrase le fichier et affecte le
  *    type ProDOS $C1, auxiliaire zéro. Échec d'ouverture affiché ; les
  *    erreurs d'écriture ne sont pas contrôlées ici.
  *
  * ----------------------------------------------------------------------------
  */
-void saveSHRAsRawPic(const char *filename)
+void saveSHGRAsRawPic(const char *filename)
 {
     FILE *out;
-    unsigned char *shr;
+    unsigned char *shgr;
     unsigned long i;
 
     /* Ouvrir la destination binaire et pointer la zone vidéo. */
-    shr = (volatile unsigned char *)SHR_BASE;
+    shgr = (volatile unsigned char *)SHGR_BASE;
     out = fopen(filename, "wb");
     if (out == NULL) {
         printf("Error: unable to open %s for writing\n", filename);
@@ -8731,8 +8710,8 @@ void saveSHRAsRawPic(const char *filename)
     }
 
     /* Copier les octets sans compression puis affecter les métadonnées du fichier. */
-    for (i = 0; i < SHR_SIZE; i++) {
-        fputc(shr[i], out);
+    for (i = 0; i < SHGR_SIZE; i++) {
+        fputc(shgr[i], out);
     }
     fclose(out);
 
@@ -8755,7 +8734,7 @@ void saveSHRAsRawPic(const char *filename)
  *    Aucun.
  *
  *  Fonctionnement :
- *    Appelle saveSHRAsRawPic pour ce nom, ou affiche un échec si les mille
+ *    Appelle saveSHGRAsRawPic pour ce nom, ou affiche un échec si les mille
  *    noms sont utilisés. Un échec d'ouverture est traité comme un nom
  *    disponible ; la sélection n'est pas une réservation atomique de
  *    fichier.
@@ -8782,5 +8761,5 @@ void saveNextScreenshot(void) {
         printf("Error: no available screen index (000-999 all used)\n");
         return;
     }
-    saveSHRAsRawPic(fname);
+    saveSHGRAsRawPic(fname);
 }
