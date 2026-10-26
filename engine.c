@@ -32,10 +32,10 @@
 #include "screen_save_restore.c"
 #include "color.c"
 
+#include "zbuffer_common.c"
 #include "zbuffer_scanline.c"
 #include "zbuffer_fullscreen.c"
 #include "zbuffer_fullscreen_offscreen.c"
-
 
 /* Chargement OBJ et outils de préparation de la géométrie objet. */
 segment "model_loading";
@@ -105,7 +105,6 @@ Model3D* createModel3D(void) {
     model->coord_buf = NULL;
     model->coord_buf_capacity = 0;
 
-
     /* Allouer les coordonnées objet, observateur et écran ; chaque chemin
      * d'échec libère les allocations explicitement listées.
      */
@@ -136,7 +135,6 @@ Model3D* createModel3D(void) {
         return NULL;
     }
 
-
     model->vertices.xHandle = NULL;
     model->vertices.yHandle = NULL;
     model->vertices.zHandle = NULL;
@@ -146,12 +144,10 @@ Model3D* createModel3D(void) {
     model->vertices.x2dHandle = NULL;
     model->vertices.y2dHandle = NULL;
 
-
     /* Réserver les listes et métriques des faces indépendamment des
      * coordonnées des sommets.
      */
     int nf = MAX_FACES;
-
 
     model->faces.vertex_count = (int*)malloc(nf * sizeof(int));
     if (!model->faces.vertex_count) {
@@ -169,7 +165,6 @@ Model3D* createModel3D(void) {
         return NULL;
     }
 
-
     model->faces.saved_vertex_count = (int*)calloc(nf, sizeof(int));
     if (!model->faces.saved_vertex_count) {
         printf("Error: Unable to allocate memory for face saved_vertex_count array\n");
@@ -186,7 +181,6 @@ Model3D* createModel3D(void) {
         free(model);
         return NULL;
     }
-
 
     /* Réserver le buffer compact pour une moyenne de cinq indices par face ;
      * aucune extension n'est effectuée ici.
@@ -210,7 +204,6 @@ Model3D* createModel3D(void) {
         return NULL;
     }
 
-
     model->faces.vertex_indices_ptr = (int*)malloc(nf * sizeof(int));
     if (!model->faces.vertex_indices_ptr) {
         printf("Error: Unable to allocate memory for vertex_indices_ptr array\n");
@@ -229,7 +222,6 @@ Model3D* createModel3D(void) {
         free(model);
         return NULL;
     }
-
 
     /* Allouer les intervalles de profondeur et la clé moyenne utilisée par FAST. */
     model->faces.z_min = (Fixed32*)malloc(nf * sizeof(Fixed32));
@@ -346,7 +338,6 @@ Model3D* createModel3D(void) {
         return NULL;
     }
 
-
     /* Réserver les drapeaux de visibilité et la permutation de rendu. */
     model->faces.display_flag = (int*)malloc(nf * sizeof(int));
     if (!model->faces.display_flag) {
@@ -371,7 +362,6 @@ Model3D* createModel3D(void) {
         return NULL;
     }
 
-
     model->faces.sorted_face_indices = (int*)malloc(nf * sizeof(int));
     if (!model->faces.sorted_face_indices) {
         printf("Error: Unable to allocate memory for sorted_face_indices array\n");
@@ -395,7 +385,6 @@ Model3D* createModel3D(void) {
         free(model);
         return NULL;
     }
-
 
     /* Initialiser les handles non utilisés par ces allocations malloc et le
      * compteur d'indices.
@@ -450,7 +439,6 @@ void destroyModel3D(Model3D* model) {
         if (model->vertices.x2d) free(model->vertices.x2d);
         if (model->vertices.y2d) free(model->vertices.y2d);
 
-
         /* Libérer les listes et métriques de faces, puis les copies et
          * buffers supplémentaires.
          */
@@ -482,7 +470,6 @@ void destroyModel3D(Model3D* model) {
         if (model->orig_y) free(model->orig_y);
         if (model->orig_z) free(model->orig_z);
         if (model->coord_buf) free(model->coord_buf);
-
 
         /* Libérer la structure en dernier ; aucun de ses tableaux ne reste utilisable. */
         free(model);
@@ -520,7 +507,6 @@ int loadModel3D(Model3D* model, const char* filename) {
         return -1;
     }
 
-
     /* Conserver la borne préalable puis lire les sommets et leurs
      * suggestions de vue.
      */
@@ -532,7 +518,6 @@ int loadModel3D(Model3D* model, const char* filename) {
     }
     model->vertices.vertex_count = vcount;
 
-
     /* Relire le fichier pour les faces ; conserver un chargement sans faces
      * si cette étape échoue.
      */
@@ -543,7 +528,6 @@ int loadModel3D(Model3D* model, const char* filename) {
         model->faces.face_count = 0;
     } else {
         model->faces.face_count = fcount;
-
 
     }
     return 0;
@@ -582,7 +566,6 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
     int line_number = 1;
     int vertex_count = 0;
 
-
     /* Ouvrir le fichier en texte ; les autres types de lignes sont ignorés. */
     file = fopen(filename, "r");
     if (file == NULL) {
@@ -590,7 +573,6 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
     }
 
     printf("\nReading vertices from file '%s' ", filename);
-
 
     while (fgets(line, sizeof(line), file) != NULL) {
         /* Convertir trois coordonnées en 16.16 dans la capacité disponible,
@@ -645,7 +627,6 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
             vtx->z[i] = FIXED_SUB(vtx->z[i], owner->auto_center_z);
         }
         owner->auto_centered = 1;
-
 
         /* Établir une distance suggérée à partir de la plus grande dimension. */
         Fixed32 dx = FIXED_SUB(xmax, xmin);
@@ -740,13 +721,11 @@ int readFaces_model(const char* filename, Model3D* model) {
     int face_count = 0;
     int i;
 
-
     /* Valider la structure avant l'ouverture du fichier. */
     if (model == NULL || model->faces.vertex_count == NULL) {
         printf("Error: Invalid model structure for readFaces_model\n");
         return -1;
     }
-
 
     file = fopen(filename, "r");
     if (file == NULL) {
@@ -757,7 +736,6 @@ int readFaces_model(const char* filename, Model3D* model) {
     printf("\nReading faces from file '%s' ", filename);
 
     int buffer_pos = 0;
-
 
     while (fgets(line, sizeof(line), file) != NULL) {
 
@@ -772,12 +750,10 @@ int readFaces_model(const char* filename, Model3D* model) {
                 model->faces.saved_vertex_count[face_count] = 0;
                 model->faces.vertex_indices_ptr[face_count] = buffer_pos;
 
-
                 char *ptr = line + 2;
                 int temp_indices[MAX_FACE_VERTICES];
                 int temp_vertex_count = 0;
                 int invalid_index_found = 0;
-
 
                 /* Parcourir les tokens, ignorer les suffixes et s'arrêter à
                  * la limite par face.
@@ -788,18 +764,15 @@ int readFaces_model(const char* filename, Model3D* model) {
 
                     if (*ptr == '\0' || *ptr == '\n') break;
 
-
                     int vertex_index = 0;
                     while (*ptr >= '0' && *ptr <= '9') {
                         vertex_index = vertex_index * 10 + (*ptr - '0');
                         ptr++;
                     }
 
-
                     while (*ptr != '\0' && *ptr != ' ' && *ptr != '\t' && *ptr != '\n') {
                         ptr++;
                     }
-
 
                     if (vertex_index >= 1) {
                         if (vertex_index > readVertices_last_count) {
@@ -810,7 +783,6 @@ int readFaces_model(const char* filename, Model3D* model) {
                         temp_vertex_count++;
                     }
                 }
-
 
                 /* Refuser la face entière si un indice dépasse la borne de validation. */
                 if (invalid_index_found) {
@@ -825,7 +797,6 @@ int readFaces_model(const char* filename, Model3D* model) {
                     }
                     model->faces.vertex_count[face_count] = temp_vertex_count;
                     model->faces.total_indices += temp_vertex_count;
-
 
                     if (model->faces.vertex_count[face_count] > 0) {
                         face_count++;
@@ -842,12 +813,10 @@ int readFaces_model(const char* filename, Model3D* model) {
         line_number++;
     }
 
-
     fclose(file);
 
     /* Publier le compteur lu et reconstruire une permutation canonique des faces. */
     model->faces.face_count = face_count;
-
 
     for (i = 0; i < face_count; i++) {
         model->faces.sorted_face_indices[i] = i;
@@ -903,7 +872,6 @@ static void check_intersect(Model3D* model) {
     int count = 0;
     int ip_count = 0;
 
-
     int changed;
     /* Repartir du modèle modifié à chaque découpage accepté. */
     do {
@@ -939,7 +907,6 @@ static void check_intersect(Model3D* model) {
                     float dy = FIXED_TO_FLOAT(uy - oy);
                     float dz = FIXED_TO_FLOAT(uz - oz);
 
-
                     if (dx >= 0.0f && dy >= 0.0f) {
 
                         ++count;
@@ -969,7 +936,6 @@ static void check_intersect(Model3D* model) {
                             /* Tester les arêtes seulement pour les paires non reconnues coplanaires. */
                             if (!coplanar) {
 
-
                                 int interior = edge_crosses_interior(model, i, j) ||
                                                edge_crosses_interior(model, j, i);
                                 if (interior) {
@@ -977,13 +943,11 @@ static void check_intersect(Model3D* model) {
                                 } else {
                                 }
 
-
                             /* Choisir la face à découper d'après les nombres
                              * de traversées dans chaque sens.
                              */
                             int cross_i_j = count_edge_crossings(model, i, j);
                             int cross_j_i = count_edge_crossings(model, j, i);
-
 
                             if (cross_i_j == 2 && cross_j_i == 0) {
 
@@ -1119,7 +1083,6 @@ static int edge_crosses_interior(Model3D* model, int ei, int fj) {
         else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
         vx[m] = ix; vy[m] = iy;
     }
-
 
     int result = 0;
     /* Parcourir les segments de ei, évaluer les côtés et projeter leurs
@@ -1624,12 +1587,10 @@ static int split_face_by_plane(Model3D* model, int f1, int f2,
     remove_duplicates(neg_list, &neg_n);
     if (cop_n >= 3) remove_duplicates(cop_list, &cop_n);
 
-
     if (!force_one_edge && (pos_n < 3 || neg_n < 3)) return 0;
 
     reorder_poly(model, f1, pos_list, &pos_n);
     reorder_poly(model, f1, neg_list, &neg_n);
-
 
     double a1, b1, c1, d1;
     compute_face_plane(model, f1, &a1, &b1, &c1, &d1);
@@ -1637,13 +1598,11 @@ static int split_face_by_plane(Model3D* model, int f1, int f2,
     double area_neg = poly_signed_area(model, neg_list, neg_n, a1, b1, c1);
     if (fabs(area_pos) < 0.001 || fabs(area_neg) < 0.001) {
 
-
     }
     reorder_poly(model, f1, pos_list, &pos_n);
     reorder_poly(model, f1, neg_list, &neg_n);
     int orig_cnt = faces->vertex_count[f1];
     int orig_off = faces->vertex_indices_ptr[f1];
-
 
     int *keep_list = NULL, keep_n = 0;
     int *other_list = NULL, other_n = 0;
@@ -2093,7 +2052,6 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     Fixed32 x, y, z, zo, xo, yo;
     Fixed32 inv_zo;
 
-
     /* Lire les six valeurs trigonométriques une seule fois pour la vue. */
     cos_h = cos_deg_int(params->angle_h);
     sin_h = sin_deg_int(params->angle_h);
@@ -2116,7 +2074,6 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
     const Fixed32 centre_x_f = INT_TO_FIXED(CENTRE_X);
     const Fixed32 centre_y_f = INT_TO_FIXED(CENTRE_Y);
     Fixed32 distance = params->distance;
-
 
     VertexArrays3D* vtx = &model->vertices;
     Fixed32 *x_arr = vtx->x, *y_arr = vtx->y, *z_arr = vtx->z;
@@ -2198,7 +2155,6 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
      */
     if (framePolyOnly) goto skip_calc;
 
-
     /* Répartir les sept modes utilisateur vers leurs implémentations actuelles. */
     if (painter_mode == PAINTER_MODE_FAST) {
         painter_newell_sancha_fast(model, model->faces.face_count);
@@ -2257,7 +2213,6 @@ static int cmp_faces_by_zmean(const void* pa, const void* pb) {
     return 0;
 }
 
-
 /* Paquet non réentrant : deux entiers 32 bits little-endian en entrée,
  * quatre mots de produit brut dans geo_mul_p.
  */
@@ -2308,7 +2263,6 @@ unsigned int geo_mul_p[4];
 asm void GeoV3_Mul32x32(void)
 {
 
-
     /* Sauvegarder le contexte, imposer les tailles 16 bits et désactiver le
      * mode décimal.
      */
@@ -2319,7 +2273,6 @@ asm void GeoV3_Mul32x32(void)
     phd
     cld
 
-
     /* Réserver 24 octets sous les registres sauvegardés ; D=S, premier mot
      * utile à D+1.
      */
@@ -2328,7 +2281,6 @@ asm void GeoV3_Mul32x32(void)
     sbc     #24
     tcs
     tcd
-
 
     /* Former la magnitude de a ; un complément à deux conserve correctement
      * |INT32_MIN| sur 32 bits non signés.
@@ -2344,7 +2296,6 @@ asm void GeoV3_Mul32x32(void)
     lda     7
     bpl     geo_mul_a_positive
 
-
     lda     5
     eor     #0xFFFF
     clc
@@ -2359,7 +2310,6 @@ asm void GeoV3_Mul32x32(void)
 
 /* Former la magnitude de b et combiner les signes par XOR. */
 geo_mul_a_positive:
-
 
     lda     >geo_mul_inputs+4
     sta     13
@@ -2384,13 +2334,11 @@ geo_mul_a_positive:
 /* Initialiser le produit à zéro avant les sorties anticipées. */
 geo_mul_b_positive:
 
-
     lda     #0
     sta     17
     sta     19
     sta     21
     sta     23
-
 
     lda     5
     ora     7
@@ -2405,14 +2353,12 @@ geo_mul_check_q_zero:
 /* Choisir le chemin court si le multiplicateur tient dans un mot. */
 geo_mul_nonzero:
 
-
     ldx     #16
     lda     15
     bne     geo_mul_q_wide
     brl     geo_mul_short16
 /* Échanger les magnitudes si cela permet de placer le petit opérande dans Q. */
 geo_mul_q_wide:
-
 
     lda     7
     bne     geo_mul_select32
@@ -2431,7 +2377,6 @@ geo_mul_q_wide:
  * sera restauré par déplacement de mots.
  */
 geo_mul_select32:
-
 
     lda     13
     bne     geo_mul_check_m_integer
@@ -2458,7 +2403,6 @@ geo_mul_check_m_integer:
     bra     geo_mul_short16
 geo_mul_full_width:
     brl     geo_mul_use_32
-
 
 /* Une multiplication par un devient une copie ; sinon choisir 8 ou 16 bits
  * significatifs de Q.
@@ -2515,7 +2459,6 @@ geo_mul_short16_shift:
     cmp     #8
     bne     geo_mul_short_finish
 
-
     lda     17
     xba
     and     #0x00FF
@@ -2561,7 +2504,6 @@ geo_mul_use_32:
 
 geo_mul_loop:
 
-
     lda     13
     sta     17
     lda     15
@@ -2572,11 +2514,9 @@ geo_mul_loop:
  */
 geo_mul_combined_loop:
 
-
     lda     17
     lsr     a
     bcc     geo_mul_combined_no_add
-
 
     clc
     lda     21
@@ -2595,7 +2535,6 @@ geo_mul_combined_no_add:
  */
 geo_mul_combined_shift:
 
-
     ror     23
     ror     21
     ror     19
@@ -2603,12 +2542,10 @@ geo_mul_combined_shift:
     dex
     bne     geo_mul_combined_loop
 
-
 /* Appliquer le signe final par complément à deux 64 bits, avec propagation
  * des retenues.
  */
 geo_mul_apply_sign:
-
 
     lda     1
     beq     geo_mul_store
@@ -2636,7 +2573,6 @@ geo_mul_apply_sign:
  */
 geo_mul_store:
 
-
     lda     17
     sta     >geo_mul_p
     lda     19
@@ -2645,7 +2581,6 @@ geo_mul_store:
     sta     >geo_mul_p+4
     lda     23
     sta     >geo_mul_p+6
-
 
     tsc
     clc
@@ -2789,103 +2724,6 @@ static Fixed64 fixed_product64x32_fast(Fixed64 a,Fixed32 b)
 
 /*
  * ----------------------------------------------------------------------------
- *  GeoV3_Mul32x32SelfTest
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Comparer le noyau assembleur au produit C sur des cas déterministes.
- *
- *  Paramètres :
- *    [entrée] aucune.
- *
- *  Retour :
- *    0 si tout concorde, 1 au premier écart.
- *
- *  Sorties et effets de bord :
- *    test_index ; en cas d'écart, bad_a et bad_b, asm_product_out et
- *    c_product_out.
- *
- *    écrase les paquets du multiplicateur ; ne teste pas la voie C à sa
- *    place.
- *
- *  Fonctionnement :
- *    Teste 100 couples de bornes puis 2048 couples pseudo-aléatoires.
- *
- * ----------------------------------------------------------------------------
- */
-int GeoV3_Mul32x32SelfTest(unsigned long *test_index,
-                           Fixed32 *bad_a, Fixed32 *bad_b,
-                           Fixed64 *asm_product_out,
-                           Fixed64 *c_product_out)
-{
-    static const Fixed32 boundary[] = {
-        0L, 1L, -1L, 2L, -2L,
-        65535L, 65536L, -65536L,
-        2147483647L, (-2147483647L - 1L)
-    };
-    unsigned long state;
-    unsigned long index;
-    unsigned long bits;
-    unsigned int i, j;
-    Fixed32 a, b;
-    Fixed64 asm_product, c_product;
-
-    /* Comparer toutes les combinaisons des valeurs limites. */
-    index = 0;
-    for (i = 0; i < (unsigned int)(sizeof(boundary) / sizeof(boundary[0])); ++i) {
-        for (j = 0; j < (unsigned int)(sizeof(boundary) / sizeof(boundary[0])); ++j) {
-            a = boundary[i];
-            b = boundary[j];
-            GeoV3_Mul32x32SetInputs(a, b);
-            memcpy(&asm_product, geo_mul_p, sizeof(asm_product));
-            c_product = (Fixed64)a * (Fixed64)b;
-            if (asm_product != c_product) {
-                *test_index = index;
-                *bad_a = a;
-                *bad_b = b;
-                *asm_product_out = asm_product;
-                *c_product_out = c_product;
-                return 1;
-            }
-            ++index;
-        }
-    }
-
-    /* Générer une suite reproductible de motifs de bits et arrêter au
-     * premier produit différent.
-     */
-    state = 0x13579BDFUL;
-    for (i = 0; i < 2048; ++i) {
-        state = state * 1664525UL + 1013904223UL;
-        bits = state;
-        memcpy(&a, &bits, sizeof(a));
-        state = state * 1664525UL + 1013904223UL;
-        bits = state;
-        memcpy(&b, &bits, sizeof(b));
-
-        GeoV3_Mul32x32SetInputs(a, b);
-        memcpy(&asm_product, geo_mul_p, sizeof(asm_product));
-        c_product = (Fixed64)a * (Fixed64)b;
-        if (asm_product != c_product) {
-            *test_index = index;
-            *bad_a = a;
-            *bad_b = b;
-            *asm_product_out = asm_product;
-            *c_product_out = c_product;
-            return 1;
-        }
-        ++index;
-    }
-
-    /* Publier le nombre total de cas seulement après réussite de toutes les
-     * comparaisons.
-     */
-    *test_index = index;
-    return 0;
-}
-
-/*
- * ----------------------------------------------------------------------------
  *  GeoV3_MulFixed64Fixed32Shift
  * ----------------------------------------------------------------------------
  *
@@ -2923,7 +2761,6 @@ static Fixed64 GeoV3_MulFixed64Fixed32Shift(Fixed64 coefficient,
         memcpy(&product, geo_mul_p, sizeof(product));
         return product >> FIXED_SHIFT;
     }
-
 
     return (coefficient * (Fixed64)coordinate) >> FIXED_SHIFT;
 #endif
@@ -3000,7 +2837,6 @@ static int geometric_face_relation(Model3D* model, int f1, int f2)
         return 0;
     }
 
-
     /* Éliminer les résultats d'un autre propriétaire, d'une autre vue ou
      * d'une autre époque.
      */
@@ -3047,7 +2883,6 @@ static int geometric_face_relation(Model3D* model, int f1, int f2)
     result=0;
     obs=prepared->observer;
     if (!obs) goto store_result;
-
 
 /* N'utiliser le noyau assembleur que si les bornes arithmétiques et le
  * nombre de sommets l'autorisent.
@@ -3109,7 +2944,6 @@ store_result:
     return result;
 }
 
-
 /*
  * ----------------------------------------------------------------------------
  *  painter_newell_sancha_fast
@@ -3138,7 +2972,6 @@ store_result:
 void painter_newell_sancha_fast(Model3D* model, int face_count) {
     FaceArrays3D* faces = &model->faces;
     if (!faces->z_mean) return;
-
 
     int i;
     int visible_count = face_count;
@@ -3207,7 +3040,6 @@ void painter_bubble_sort(Model3D* model, int face_count)
 
     (void)geometric_face_relation(NULL, 0, 0);
 
-
     painter_newell_sancha_fast(model, face_count);
 
     int visible_count = face_count;
@@ -3224,13 +3056,11 @@ void painter_bubble_sort(Model3D* model, int face_count)
 
     int* sorted = faces->sorted_face_indices;
 
-
     typedef struct {
         int face1;
         int face2;
         int next;
     } OrderedPair;
-
 
     const int HASH_SIZE = 2048;
     const int HASH_MASK = HASH_SIZE - 1;
@@ -3249,7 +3079,6 @@ void painter_bubble_sort(Model3D* model, int face_count)
         hash_table[i] = -1;
     }
 
-
     int ordered_cap = face_count * 2;
     if (ordered_cap > 4096) ordered_cap = 4096;
     OrderedPair* ordered = (OrderedPair*)malloc(ordered_cap * sizeof(OrderedPair));
@@ -3259,7 +3088,6 @@ void painter_bubble_sort(Model3D* model, int face_count)
         painter_newell_sancha_fast(model, face_count);
         return;
     }
-
 
     /* Réinitialiser le buffer de diagnostic des paires non décidées. */
     if (inconclusive_pairs) {
@@ -3273,7 +3101,6 @@ void painter_bubble_sort(Model3D* model, int face_count)
     }
     inconclusive_pairs_count = 0;
 
-
     Fixed32* z_min = faces->z_min;
     Fixed32* z_max = faces->z_max;
     int* minx = faces->minx;
@@ -3283,7 +3110,6 @@ void painter_bubble_sort(Model3D* model, int face_count)
 
     #define PAIR_HASH(a, b)  ((((unsigned)(a) * 73856093u) ^ ((unsigned)(b) * 19349663u)) & HASH_MASK)
 
-
     int swapped;
     /* Balayer les voisins jusqu'à une passe sans échange. */
     do {
@@ -3291,7 +3117,6 @@ void painter_bubble_sort(Model3D* model, int face_count)
         for (int i = 0; i < visible_count - 1; ++i) {
             int f1 = sorted[i];
             int f2 = sorted[i + 1];
-
 
             unsigned h = PAIR_HASH(f1, f2);
             int idx = hash_table[h];
@@ -3308,33 +3133,26 @@ void painter_bubble_sort(Model3D* model, int face_count)
                 continue;
             }
 
-
             /* Enchaîner les rejets de profondeur et de boîtes avant les
              * tests de contour et de plans.
              */
             if (z_max[f2] <= z_min[f1]) continue;
 
-
             if (z_max[f1] <= z_min[f2]) goto do_swap;
-
 
             if (maxx[f1] <= minx[f2] || maxx[f2] <= minx[f1]) continue;
             if (maxy[f1] <= miny[f2] || maxy[f2] <= miny[f1]) continue;
-
 
             if (!projected_polygons_overlap(model, f1, f2)) {
                 continue;
             }
 
-
             int geo = geometric_face_relation(model, f1, f2);
             if (geo == -1) continue;
             if (geo == 1)  goto do_swap;
 
-
             int geo2 = geometric_face_relation(model, f2, f1);
             if (geo2 == -1) goto do_swap;
-
 
             if (inconclusive_pairs_count < inconclusive_pairs_capacity) {
                 inconclusive_pairs[inconclusive_pairs_count].face1 = f1;
@@ -3368,14 +3186,12 @@ void painter_bubble_sort(Model3D* model, int face_count)
         }
     } while (swapped);
 
-
     /* Libérer les gardes temporaires ; les paires de diagnostic restent
      * accessibles.
      */
     free(ordered);
     free(hash_table);
 }
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -3429,7 +3245,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
     ((((unsigned)(a) * 73856093u) ^ \
       ((unsigned)(b) * 19349663u)) & HASH_MASK_NS)
 
-
     static int* s_hash = NULL;
     static OrderedPair* s_ordered = NULL;
     static int* s_touched = NULL;
@@ -3441,7 +3256,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
     static int s_active_capacity = 0;
     static CandidatePair* s_candidates = NULL;
     static int s_candidates_capacity = 0;
-
 
     static unsigned char* s_moved = NULL;
     static int s_moved_capacity = 0;
@@ -3463,14 +3277,12 @@ void painter_newell_sancha(Model3D* model, int face_count)
     /* Réinitialiser les relations de plans et établir le préfixe visible de FAST. */
     (void)geometric_face_relation(NULL, 0, 0);
 
-
     if (face_count <= 1) {
         painter_newell_sancha_fast(model, face_count);
         return;
     }
     faces = &model->faces;
     painter_newell_sancha_fast(model, face_count);
-
 
     visible_count = face_count;
     if (cull_back_faces) {
@@ -3484,7 +3296,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
     if (visible_count < 2)
         return;
     sorted = faces->sorted_face_indices;
-
 
     /* Réserver les tables persistantes de hash et de relations. */
     if (!s_hash) {
@@ -3563,13 +3374,11 @@ void painter_newell_sancha(Model3D* model, int face_count)
     miny = faces->miny;
     maxy = faces->maxy;
 
-
     {
         int i;
         for (i = 0; i < visible_count; ++i)
             pos[sorted[i]] = i;
     }
-
 
     {
         int i;
@@ -3600,7 +3409,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
         }
     }
 
-
     /* Construire les paires candidates en conservant les intervalles Z
      * encore actifs.
      */
@@ -3616,7 +3424,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
             f = by_zmin[n];
             fmin = z_min[f];
 
-
             dst = 0;
             for (a = 0; a < active_count; ++a) {
                 int q = active[a];
@@ -3624,7 +3431,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
                     active[dst++] = q;
             }
             active_count = dst;
-
 
             for (a = 0; a < active_count; ++a) {
                 /* Agrandir les listes de candidats et leurs drapeaux de
@@ -3652,7 +3458,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
                     s_candidates = tmp;
                     s_candidates_capacity = newcap;
 
-
                     if (s_moved_capacity < newcap) {
                         tmp_moved =
                             (unsigned char*)realloc(
@@ -3673,14 +3478,12 @@ void painter_newell_sancha(Model3D* model, int face_count)
                 s_candidates[candidate_count].b =
                     f;
 
-
                 s_moved[candidate_count] = 0;
                 ++candidate_count;
             }
             active[active_count++] = f;
         }
     }
-
 
     /* Reconsidérer les candidats après les insertions en utilisant la table
      * inverse des positions.
@@ -3701,7 +3504,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
             A = s_candidates[c].a;
             B = s_candidates[c].b;
 
-
             if (pos[A] < pos[B]) {
                 i = pos[A];
                 j = pos[B];
@@ -3714,7 +3516,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
                 P = B;
                 Q = A;
             }
-
 
             h = PAIR_HASH_NS(P, Q);
             idx = s_hash[h];
@@ -3730,7 +3531,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
             if (known)
                 continue;
 
-
             /* Essayer les rejets projetés puis les relations de plans avant
              * le test de chevauchement.
              */
@@ -3739,12 +3539,10 @@ void painter_newell_sancha(Model3D* model, int face_count)
                 goto order_valid;
             }
 
-
             if (maxy[P] <= miny[Q] ||
                 maxy[Q] <= miny[P]) {
                 goto order_valid;
             }
-
 
             {
                 int geo_pq;
@@ -3755,7 +3553,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
                     goto order_valid;
             }
 
-
             {
                 int geo_qp;
                 geo_qp =
@@ -3765,12 +3562,10 @@ void painter_newell_sancha(Model3D* model, int face_count)
                     goto order_valid;
             }
 
-
             if (!projected_polygons_overlap(
                     model, P, Q)) {
                 goto order_valid;
             }
-
 
             {
                 int rc;
@@ -3781,7 +3576,6 @@ void painter_newell_sancha(Model3D* model, int face_count)
                 }
                 if (rc < 0) {
 
-
                     /* Refuser une deuxième insertion causée par la même
                      * paire pour limiter les cycles.
                      */
@@ -3789,15 +3583,12 @@ void painter_newell_sancha(Model3D* model, int face_count)
                         goto order_unresolved;
                     }
 
-
                     s_moved[c] = 1;
                     goto do_move;
                 }
 
-
                 goto order_unresolved;
             }
-
 
 /* Avancer Q à la position de P par insertion et mettre à jour toutes les
  * positions déplacées.
@@ -3815,10 +3606,8 @@ do_move:
                 pos[tmp] = i;
             }
 
-
             changed = 1;
             continue;
-
 
 /* Mémoriser une relation résolue dans la table à chaînes. */
 order_valid:
@@ -3830,7 +3619,6 @@ order_valid:
                 s_ordered[ordered_count].next =
                     s_hash[hh];
 
-
                 if (s_hash[hh] == -1 &&
                     touched_count < ORDERED_MAX_NS) {
                     s_touched[touched_count++] =
@@ -3840,7 +3628,6 @@ order_valid:
                 ++ordered_count;
             }
             continue;
-
 
 /* Consigner l'ambiguïté lorsque le buffer de diagnostic le permet, puis
  * éviter son retraitement.
@@ -3855,7 +3642,6 @@ order_unresolved:
                     inconclusive_pairs_count].face2 = Q;
                 ++inconclusive_pairs_count;
             }
-
 
             if (ordered_count < ORDERED_MAX_NS) {
                 unsigned hh;
@@ -3875,7 +3661,6 @@ order_unresolved:
         }
     } while (changed);
 
-
     {
         int i;
         /* Effacer seulement les buckets utilisés pour préparer l'appel suivant. */
@@ -3887,152 +3672,6 @@ order_unresolved:
 #undef HASH_MASK_NS
 #undef ORDERED_MAX_NS
 }
-
-/*
- * ----------------------------------------------------------------------------
- *  painter_newell_sancha_selection
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Variante de sélection Newell/Sancha conservée hors du dispatch
- *    principal.
- *
- *  Paramètres :
- *    [entrée] model et face_count.
- *
- *  Retour :
- *    Aucun.
- *
- *  Sorties et effets de bord :
- *    permutation
- *
- *  Fonctionnement :
- *    Prépare FAST, trie le préfixe visible par zmax, puis insère avant P un
- *    candidat dont les plans ou le rayon imposent l'antériorité. Reprend la
- *    passe avec ce Q. Un budget de reprises borne les cycles ; aucun
- *    découpage et aucun nouveau mode clavier ne sont associés à cette
- *    fonction dans processModelFast.
- *
- * ----------------------------------------------------------------------------
- */
-void painter_newell_sancha_selection(Model3D* model, int face_count)
-{
-    FaceArrays3D* faces;
-    int* sorted;
-    int visible_count;
-    int fs;
-    int i;
-    int p;
-    int f2;
-    int q;
-    int geo_pq;
-    int geo_qp;
-    int rc;
-    int tmp;
-    int k;
-    int restart_count;
-    int restart_limit;
-
-    if (!model || face_count <= 0)
-        return;
-
-
-    /* Invalider les relations et préparer le préfixe visible avant le tri zmax. */
-    (void)geometric_face_relation(NULL, 0, 0);
-    faces = &model->faces;
-    sorted = faces->sorted_face_indices;
-
-
-    painter_newell_sancha_fast(model, face_count);
-    visible_count = face_count;
-    if (cull_back_faces) {
-        visible_count = 0;
-        for (i = 0; i < face_count; ++i) {
-            if (faces->display_flag[i])
-                ++visible_count;
-        }
-    }
-    if (visible_count < 2)
-        return;
-
-
-    sort_by_zmax(sorted, faces->z_max, visible_count);
-
-    /* Fixer chaque tête de sélection et limiter les reprises à visible_count. */
-    for (fs = 0; fs < visible_count - 1; ++fs) {
-        p = sorted[fs];
-        f2 = fs + 1;
-        restart_count = 0;
-        restart_limit = visible_count;
-
-        /* Appliquer profondeur, boîtes, plans puis chevauchement et rayon
-         * aux candidats.
-         */
-        while (f2 < visible_count) {
-            q = sorted[f2];
-
-
-            if (faces->z_max[q] <= faces->z_min[p]) {
-                ++f2;
-                continue;
-            }
-
-
-            if (faces->maxx[p] <= faces->minx[q] ||
-                faces->maxx[q] <= faces->minx[p] ||
-                faces->maxy[p] <= faces->miny[q] ||
-                faces->maxy[q] <= faces->miny[p]) {
-                ++f2;
-                continue;
-            }
-
-
-            geo_pq = geometric_face_relation(model, p, q);
-            geo_qp = geometric_face_relation(model, q, p);
-
-            if (geo_pq == -1 || geo_qp == 1) {
-                ++f2;
-                continue;
-            }
-
-
-            if (!projected_polygons_overlap(model, p, q)) {
-                ++f2;
-                continue;
-            }
-
-            if (geo_pq == 1 || geo_qp == -1) {
-                rc = -1;
-            } else {
-
-                rc = ray_cast_hierarchical(model, p, q);
-            }
-
-            if (rc >= 0) {
-                ++f2;
-                continue;
-            }
-
-
-            /* Abandonner l'insertion si le budget de reprises est épuisé. */
-            if (restart_count >= restart_limit) {
-                ++f2;
-                continue;
-            }
-            ++restart_count;
-
-
-            /* Insérer Q avant P et recommencer les comparaisons de cette passe. */
-            tmp = sorted[f2];
-            for (k = f2; k > fs; --k)
-                sorted[k] = sorted[k - 1];
-            sorted[fs] = tmp;
-            p = tmp;
-            f2 = fs + 1;
-        }
-    }
-}
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -4236,7 +3875,6 @@ void painter_geoV2(Model3D* model, int face_count) {
     /* Réinitialiser les relations et construire l'ordre initial FAST. */
     (void)geometric_face_relation(NULL, 0, 0);
 
-
     painter_newell_sancha_fast(model, face_count);
     int visible_count = face_count;
     if (cull_back_faces) {
@@ -4246,10 +3884,8 @@ void painter_geoV2(Model3D* model, int face_count) {
         }
     }
 
-
     int swap_count = 0;
     int swapped;
-
 
     /* Chercher une réserve de cache adaptée ; aucun passage géométrique si
      * toutes échouent.
@@ -4389,8 +4025,7 @@ void painter_geoV2(Model3D* model, int face_count) {
  *    Désactive temporairement le culling, place les faces d<=0 avant les
  *    faces d>0, puis effectue des insertions fondées sur les boîtes, le
  *    chevauchement simple et les prédicats de plans. min_allowed_pos limite
- *    certains déplacements. La passe de faces arrière est sautée
- *    inconditionnellement par goto after_pass1. Aucun appel à
+ *    certains déplacements. Seul le groupe de faces avant est corrigé. Aucun appel à
  *    split_face_by_plane : ce mode ne découpe pas les faces.
  *
  *  Limites :
@@ -4411,7 +4046,6 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
     painter_newell_sancha_fast(model, face_count);
     int moves = 0;
     int n = face_count;
-
 
     int *temp_indices = (int*)malloc(n * sizeof(int)); if (!temp_indices) { printf("Error: painter_correct malloc temp_indices failed\n"); return 0; }
     /* Partitionner de façon stable les deux groupes de signes de d. */
@@ -4440,80 +4074,6 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
 
     int *min_allowed_pos = (int*)malloc(n * sizeof(int)); if (!min_allowed_pos) { free(pos_of_face); printf("Error: painter_correct malloc min_allowed_pos failed\n"); return 0; }
     for (int i = 0; i < n; ++i) min_allowed_pos[i] = -1;
-
-
-    /* La passe arrière ci-dessous est présente mais inaccessible sur ce chemin. */
-    goto after_pass1;
-
-    printf("Back faces:");
-    if (old_cull == 0) {
-        for (int target = 0; target < face_count; ++target) {
-            if (faces->plane_d[target] > 0) continue;
-        int pos = pos_of_face[target];
-        if (pos < 0 || pos >= front_start_pos) continue;
-
-        int best_before = -1;
-        for (int i = 0; i < pos; ++i) {
-            int f = faces->sorted_face_indices[i];
-            if (i >= front_start_pos) break;
-
-            if (faces->z_max[f] <= faces->z_min[target]) continue;
-            if (faces->z_max[target] <= faces->z_min[f]) continue;
-
-
-            if (faces->maxx[f] <= faces->minx[target]) continue;
-            if (faces->maxx[target] <= faces->minx[f]) continue;
-            if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;
-
-
-            if (!projected_polygons_overlap_simple(model, f, target)) continue;
-
-
-            if (pair_plane_after(model, f, target)) {
-                if (best_before == -1 || i < best_before) best_before = i;
-            }
-        }
-        if (best_before != -1) {
-
-            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, best_before, pos_of_face);
-
-            pos = pos_of_face[target];
-
-            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-        }
-
-        pos = pos_of_face[target];
-        if (pos < 0 || pos >= front_start_pos) continue;
-        int best_after = -1;
-        for (int i = pos + 1; i < front_start_pos; ++i) {
-            int f = faces->sorted_face_indices[i];
-
-            if (faces->z_max[f] <= faces->z_min[target]) continue;
-            if (faces->z_max[target] <= faces->z_min[f]) continue;
-
-            if (faces->maxx[f] <= faces->minx[target]) continue;
-            if (faces->maxx[target] <= faces->minx[f]) continue;
-            if (faces->maxy[f] <= faces->miny[target]) continue;
-            if (faces->maxy[target] <= faces->miny[f]) continue;
-            if (!projected_polygons_overlap_simple(model, f, target)) continue;
-            if (pair_plane_before(model, f, target)) { best_after = i; }
-        }
-        if (best_after != -1) {
-            int insert_idx;
-            if (best_after < pos) insert_idx = best_after + 1; else insert_idx = best_after;
-            if (min_allowed_pos[target] != -1 && insert_idx > min_allowed_pos[target]) insert_idx = min_allowed_pos[target];
-
-            if (insert_idx >= front_start_pos) insert_idx = front_start_pos - 1;
-            moves += move_element_remove_and_insert_pos(faces->sorted_face_indices, face_count, pos, insert_idx, pos_of_face);
-            pos = pos_of_face[target];
-            if (min_allowed_pos[target] == -1 || pos < min_allowed_pos[target]) min_allowed_pos[target] = pos;
-        }
-
-        printf(" %d",target);
-        }
-    }
-    after_pass1: ;
 
     /* Corriger le groupe avant par insertions après les rejets de profondeur
      * et de projection.
@@ -4554,18 +4114,14 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
         for (int i = pos + 1; i < face_count; ++i) {
             int f = faces->sorted_face_indices[i];
 
-
             if (faces->z_max[f] <= faces->z_min[target]) continue;
             if (faces->z_max[target] <= faces->z_min[f]) continue;
-
 
             if (faces->maxx[f] <= faces->minx[target]) continue;
             if (faces->maxx[target] <= faces->minx[f]) continue;
             if (faces->maxy[f] <= faces->miny[target]) continue;
 
-
             if (!projected_polygons_overlap_simple(model, f, target)) continue;
-
 
             if (pair_plane_before(model, f, target)) { best_after = i;                               }
 
@@ -4628,7 +4184,6 @@ static int painter_correct(Model3D* model, int face_count, int debug) {
  */
 static int painter_correctV2(Model3D* model, int face_count, int debug) {
 
-
     if (!model) return 0;
     FaceArrays3D* faces = &model->faces;
     if (face_count <= 0) return 0;
@@ -4639,11 +4194,9 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     int old_cull = cull_back_faces;
     cull_back_faces = 0;
 
-
     painter_newell_sancha_fast(model, face_count);
     int moves = 0;
     int n = face_count;
-
 
     int *temp_indices = (int*)malloc(n * sizeof(int));
     if (!temp_indices) { printf("Error: painter_correctV2 malloc temp_indices failed\n"); return 0; }
@@ -4674,7 +4227,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
      */
     printf("Back faces:");
 
-
     /* Limiter la correction des faces arrière au cas où elles étaient
      * initialement autorisées.
      */
@@ -4688,7 +4240,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
              * vers l'arrière de la liste de dessin.
              */
             int best_before = -1;
-
 
             for (int i = 0; i < pos; ++i) {
                 int f = faces->sorted_face_indices[i];
@@ -4739,7 +4290,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
             }
         }
     }
-
 
     /* Corriger le groupe avant par insertions après les rejets de profondeur
      * et de projection.
@@ -4794,7 +4344,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
         }
     }
 
-
     if (old_cull == 0) {
         /* Conserver la permutation corrigée pendant la vérification croisée
          * supplémentaire.
@@ -4802,7 +4351,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
         int *snapshot = (int*)malloc(n * sizeof(int));
         if (!snapshot) { free(pos_of_face); free(min_allowed_pos); printf("Error: painter_correctV2 malloc snapshot failed\n"); return 0; }
         for (int i = 0; i < n; ++i) snapshot[i] = faces->sorted_face_indices[i];
-
 
         painter_newell_sancha_fast(model, face_count);
         printf("\n\nCross-section back-face checks:");
@@ -4822,7 +4370,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
             }
             total_logged++;
             int orig_pos = pos_of_face[bf];
-
 
             int found = 0;
             int per_ov = 0, per_tch = 0;
@@ -4848,7 +4395,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
 
                     found++; if (overlapping) { per_ov++; total_ov++; } else { per_tch++; total_tch++; }
 
-
                     int plane_after = pair_plane_after(model, bf, ff);
                     int plane_before = pair_plane_before(model, bf, ff);
                     int decision = 0;
@@ -4861,7 +4407,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                         float zff = FIXED_TO_FLOAT(faces->z_mean[ff]);
                         if (zbf < zff) { decision = 1; reason = "zmean"; } else { decision = -1; reason = "zmean"; }
                     }
-
 
                     /* Modifier le snapshot seulement lorsque la face arrière
                      * doit être placée après la face avant ; tenir à jour
@@ -4881,12 +4426,10 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
                                 snapshot[to] = tmp; pos_of_face[tmp] = to;
                             }
 
-
                             total_moves++;
                         } else {
 
                         }
-
 
                     }
                 }
@@ -4894,7 +4437,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
             if (!found) {                                        total_none++; }
 
         }
-
 
         for (int i = 0; i < n; ++i) faces->sorted_face_indices[i] = snapshot[i];
         free(snapshot);
@@ -4906,7 +4448,6 @@ static int painter_correctV2(Model3D* model, int face_count, int debug) {
     cull_back_faces = old_cull;
     free(pos_of_face);
     free(min_allowed_pos);
-
 
     return moves;
 }
@@ -5010,7 +4551,6 @@ static int move_element_remove_and_insert_pos(int *arr, int n, int from, int ins
  */
 segment "ordering";
 
-
 segment "overlap";
 
 /*
@@ -5049,7 +4589,6 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
      */
     Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
 
-
     int obs_side1 = 0; int side; int all_same_side;
     obs_side1 = 0;
     if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
@@ -5067,7 +4606,6 @@ static int pair_plane_before(Model3D* model, int f1, int f2) {
         }
         if (all_same_side) return 1;
     }
-
 
     /* Si nécessaire, évaluer les sommets de f1 vis-à-vis du plan de f2. */
     Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
@@ -5127,7 +4665,6 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
      */
     Fixed64 a1 = faces->plane_a[f1]; Fixed64 b1 = faces->plane_b[f1]; Fixed64 c1 = faces->plane_c[f1]; Fixed64 d1 = faces->plane_d[f1];
 
-
     int obs_side1 = 0; int side; int all_opposite_side;
     obs_side1 = 0; if (d1 > (Fixed64)epsilon) obs_side1 = 1; else if (d1 < -(Fixed64)epsilon) obs_side1 = -1; else obs_side1 = 0;
     if (obs_side1 != 0) {
@@ -5144,7 +4681,6 @@ static int pair_plane_after(Model3D* model, int f1, int f2) {
         }
         if (all_opposite_side) return 1;
     }
-
 
     /* Si nécessaire, évaluer les sommets de f1 vis-à-vis du plan de f2. */
     Fixed64 a2 = faces->plane_a[f2]; Fixed64 b2 = faces->plane_b[f2]; Fixed64 c2 = faces->plane_c[f2]; Fixed64 d2 = faces->plane_d[f2];
@@ -5347,7 +4883,6 @@ static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, fl
     float denom2 = A2 * Dx + B2 * Dy + C2;
     if (fabsf(denom2) < 1e-6f) return 0;
 
-
     float D1 = (float)plane1[3];
     float D2 = (float)plane2[3];
     /* Publier les deux paramètres du rayon seulement si les calculs sont
@@ -5444,9 +4979,7 @@ static int ray_cast_at_fractional(Model3D *model, int f1, int f2,
     return 0;
 }
 
-
 #define RCH_ZOOM_MAX_VERTS (2 * MAX_FACE_VERTICES)
-
 
 typedef struct {
     Fixed32 saved_scale;
@@ -5588,12 +5121,10 @@ static void rch_patch_pair_at_scale(Model3D* model, int f1, int f2, Fixed32 test
     /* Rassembler les sommets distincts et conserver leurs coordonnées projetées. */
     p->count = rch_gather_pair_vertex_indices(faces, f1, f2, p->idx);
 
-
     for (int i = 0; i < p->count; ++i) {
         p->saved_x2d[i] = vtx->x2d[p->idx[i]];
         p->saved_y2d[i] = vtx->y2d[p->idx[i]];
     }
-
 
     /* Reprojeter la paire à la nouvelle échelle puis recalculer uniquement
      * ses boîtes.
@@ -5681,14 +5212,12 @@ static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)
 
     if (!model) return 0;
 
-
     /* Essayer le centroïde du clipping numérique puis le rayon à son point entier. */
     if (compute_intersection_centroid_ordered_fixed_tryboth(
             model, f1, f2, &cx, &cy, &area2, &fallback) && area2 != 0) {
         rc = ray_cast_at(model, f1, f2, cx, cy);
         if (rc != 0) return rc;
     }
-
 
     area2 = 0;
     /* Replier sur la région QuickDraw si le premier essai ne tranche pas. */
@@ -5697,7 +5226,6 @@ static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)
         rc = ray_cast_at(model, f1, f2, cx, cy);
         if (rc != 0) return rc;
     }
-
 
     /* Dernier repli : utiliser le centre des bornes communes, sans garantie
      * sur les contours.
@@ -5745,7 +5273,6 @@ static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
         return entry->result;
     }
 
-
     Fixed32 test_scale = FIXED_MUL_64(original_scale, FLOAT_TO_FIXED(10.0f));
     double fx, fy, fractional_area2;
     int rc = 0;
@@ -5764,7 +5291,6 @@ static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
         return rc;
     }
 
-
     /* En dernier recours, sauvegarder/reprojeter la paire puis restaurer
      * impérativement son état.
      */
@@ -5780,7 +5306,6 @@ static int ray_cast_hierarchical(Model3D* model, int f1, int f2) {
 #include "overlap_raster.c"
 
 segment "transform";
-
 
 /* Définir FACE_DEPTH_DISABLE_ASM pour le parcours C ; GEOV3_DISABLE_ASM_MUL
  * désactive aussi ce noyau.
@@ -5954,7 +5479,6 @@ void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count) {
             face_arrays->plane_c[i] = c64;
             face_arrays->plane_d[i] = d64;
 
-
             /* Appliquer le culling observateur au signe de d, sans modifier la géométrie. */
             if (cull_back_faces && display_flag) {
                 if (d64 <= 0) {
@@ -6043,7 +5567,6 @@ void compute2DFromObserver(Model3D* model, int angle_w) {
         x2d_out[i] = FIXED_ROUND_TO_INT(x2d_temp);
         y2d_out[i] = FIXED_ROUND_TO_INT(y2d_temp);
     }
-
 
     /* Rafraîchir les bornes projetées pour éviter les rejets de paires
      * fondés sur l'ancien zoom.
@@ -6142,7 +5665,6 @@ void normalizeAutoFitDistanceTo150(Model3D* model) {
     if (D <= 0 || P <= 0) return;
     const Fixed32 targetD = INT_TO_FIXED(150);
 
-
     /* Calculer le facteur racine puis le convertir en 16.16. */
     float factor_f = sqrtf(FIXED_TO_FLOAT(targetD) / FIXED_TO_FLOAT(D));
     if (factor_f <= 0.0f) return;
@@ -6201,11 +5723,9 @@ void normalizeAutoFitDistanceTo150(Model3D* model) {
 void getObserverParams(ObserverParams* params, Model3D* model) {
     char userinput[50];
 
-
     printf("\nObserver parameters:\n");
     printf("============================\n");
     printf("(Press ENTER to use default values - apply suggested auto-fit if available)\n");
-
 
     /* Proposer successivement les trois angles ; une ligne vide conserve la
      * valeur existante.
@@ -6219,7 +5739,6 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
         }
     }
 
-
     printf("Vertical angle (degrees, default %d): ", params->angle_v);
     if (fgets(userinput, sizeof(userinput), stdin) != NULL) {
 
@@ -6229,7 +5748,6 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
         }
     }
 
-
     printf("Screen rotation angle (degrees, default %d): ", params->angle_w);
     if (fgets(userinput, sizeof(userinput), stdin) != NULL) {
 
@@ -6238,7 +5756,6 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
             params->angle_w = atoi(userinput);
         }
     }
-
 
     /* Traiter séparément la distance numérique et la sélection de
      * l'ajustement suggéré.
@@ -6278,7 +5795,6 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
             params->distance = FLOAT_TO_FIXED(30.0);
         }
     }
-
 
     /* Publier la distance utilisée par les tolérances géométriques. */
     current_observer_distance = params->distance;
@@ -6332,11 +5848,9 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
     int quad_count = 0;
     Pattern pat;
 
-
     int screenScale = mode / 320;
     int screenW = screenScale * (CENTRE_X * 2);
     int screenH = screenScale * (CENTRE_Y * 2);
-
 
     /* Réserver une fois un polygone de taille maximale puis verrouiller son
      * handle.
@@ -6352,7 +5866,6 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
 
     polyHandle = globalPolyHandle;
 
-
     if (poly_handle_locked) {
         HUnlock(polyHandle);
         poly_handle_locked = 0;
@@ -6361,9 +5874,7 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
     poly_handle_locked = 1;
     SetPenMode(0);
 
-
     SetSolidPenPat(COL_FILL_DEFAULT);
-
 
     int start_face = 0;
     int max_faces_to_draw = face_count;
@@ -6463,7 +5974,6 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
                     SetSolidPenPat(fill_color);
                     GetPenPat(pat);
                     FillPoly(polyHandle, pat);
-
 
                     int frame_color;
                     if (user_frame_color == 17) {
@@ -6663,11 +6173,9 @@ void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
             SetSolidPenPat(COL_FILL_DEFAULT);
         } else if (framePolyOnly) {
 
-
             SetPenMode(0);
             SetSolidPenPat(COL_FRAME);
             FramePoly(polyHandle);
-
 
             SetSolidPenPat(COL_FILL_DEFAULT);
         } else {
@@ -6904,14 +6412,12 @@ void frameInconclusivePairs(Model3D* model) {
 void generate_random_colors(int face_count) {
     if (face_count <= 0) return;
 
-
     /* Agrandir les deux buffers si nécessaire. */
     if (random_colors_capacity < face_count) {
         random_fill_colors = (unsigned char*)realloc(random_fill_colors, face_count);
         random_frame_colors = (unsigned char*)realloc(random_frame_colors, face_count);
         random_colors_capacity = face_count;
     }
-
 
     /* Générer indépendamment remplissage et contour, hors indice noir. */
     for (int i = 0; i < face_count; i++) {
@@ -7012,45 +6518,6 @@ void display_model_face_ids(Model3D* model, ObserverParams* params, const char* 
  * orientation.
  */
 segment "color";
-/*
- * ----------------------------------------------------------------------------
- *  SetColor
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Écrire directement une entrée de palette matérielle SHR.
- *
- *  Paramètres :
- *    [entrée] palette_num, 0..15 ; color_index, 0..15 ; r/g/b, 0..15.
- *
- *  Retour :
- *    Aucun.
- *
- *  Fonctionnement :
- *    Écrit le mot $0RGB à $E19E00 + 32*palette + 2*indice. Ne borne pas les
- *    arguments et ne met pas à jour le tableau logiciel palettes.
- *
- * ----------------------------------------------------------------------------
- */
-void SetColor(int palette_num, int color_index, int r, int g, int b)
-{
-    unsigned long offset;
-    unsigned int  color_word;
-
-
-    /* Calculer l'offset en octets et assembler le mot RGB avant l'écriture
-     * matérielle.
-     */
-    offset = (long)palette_num * 32L + (long)color_index * 2L;
-
-
-    color_word = ((unsigned int)r << 8) |
-                 ((unsigned int)g << 4) |
-                 (unsigned int)b;
-
-
-    *((unsigned int *)(0xE19E00L + offset)) = color_word;
-}
 
 /*
  * ----------------------------------------------------------------------------
@@ -7342,7 +6809,6 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
 
     printf("Inspector: inspect faces placed BEFORE a selected face (diagnostics)\n\n");
 
-
     /* Conserver l'option avant de demander et valider l'identifiant cible. */
     int old_cull = cull_back_faces;
     cull_back_faces = 1;
@@ -7433,7 +6899,6 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
         printf("Overlap with target: none\n");
     }
 
-
     printf("\n");
     keypress();
 
@@ -7489,7 +6954,6 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
         if (incon_count == 0) strncpy(incon_list, "(none)", sizeof(incon_list));
         printf("Face %d: BEFORE tests: %s; AFTER tests: %s; inconclusive: %s\n", f, before_list, after_list, incon_list);
 
-
         if (after_count == 0 && before_count == 0) {
             printf("  Overall: inconclusive (no decisive tests)\n");
         } else {
@@ -7518,7 +6982,6 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
         drawFace(model, f, COL_ORANGE, 0);
     }
 
-
     faces->display_flag[target_face] = 1;
     drawFace(model, target_face, COL_LIGHT_GREEN, 1);
     MoveTo(2, 195);
@@ -7542,7 +7005,6 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
             int min_pos = face_count;
             int target_to_move_before = -1;
             int use_overlaps = (key == 'O' || key == 'o');
-
 
             if (use_overlaps && overlap_count == 0) {
                 printf("\nNo overlaps to process.\n");
@@ -7568,7 +7030,6 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
                 if (target_to_move_before >= 0 && min_pos < face_count) {
                     printf("\nMoving face %d (currently at pos %d) to position %d (before face %d) - mode: %s...\n",
                            target_face, pos, min_pos, target_to_move_before, use_overlaps ? "overlaps" : "all");
-
 
                     move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, min_pos);
 
@@ -7785,7 +7246,6 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
             int target_to_move_after = -1;
             int use_overlaps = (key == 'O' || key == 'o');
 
-
             if (use_overlaps && overlap_count == 0) {
                 printf("\nNo overlaps to process.\n");
             } else {
@@ -7811,7 +7271,6 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
                     printf("\nMoving face %d (currently at pos %d) to position %d (after face %d) - mode: %s...\n",
                            target_face, pos, max_pos, target_to_move_after, use_overlaps ? "overlaps" : "all");
 
-
                     move_element_remove_and_insert(faces->sorted_face_indices, face_count, pos, max_pos);
 
                     printf("Done! Face %d has been moved.\n", target_face);
@@ -7830,6 +7289,94 @@ void inspect_faces_before(Model3D* model, ObserverParams* params, const char* fi
     free(misplaced);
     cull_back_faces = old_cull;
 }
+/*
+ * ----------------------------------------------------------------------------
+ *  show_face_normal
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Dessiner en jaune la normale de la face sélectionnée dans l'inspecteur.
+ *
+ *  Paramètres :
+ *    [entrée] model : modèle préparé dans le repère observateur.
+ *    [entrée] target_face : identifiant valide de la face à inspecter.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    Modifie le motif du stylo et dessine dans le contexte graphique actif.
+ *    Ne modifie pas le modèle ; utilise le pan et l'échelle de projection.
+ *
+ *  Fonctionnement :
+ *    Reprend les sommets sauvegardés des faces masquées, calcule leur centre
+ *    moyen et construit un segment de normale de longueur 50. Projette ses
+ *    extrémités selon les mêmes conditions que l'ancien bloc de showFace.
+ *    Ce découpage réduit le nombre de labels internes générés par ORCA/C.
+ *
+ * ----------------------------------------------------------------------------
+ */
+static void show_face_normal(Model3D* model, int target_face)
+{
+    FaceArrays3D* faces = &model->faces;
+    /* Construire puis projeter la normale sans modifier la face inspectée. */
+
+    int offt2 = faces->vertex_indices_ptr[target_face];
+    int vn2 = faces->vertex_count[target_face];
+
+    if ((vn2 == 0) && (faces->saved_vertex_count[target_face] > 0)) {vn2 = faces->saved_vertex_count[target_face]; }
+
+    if (vn2 >= 3) {
+        int k2;
+        Fixed64 sx64 = 0, sy64 = 0, sz64 = 0;
+        for (k2 = 0; k2 < vn2; ++k2) {
+            int vid2 = faces->vertex_indices_buffer[offt2 + k2] - 1;
+            sx64 += (Fixed64)model->vertices.xo[vid2];
+            sy64 += (Fixed64)model->vertices.yo[vid2];
+            sz64 += (Fixed64)model->vertices.zo[vid2];
+        }
+        float cxo = FIXED_TO_FLOAT((Fixed32)(sx64 / vn2));
+        float cyo = FIXED_TO_FLOAT((Fixed32)(sy64 / vn2));
+        float czo = FIXED_TO_FLOAT((Fixed32)(sz64 / vn2));
+        float na = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
+        float nb = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
+        float nc = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
+        float nlen = (float)sqrt((double)(na * na + nb * nb + nc * nc));
+        if (nlen > 0.0001f) {
+
+            const float NORMAL_VISUAL_LENGTH = 50.0f;
+            float ex = cxo + (na / nlen) * NORMAL_VISUAL_LENGTH;
+            float ey = cyo + (nb / nlen) * NORMAL_VISUAL_LENGTH;
+            float ez = czo + (nc / nlen) * NORMAL_VISUAL_LENGTH;
+            Fixed32 cxo_fx = FLOAT_TO_FIXED(cxo);
+            Fixed32 cyo_fx = FLOAT_TO_FIXED(cyo);
+            Fixed32 czo_fx = FLOAT_TO_FIXED(czo);
+            Fixed32 exo_fx = FLOAT_TO_FIXED(ex);
+            Fixed32 eyo_fx = FLOAT_TO_FIXED(ey);
+            Fixed32 ezo_fx = FLOAT_TO_FIXED(ez);
+            int c_x2d = -1, c_y2d = -1, e_x2d = -1, e_y2d = -1;
+            if (czo_fx > 0) {
+                Fixed32 inv_zo_c = FIXED_DIV_64(s_global_proj_scale_fixed, czo_fx);
+                c_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(cxo_fx, inv_zo_c), INT_TO_FIXED(CENTRE_X)));
+                c_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(cyo_fx, inv_zo_c)));
+            }
+            if (ezo_fx > 0) {
+                Fixed32 inv_zo_e = FIXED_DIV_64(s_global_proj_scale_fixed, ezo_fx);
+                e_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(exo_fx, inv_zo_e), INT_TO_FIXED(CENTRE_X)));
+                e_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(eyo_fx, inv_zo_e)));
+            }
+
+             {
+                SetSolidPenPat(COL_YELLOW);
+
+                MoveTo(c_x2d + pan_dx, c_y2d + pan_dy);
+                LineTo(e_x2d + pan_dx, e_y2d + pan_dy);
+            }
+        }
+    }
+
+}
+
 /*
  * ----------------------------------------------------------------------------
  *  showFace
@@ -7887,7 +7434,6 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     printf("Press any key to show model...\n");
     keypress();
 
-
     /* Sauvegarder la visibilité et passer en filaire pour situer la face
      * inspectée.
      */
@@ -7897,15 +7443,12 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
     framePolyOnly = 1;
     int show_normal = 0;
 
-
     int quit = 0;
     /* Dessiner la vue et traiter navigation, normale et commandes de détail. */
     while (!quit) {
         startgraph(mode);
 
-
         if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count); else drawPolygons(model, faces->vertex_count, faces->face_count, model->vertices.vertex_count);
-
 
         if (faces->vertex_count[target_face] > 0) {
             faces->display_flag[target_face] = 1;
@@ -7921,66 +7464,11 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             faces->display_flag[target_face] = saved_df;
         }
 
-
         /* Construire une extrémité de normale dans le repère observateur
          * puis projeter ce segment si ses profondeurs le permettent.
          */
         if (show_normal) {
-            int offt2 = faces->vertex_indices_ptr[target_face];
-            int vn2 = faces->vertex_count[target_face];
-
-            if ((vn2 == 0) && (faces->saved_vertex_count[target_face] > 0)) {vn2 = faces->saved_vertex_count[target_face]; }
-
-
-            if (vn2 >= 3) {
-                int k2;
-                Fixed64 sx64 = 0, sy64 = 0, sz64 = 0;
-                for (k2 = 0; k2 < vn2; ++k2) {
-                    int vid2 = faces->vertex_indices_buffer[offt2 + k2] - 1;
-                    sx64 += (Fixed64)model->vertices.xo[vid2];
-                    sy64 += (Fixed64)model->vertices.yo[vid2];
-                    sz64 += (Fixed64)model->vertices.zo[vid2];
-                }
-                float cxo = FIXED_TO_FLOAT((Fixed32)(sx64 / vn2));
-                float cyo = FIXED_TO_FLOAT((Fixed32)(sy64 / vn2));
-                float czo = FIXED_TO_FLOAT((Fixed32)(sz64 / vn2));
-                float na = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
-                float nb = (float)FIXED64_TO_FLOAT(faces->plane_b[target_face]);
-                float nc = (float)FIXED64_TO_FLOAT(faces->plane_c[target_face]);
-                float nlen = (float)sqrt((double)(na * na + nb * nb + nc * nc));
-                if (nlen > 0.0001f) {
-
-
-                    const float NORMAL_VISUAL_LENGTH = 50.0f;
-                    float ex = cxo + (na / nlen) * NORMAL_VISUAL_LENGTH;
-                    float ey = cyo + (nb / nlen) * NORMAL_VISUAL_LENGTH;
-                    float ez = czo + (nc / nlen) * NORMAL_VISUAL_LENGTH;
-                    Fixed32 cxo_fx = FLOAT_TO_FIXED(cxo);
-                    Fixed32 cyo_fx = FLOAT_TO_FIXED(cyo);
-                    Fixed32 czo_fx = FLOAT_TO_FIXED(czo);
-                    Fixed32 exo_fx = FLOAT_TO_FIXED(ex);
-                    Fixed32 eyo_fx = FLOAT_TO_FIXED(ey);
-                    Fixed32 ezo_fx = FLOAT_TO_FIXED(ez);
-                    int c_x2d = -1, c_y2d = -1, e_x2d = -1, e_y2d = -1;
-                    if (czo_fx > 0) {
-                        Fixed32 inv_zo_c = FIXED_DIV_64(s_global_proj_scale_fixed, czo_fx);
-                        c_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(cxo_fx, inv_zo_c), INT_TO_FIXED(CENTRE_X)));
-                        c_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(cyo_fx, inv_zo_c)));
-                    }
-                    if (ezo_fx > 0) {
-                        Fixed32 inv_zo_e = FIXED_DIV_64(s_global_proj_scale_fixed, ezo_fx);
-                        e_x2d = FIXED_ROUND_TO_INT(FIXED_ADD(FIXED_MUL_64(exo_fx, inv_zo_e), INT_TO_FIXED(CENTRE_X)));
-                        e_y2d = FIXED_ROUND_TO_INT(FIXED_SUB(INT_TO_FIXED(CENTRE_Y), FIXED_MUL_64(eyo_fx, inv_zo_e)));
-                    }
-
-                     {
-                        SetSolidPenPat(COL_YELLOW);
-
-                        MoveTo(c_x2d + pan_dx, c_y2d + pan_dy);
-                        LineTo(e_x2d + pan_dx, e_y2d + pan_dy);
-                    }
-                }
-            }
+            show_face_normal(model, target_face);
         }
 
         drawFaceIndex(model, target_face);
@@ -8007,11 +7495,9 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
         }
         printf("\nArrows: navigate,  N: normal, SPACE: options");
 
-
         int key = getkeypress ();
 
         endgraph();
-
 
         /* Changer de face par identifiant ou par position triée selon la
          * flèche reçue.
@@ -8046,7 +7532,6 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
             int effective_vn = (vn == 0 && faces->saved_vertex_count[target_face] > 0)
                     ? faces->saved_vertex_count[target_face] : vn;
             printf("\n=== Face detail (ID=%d) ===\n\n", target_face);
-
 
             {
                 float a = (float)FIXED64_TO_FLOAT(faces->plane_a[target_face]);
@@ -8150,7 +7635,6 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename) {
                  * nécessaire à son affichage.
                  */
 
-
                 restoreFace(model, target_face);
                 calculateFaceDepths(model, NULL, faces->face_count);
                 backup_flags[target_face] = faces->display_flag[target_face];
@@ -8228,13 +7712,11 @@ static void reverseFaceVertexOrder(Model3D* model, int face_idx) {
         faces->vertex_indices_buffer[off + n - 1 - i] = tmp;
     }
 
-
     /* Opposer les quatre coefficients avant de réappliquer profondeur et culling. */
     faces->plane_a[face_idx] = -faces->plane_a[face_idx];
     faces->plane_b[face_idx] = -faces->plane_b[face_idx];
     faces->plane_c[face_idx] = -faces->plane_c[face_idx];
     faces->plane_d[face_idx] = -faces->plane_d[face_idx];
-
 
     {
         int behind_camera = (faces->z_min[face_idx] < 0);
@@ -8246,7 +7728,6 @@ static void reverseFaceVertexOrder(Model3D* model, int face_idx) {
             faces->display_flag[face_idx] = 1;
         }
     }
-
 
 }
 
@@ -8310,7 +7791,6 @@ void hideFace(Model3D* model, int face_idx) {
 void restoreFace(Model3D* model, int face_idx) {
     ordering_cache_invalidate(model);
     FaceArrays3D* faces = &model->faces;
-
 
     /* Réactiver uniquement une liste effectivement masquée et sauvegardée. */
     if (faces->vertex_count[face_idx] == 0 && faces->saved_vertex_count[face_idx] > 0) {
@@ -8401,7 +7881,6 @@ static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of
                 pos_of_face[faces->sorted_face_indices[k]] = k;
             }
 
-
             i = -1;
         }
     }
@@ -8442,7 +7921,6 @@ static int pair_order_relation(Model3D* model, int f1, int f2) {
     if (faces->z_max[f2] <= faces->z_min[f1]) return -1;
     if (faces->z_max[f1] <= faces->z_min[f2]) return 1;
 
-
     /* Départager les séparations projetées avant les deux sens des relations
      * de plans.
      */
@@ -8453,10 +7931,8 @@ static int pair_order_relation(Model3D* model, int f1, int f2) {
     if (maxy1 <= miny2) return -1;
     if (maxy2 <= miny1) return 1;
 
-
     int geo = geometric_face_relation(model, f1, f2);
     if (geo != 0) return geo;
-
 
     geo = geometric_face_relation(model, f2, f1);
     if (geo != 0) return -geo;
@@ -8502,7 +7978,6 @@ int check_sort_repair(Model3D* model, int face_count) {
     if (!pos_of_face) return 0;
     for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
 
-
     int relation_capacity = n + 16;
     int relation_count = 0;
     int (*after_relations)[2] = (int(*)[2])malloc(sizeof(int) * 2 * relation_capacity);
@@ -8534,7 +8009,6 @@ int check_sort_repair(Model3D* model, int face_count) {
             int pos1 = pos_of_face[f1];
             int pos2 = pos_of_face[f2];
 
-
             /* Chercher un point de comparaison puis évaluer les deux
              * distances sur le même rayon.
              */
@@ -8545,7 +8019,6 @@ int check_sort_repair(Model3D* model, int face_count) {
             {
                 int geo = geo_face_order(model, f1, f2);
                 if (geo != 0) {
-
 
                     rc = (geo == -1) ? 1 : -1;
                     point_source = 4;
@@ -8592,7 +8065,6 @@ int check_sort_repair(Model3D* model, int face_count) {
                 }
             }
 
-
             if (rc == 0) {
                 int ix0 = _ix0; int ix1 = _ix1; int iy0 = _iy0; int iy1 = _iy1;
                 cx = (ix0 + ix1) / 2; cy = (iy0 + iy1) / 2; point_source = 3;
@@ -8613,7 +8085,6 @@ int check_sort_repair(Model3D* model, int face_count) {
             if (rc == 0) continue;
 
             if (rc == -1 || rc == 1) {
-
 
                 /* Déplacer la face proche seulement si elle est placée trop
                  * tôt dans le rendu arrière-vers-avant.
@@ -8656,7 +8127,6 @@ int check_sort_repair(Model3D* model, int face_count) {
                         faces->sorted_face_indices[pother] = tmp;
                         for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
                         ++repairs;
-
 
                         /* Agrandir si possible la liste des contraintes ;
                          * une réserve insuffisante n'annule pas le
@@ -8972,7 +8442,6 @@ static void inspect_face_pair_ui(Model3D* model) {
         faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
         drawFace(model, f1, COL_LIGHT_GREEN, 1); drawFace(model, f2, COL_ORANGE, 1);
 
-
         {
 
             int vertex_indices_buffer_limit = 0;
@@ -8981,12 +8450,10 @@ static void inspect_face_pair_ui(Model3D* model) {
                 if (_end > vertex_indices_buffer_limit) vertex_indices_buffer_limit = _end;
             }
 
-
             compare_faces_diagnostic(model, f1, f2, 1, &r);
         }
 
         int screenScale = mode / 320;
-
 
         /* Choisir la superposition disponible : bbox de région QuickDraw,
          * boîte commune ou contour issu du clipping SH.
@@ -9060,7 +8527,6 @@ static void inspect_face_pair_ui(Model3D* model) {
             }
         }
 
-
         /* Afficher le contour numérique disponible et calculer ses repères
          * de diagnostic.
          */
@@ -9081,7 +8547,6 @@ static void inspect_face_pair_ui(Model3D* model) {
                 int sy = screenScale * (debug_clip_fixed_vy[ii] + pan_dy);
                 Rect vr2; SetRect(&vr2, sx-1, sy-1, sx+1, sy+1); FrameRect(&vr2);
             }
-
 
             {
                 double s_cross = 0.0, cx_sum = 0.0, cy_sum = 0.0;
@@ -9150,7 +8615,6 @@ static void inspect_face_pair_ui(Model3D* model) {
         } else if (key == 8) {
             f2 = (f2 - 1 + face_count) % face_count;
 
-
             if (face_count > 1 && f2 == f1) f2 = (f1 - 1 + face_count) % face_count;
         } else if (key == 21) {
             f2 = (f2 + 1) % face_count;
@@ -9179,10 +8643,8 @@ static void inspect_face_pair_ui(Model3D* model) {
             for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
             free(backup_flags);
 
-
         static int zoom_bbox_raycast = 0, zoom_sh_raycast = 0, zoom_qd_raycast = 0;
         {
-
 
             CompareFacesResult* r_zoom = (CompareFacesResult*)malloc(sizeof(CompareFacesResult));
             RCHZoomPatch* patch = (RCHZoomPatch*)malloc(sizeof(RCHZoomPatch));
@@ -9192,12 +8654,10 @@ static void inspect_face_pair_ui(Model3D* model) {
             if (r_zoom && patch) {
                 memset(r_zoom, 0, sizeof(*r_zoom));
 
-
                 Fixed32 test_scale = FIXED_MUL_64(s_global_proj_scale_fixed, FLOAT_TO_FIXED(10.0f));
                 rch_patch_pair_at_scale(model, f1, f2, test_scale, patch);
                 compare_faces_diagnostic(model, f1, f2, 1, r_zoom);
                 rch_unpatch_pair(model, patch, f1, f2);
-
 
                 zoom_bbox_raycast = r_zoom->bbox_raycast;
                 zoom_sh_raycast   = r_zoom->sh_raycast;
@@ -9210,7 +8670,6 @@ static void inspect_face_pair_ui(Model3D* model) {
             if (patch) free(patch);
         }
 
-
             /* Présenter le point et les distances du chemin QuickDraw avec
              * ses conventions historiques.
              */
@@ -9222,9 +8681,7 @@ static void inspect_face_pair_ui(Model3D* model) {
             endgraph();
             DoText();
 
-
             printf("                =========== Face pair: f%d vs f%d ===========               \n", f1, f2);
-
 
             {
                 int pos1=-1,pos2=-1;
@@ -9241,7 +8698,6 @@ static void inspect_face_pair_ui(Model3D* model) {
                 } else printf("Sorted-list: unavailable\n");
             }
 
-
             char geo_str[16];
             if (r.geo_verdict == 1) sprintf(geo_str, "f%d", f1);
             else if (r.geo_verdict == 2) sprintf(geo_str, "f%d", f2);
@@ -9251,7 +8707,6 @@ static void inspect_face_pair_ui(Model3D* model) {
                    (r.bbox_ok?"yes":"no"),
                    geo_str,
                    (r.poly_overlap?"yes":"no"));
-
 
             int bbox_face = (r.bbox_raycast == 1) ? f1 : (r.bbox_raycast == 2) ? f2 : -1;
             int sh_face   = (r.sh_raycast   == 1) ? f1 : (r.sh_raycast   == 2) ? f2 : -1;
@@ -9263,7 +8718,6 @@ static void inspect_face_pair_ui(Model3D* model) {
             printf(" ; qd = ");
             if (qd_face >= 0) printf("f%d front", qd_face); else printf("?");
             printf("\n");
-
 
             int bbox_face_z = (zoom_bbox_raycast == 1) ? f1 : (zoom_bbox_raycast == 2) ? f2 : -1;
             int sh_face_z   = (zoom_sh_raycast   == 1) ? f1 : (zoom_sh_raycast   == 2) ? f2 : -1;
@@ -9713,7 +9167,6 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
     Fixed64 c2 = faces->plane_c[f2];
     Fixed64 d2 = faces->plane_d[f2];
 
-
     Fixed32 epsilon;
     {
         long t0 = GetTick();
@@ -9742,7 +9195,6 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
     int all_same_side;
     int all_opposite_side;
 
-
     /* Tester les sommets de f2 du côté observateur du plan de f1. */
     PDBG("\n******** Test #1 : Testing if faces %d is in front of %d ********\n", f2, f1);
 
@@ -9767,7 +9219,6 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
             acc += (((Fixed64)c1 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
             acc += (Fixed64)d1;
 
-
             PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
             if (acc > (Fixed64)epsilon) side = 1;
             else if (acc < -(Fixed64)epsilon) side = -1;
@@ -9781,7 +9232,6 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
                 printf("==> OK\n");
             }
             if (obs_side1 != side) {
-
 
                 all_same_side = 0;
                 test1state = -1;
@@ -9813,7 +9263,6 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
     }
     skipT1_debug:
 
-
     /* Tester les sommets de f1 du côté opposé à l'observateur du plan de f2. */
     PDBG("\n******** Test #2 : Testing if faces %d is behind %d ********\n", f1, f2);
 
@@ -9836,7 +9285,6 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
         acc += (((Fixed64)b2 * (Fixed64)vtx->yo[v]) >> FIXED_SHIFT);
         acc += (((Fixed64)c2 * (Fixed64)vtx->zo[v]) >> FIXED_SHIFT);
         acc += (Fixed64)d2;
-
 
         PDBG("Vertex #%d ; test_value = %f ", k, FIXED64_TO_FLOAT(acc));
 
@@ -9881,7 +9329,6 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
         PKEYP();
     }
     skipT2_debug:
-
 
     /* Tester les sommets de f1 du côté observateur du plan de f2. */
     PDBG("\n******** Test #3 : Testing if faces %d is in front of %d ********\n", f1, f2);
@@ -9944,7 +9391,6 @@ static int pair_plane_geometric_tests(Model3D* model, int f1, int f2) {
         PKEYP();
     }
     skipT3_debug:
-
 
     /* Tester les sommets de f2 du côté opposé à l'observateur du plan de f1. */
     PDBG("\n******** Test #4 : Testing if faces %d is behind %d ********\n", f2, f1);
@@ -10122,7 +9568,6 @@ void dumpFaceEquationsCSV(Model3D* model, const char* csv_filename, int alt_form
         if (faces->vertex_count[ii] > max_v) max_v = faces->vertex_count[ii];
     }
 
-
     fprintf(f, "face"); fprintf(f, "%c", col_sep);
     fprintf(f, "a"); fprintf(f, "%c", col_sep);
     fprintf(f, "b"); fprintf(f, "%c", col_sep);
@@ -10177,7 +9622,6 @@ void dumpFaceEquationsCSV(Model3D* model, const char* csv_filename, int alt_form
             fprintf(f, "%d", vid);
         }
         fprintf(f, "\"");
-
 
         for (int k = 0; k < max_v; ++k) {
             if (k < n) {
@@ -10393,7 +9837,6 @@ static void show_help_pager(void) {
         char key = getkeypress();
         if (key == 27) return;
 
-
         if (end >= n) {
             pos = 0;
         } else {
@@ -10493,7 +9936,6 @@ void saveSHRAsRawPic(const char *filename)
     FILE *out;
     unsigned char *shr;
     unsigned long i;
-
 
     /* Ouvrir la destination binaire et pointer la zone vidéo. */
     shr = (volatile unsigned char *)SHR_BASE;

@@ -40,7 +40,6 @@
 
 segment "data";
 
-
 /* Format signé 16.16 sur long 32 bits pour ORCA/C ; Fixed64 sert aux
  * produits et accumulations 64 bits.
  */
@@ -49,23 +48,16 @@ typedef long long   Fixed64;
 
 #define FIXED_SHIFT     16
 #define FIXED_SCALE     (1L << FIXED_SHIFT)
-#define FIXED_MASK      (FIXED_SCALE - 1)
+
 #define FIXED_HALF      (FIXED_SCALE >> 1)
 
-
-#define FIXED_PI        205887L
-#define FIXED_2PI       411775L
-#define FIXED_PI_2      102944L
 #define FIXED_ONE       FIXED_SCALE
-#define FIXED_PI_180    1143LL
-
 
 #define INT_TO_FIXED(x)     ((Fixed32)(x) << FIXED_SHIFT)
 #define FIXED_TO_INT(x)     ((int)((x) >> FIXED_SHIFT))
 #define FLOAT_TO_FIXED(x)   ((Fixed32)((x) * FIXED_SCALE))
 #define FIXED_TO_FLOAT(x)   ((float)(x) / (float)FIXED_SCALE)
 #define FIXED64_TO_FLOAT(x) ((double)(x) / (double)FIXED_SCALE)
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -97,24 +89,16 @@ static inline int FIXED_ROUND_TO_INT(Fixed32 x) {
     else        return (int)(((x) - FIXED_HALF) >> FIXED_SHIFT);
 }
 
-
 #define FIXED_ADD(a, b)     ((a) + (b))
 #define FIXED_SUB(a, b)     ((a) - (b))
 #define FIXED_NEG(x)        (-(x))
-#define FIXED_ABS(x)        ((x) >= 0 ? (x) : -(x))
-#define FIXED_FRAC(x)       ((x) & FIXED_MASK)
 
 /* Ces macros utilisent seulement long : préférer les variantes 64 bits si le
  * produit ou le décalage peut dépasser 32 bits.
  */
-#define FIXED_MUL(a, b)     (((long)(a) * (long)(b)) >> FIXED_SHIFT)
-#define FIXED_DIV(a, b)     (((long)(a) << FIXED_SHIFT) / (long)(b))
-
 
 #define FIXED_MUL_64(a, b)  ((Fixed32)(((Fixed64)(a) * (Fixed64)(b)) >> FIXED_SHIFT))
 #define FIXED_DIV_64(a, b)  ((Fixed32)(((Fixed64)(a) << FIXED_SHIFT) / (Fixed64)(b)))
-#define FIXED64_TO_32(x)    ((Fixed32)(x))
-
 
 /* Échantillons trigonométriques d'un tour, un degré par entrée, amplitude
  * 65536.
@@ -197,7 +181,6 @@ static const Fixed32 cos_table[360] = {
     64540, 64729, 64898, 65048, 65177, 65287, 65376, 65446, 65496, 65526
 };
 
-
 /*
  * ----------------------------------------------------------------------------
  *  sin_deg_int
@@ -278,8 +261,6 @@ static inline int normalize_deg(int deg) {
     return deg;
 }
 
-
-#define PERFORMANCE_MODE        1
 #define MAX_LINE_LENGTH         256
 /* Limites de stockage : 6000 sommets, 6000 faces et 16 indices par face ; le
  * format OBJ complet n'est pas pris en charge.
@@ -293,7 +274,6 @@ static inline int normalize_deg(int deg) {
 
 #define PALETTE_BASE            ((unsigned int *)0xE19E00L)
 
-
 /* Identifiants internes de modes ; ils ne correspondent pas aux caractères
  * 1..7 de l'interface.
  */
@@ -305,24 +285,22 @@ static inline int normalize_deg(int deg) {
 #define PAINTER_MODE_GEOV3      7
 #define PAINTER_MODE_NEWELL_SANCHA  8
 
-
 #define COL_BLACK           0
 #define COL_GREY            1
-#define COL_BROWN           2
-#define COL_PURPLE          3
+
 #define COL_BLUE            4
-#define COL_GREEN           5
+
 #define COL_ORANGE          6
-#define COL_RED             7
+
 #define COL_FRAME           7
-#define COL_ROSE            8
+
 #define COL_YELLOW          9
 #define COL_LIGHT_GREEN    10
-#define COL_AQUA           11
+
 #define COL_PALE_PURPLE    12
-#define COL_LIGHT_BLUE     13
+
 #define COL_FILL_DEFAULT   14
-#define COL_LIGHT_GREY     14
+
 #define COL_WHITE          15
 
 /* Valeurs de sélection spéciales : 16 demande une couleur aléatoire, 17
@@ -335,13 +313,11 @@ static inline int normalize_deg(int deg) {
 #define SCREEN_HEIGHT 200
 #define MAX_SPAN_INTERSECTIONS 16
 
-
 typedef unsigned int GS_Color;
 
 typedef struct {
     GS_Color color[16];
 } GS_Palette;
-
 
 typedef struct {
     /* Tableaux parallèles : x/y/z objet, xo/yo/zo observateur en 16.16,
@@ -356,7 +332,6 @@ typedef struct {
     int vertex_count;
     int saved_vertex_count;
 } VertexArrays3D;
-
 
 typedef struct {
     Handle vertex_countHandle;
@@ -382,7 +357,6 @@ typedef struct {
     Fixed32 *z_mean;
     Fixed64 *plane_a, *plane_b, *plane_c, *plane_d;
 
-
     int *minx, *maxx, *miny, *maxy;
 
     /* Bornes dans le repère objet, distinctes des bornes projetées
@@ -395,7 +369,6 @@ typedef struct {
     int face_count;
     int total_indices;
 } FaceArrays3D;
-
 
 typedef struct {
     int vertex_count;
@@ -424,7 +397,6 @@ typedef struct {
 typedef struct {
     VertexArrays3D vertices;
     FaceArrays3D   faces;
-
 
     /* Métadonnées du centrage et de l'ajustement de vue ; les drapeaux
      * indiquent les étapes déjà disponibles ou appliquées.
@@ -469,9 +441,7 @@ typedef struct {
     int capacity;
 } PairCache;
 
-
 int readVertices_last_count = 0;
-
 
 /* Handle QuickDraw réutilisé pour les polygones ; verrouillage suivi
  * explicitement.
@@ -480,11 +450,9 @@ static Handle globalPolyHandle = NULL;
 static int poly_handle_locked = 0;
 static int framePolyOnly = 0;
 
-
 int palette = 0;
 GS_Palette palettes[16];
 static int palette0_loaded = 0;
-
 
 /* Options globales de visibilité et de rendu ; pan_dx/pan_dy sont des
  * déplacements écran en pixels.
@@ -495,23 +463,19 @@ static int pan_dy = 0;
 static int jitter = 0;
 static int jitter_max = 7;
 
-
 /* Diagnostic du clipping : dernière paire, arrêts de garde, contours et
  * centroïdes obtenus par les différentes méthodes.
  */
 static int debug_overlap_subj = -1;
 static int debug_overlap_clip = -1;
-static unsigned long clip_watchdog_bailouts = 0;
-static unsigned long clip_iter_bailouts = 0;
+
 static int clip_last_bailout_subj = -1;
 static int clip_last_bailout_clip = -1;
 
 #define DEBUG_CLIP_MAX 512
-static int debug_clip_vcount = 0;
-static int debug_clip_vx[DEBUG_CLIP_MAX];
-static int debug_clip_vy[DEBUG_CLIP_MAX];
+
 static long long debug_clip_raw_area2 = 0;
-static double debug_clip_area = 0.0;
+
 static int debug_clip_centroid_x = 0;
 static int debug_clip_centroid_y = 0;
 
@@ -520,17 +484,10 @@ static int debug_clip_fixed_vcount = 0;
 static int debug_clip_fixed_vx[DEBUG_CLIP_MAX];
 static int debug_clip_fixed_vy[DEBUG_CLIP_MAX];
 
-static double debug_clip_float_area = 0.0;
-static int debug_clip_float_vcount = 0;
-static int debug_clip_float_vx[DEBUG_CLIP_MAX];
-static int debug_clip_float_vy[DEBUG_CLIP_MAX];
-static int debug_clip_float_overridden = 0;
-
 /* Seuil d'aire projetée utilisé par les diagnostics d'intersection ; les
  * unités sont des pixels carrés.
  */
 static const double MIN_INTERSECTION_AREA_PIXELS = 2.0;
-
 
 /* Choix utilisateur : -1 par défaut ; 16 aléatoire ; 17 même couleur que le
  * remplissage pour le contour.
@@ -541,23 +498,11 @@ static unsigned char *random_fill_colors = NULL;
 static unsigned char *random_frame_colors = NULL;
 static int random_colors_capacity = 0;
 
-
 static int painter_mode = PAINTER_MODE_FAST;
-
 
 /* Buffers de travail partagés des variantes géométriques et correctives ; ne
  * pas les assimiler à un mode utilisateur supplémentaire.
  */
-static float *float_px = NULL, *float_py = NULL;
-static int *float_px_int = NULL, *float_py_int = NULL;
-static float *f_z_min_buf = NULL, *f_z_max_buf = NULL, *f_z_mean_buf = NULL;
-static int *f_minx_buf = NULL, *f_maxx_buf = NULL, *f_miny_buf = NULL, *f_maxy_buf = NULL;
-static int *f_display_buf = NULL;
-static float *f_plane_a_buf = NULL, *f_plane_b_buf = NULL, *f_plane_c_buf = NULL, *f_plane_d_buf = NULL;
-static int *f_plane_conv_buf = NULL;
-static int *order_buf = NULL;
-static int order_cap = 0;
-
 
 /* Distance servant au calcul d'epsilon ; s_global_proj_scale_fixed est
  * l'échelle de projection en 16.16.
@@ -565,11 +510,9 @@ static int order_cap = 0;
 static Fixed32 current_observer_distance = 65536;
 static Fixed32 s_global_proj_scale_fixed;
 
-
 /* Couleurs de remplissage calculées à partir de l'orientation des plans. */
 static int shaded_by_orientation = 0;
 static int face_shade_color[MAX_FACES];
-
 
 /* Paires conservées pour l'inspection des ambiguïtés d'ordre ; le buffer est
  * agrandi selon les besoins.
@@ -578,23 +521,17 @@ static int inconclusive_pairs_capacity = 0;
 static InconclusivePair *inconclusive_pairs = NULL;
 static int inconclusive_pairs_count = 0;
 
-
 static unsigned long overlapCheckCount = 0;
 static unsigned long overlapSegiAccept = 0;
 static unsigned long overlapSampleAccept = 0;
 static unsigned long overlapClipCalls = 0;
 static unsigned long overlapClipAccept = 0;
 
-
 /* Buffers de clipping partagés et réutilisés ; ils contribuent à la
  * non-réentrance du moteur.
  */
-static long long *clip_sx = NULL, *clip_sy = NULL;
-static long long *clip_tx = NULL, *clip_ty = NULL;
-static int clip_bufcap = 0;
 
 static FaceArrays3D* qsort_faces_ptr_for_cmp = NULL;
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -623,7 +560,6 @@ static GS_Color encodePaletteColor(int r, int g, int b)
     if (b < 0) b = 0; if (b > 15) b = 15;
     return ((GS_Color)r << 8) | ((GS_Color)g << 4) | (GS_Color)b;
 }
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -656,7 +592,6 @@ static GS_Color paletteGradientColor(int palette_num, int index)
 
         return encodePaletteColor(index, index, index);
     }
-
 
     /* Choisir la teinte saturée du milieu de dégradé. */
     int target_r = 0, target_g = 0, target_b = 0;
@@ -704,7 +639,6 @@ static GS_Color paletteGradientColor(int palette_num, int index)
     return encodePaletteColor(r, g, b);
 }
 
-
 /* Déclarations partagées pour l'unité de compilation construite par
  * inclusions de fichiers C. Elles ne constituent pas à elles seules une
  * liste de fonctions actives.
@@ -713,17 +647,13 @@ void initPalettes(void);
 static GS_Color encodePaletteColor(int r, int g, int b);
 static GS_Color paletteGradientColor(int palette_num, int index);
 
-
 int readVertices(const char *filename, VertexArrays3D *vtx, int max_vertices, Model3D *owner);
 
-
 void getObserverParams(ObserverParams *params, Model3D *model);
-
 
 void drawPolygons(Model3D *model, int *vertex_count, int face_count, int vertex_count_total);
 void drawPolygons_jitter(Model3D *model, int *vertex_count, int face_count, int vertex_count_total);
 void calculateFaceDepths(Model3D *model, Face3D *faces, int face_count);
-
 
 void painter_newell_sancha_fast(Model3D* model, int face_count);
 void painter_bubble_sort(Model3D* model, int face_count);
@@ -733,7 +663,6 @@ static int painter_correct(Model3D* model, int face_count, int debug);
 static int painter_correctV2(Model3D* model, int face_count, int debug);
 void painter_geoV2(Model3D* model, int face_count);
 
-
 static int geometric_face_relation(Model3D* model, int f1, int f2);
 int projected_polygons_overlap(Model3D* model, int f1, int f2);
 int projected_polygons_overlap_simple(Model3D* model, int f1, int f2);
@@ -741,27 +670,21 @@ int pair_plane_before(Model3D* model, int f1, int f2);
 int pair_plane_after(Model3D* model, int f1, int f2);
 int ray_cast_hierarchical(Model3D* model, int f1, int f2);
 
-
 void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index);
 void drawFaceIndex(Model3D* model, int face_id);
 void frameInconclusivePairs(Model3D* model);
 void generate_random_colors(int face_count);
 
-
 void compute2DFromObserver(Model3D* model, int angle_w);
 static void updateFace2DBounds(Model3D* model);
 
-
 void applyPalette(int palette_num);
-void SetColor(int palette_num, int color_index, int r, int g, int b);
 GS_Palette ReadPalette(int palette_num);
 int getFaceFillColor(int face_id);
 int getFaceFrameColor(int face_id, int fill_color);
 
-
 void renderModelScanlineZBuffer(Model3D* model);
 void drawPixel(int x, int y, int color);
-
 
 void DoColor(void);
 void DoText(void);
@@ -770,16 +693,13 @@ void saveSHRAsRawPic(const char *filename);
 void saveNextScreenshot(void);
 void setProDOSFileType(const char* filename, int fileType, long auxType);
 
-
 Model3D* createModel3D(void);
 void     destroyModel3D(Model3D* model);
 int      loadModel3D(Model3D* model, const char* filename);
 
-
 void processModelFast(Model3D* model, ObserverParams* params, const char* filename);
 void getObserverParams(ObserverParams* params, Model3D* model);
 void normalizeAutoFitDistanceTo150(Model3D* model);
-
 
 void inspect_faces_before(Model3D* model, ObserverParams* params, const char* filename);
 void inspect_faces_after(Model3D* model, ObserverParams* params, const char* filename);
@@ -787,26 +707,20 @@ void showFace(Model3D* model, ObserverParams* params, const char* filename);
 void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename);
 void inspect_face_pair_ui(Model3D* model);
 
-
 void dumpFaceEquationsCSV(Model3D* model, const char* filename, int use_semicolon);
 void dumpFace2DCoordinates(Model3D* model, const char* txt_filename);
 void dumpSortedFaceIndices(Model3D* model, const char* txt_filename);
 
-
 void computeOrientationShading(Model3D* model);
-
 
 static int compute_intersection_centroid_fractional_tryboth(Model3D *model,
         int subj, int clip, double *outx, double *outy, double *out_area2);
 static int ray_cast_at_fractional(Model3D *model, int f1, int f2, double cx, double cy);
 
-
 static void fractional_projection_cache_invalidate(Model3D *model);
 static void fractional_projection_cache_release(Model3D *model);
 
-
 static int projected_polygons_overlap_cached(Model3D *model, int f1, int f2);
-
 
 static Fixed32 fixed_mul32_fast(Fixed32 a,Fixed32 b);
 static Fixed64 fixed_product32_fast(Fixed32 a,Fixed32 b);

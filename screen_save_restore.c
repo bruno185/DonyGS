@@ -1,18 +1,20 @@
 /*
  * ============================================================================
- *  screen_save_restore.c — Sauvegarde et restauration de la zone SHR
+ *  screen_save_restore.c — Sauvegarde, restauration et effacement SHR
  * ============================================================================
  *
  *  Rôle :
  *    Conserver une image de 32768 octets à partir de $E1:2000 pour revenir
  *    rapidement aux vues graphiques après une inspection textuelle, sans
- *    recalculer les polygones.
+ *    recalculer les polygones. Effacer aussi un nombre choisi de lignes
+ *    depuis le haut de la zone de pixels.
  *
  *  Organisation :
  *    L'initialisation réserve un handle verrouillé et en décompose
  *    l'adresse. Les fonctions saveScreen et restoreScreen patchent les
  *    banques d'une instruction MVN, puis transfèrent la zone en un bloc.
- *    graph_changed suit l'invalidation de la sauvegarde.
+ *    graph_changed suit l'invalidation de la sauvegarde. screenClearTopLines
+ *    partage l'effacement du bandeau avant les rendus direct et scanline.
  *
  *  Dépendances et contraintes :
  *    Inclus par engine.c et dépend des outils mémoire Apple IIgs. Appeler
@@ -27,21 +29,15 @@
 #include <memory.h>
 
 #define SCREEN_SIZE         32768
-#define SCREEN_SRC_BANK     0xE1
-#define SCREEN_SRC_OFFSET   0x2000
 
 static Handle gSaveHandle    = NULL;
 static Byte   gSaveBank;
 static Word   gSaveOffset;
-static Byte   gSavePatched    = 0;
-static Byte   gRestorePatched = 0;
-
 
 /* Invalidation de l'image sauvegardée : 1 impose un nouveau rendu ;
  * saveScreen remet ce drapeau à 0.
  */
 int graph_changed = 1;
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -85,7 +81,6 @@ int initScreenSaveBuffer(void)
 
     return 1;
 }
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -151,7 +146,6 @@ void saveScreen(void)
     graph_changed = 0;
 }
 
-
 /*
  * ----------------------------------------------------------------------------
  *  restoreScreen
@@ -200,6 +194,69 @@ void restoreScreen(void)
         mvn 0x00,0xE1
 
         plb
+        plp
+    }
+}
+
+/* Offset assembleur partagé ; la routine d'effacement n'est pas réentrante. */
+static unsigned int screen_clear_last_offset;
+
+/*
+ * ----------------------------------------------------------------------------
+ *  screenClearTopLines
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Effacer les premières lignes de pixels de l'écran SHR 320x200.
+ *
+ *  Paramètres :
+ *    [entrée] line_count : nombre de lignes depuis le haut ; une valeur
+ *    négative ou nulle ne fait rien, une valeur supérieure à 200 vaut 200.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    Met à zéro 160 octets par ligne depuis $E1:2000. Les tables SCB et
+ *    palettes ne sont pas modifiées. Ne gère pas graph_changed : l'appelant
+ *    conserve la responsabilité du cycle de rendu et de sauvegarde SHR.
+ *
+ *  Fonctionnement :
+ *    Borne la hauteur puis calcule l'offset du dernier mot. Le noyau 16 bits
+ *    descend de deux en deux jusqu'au mot d'offset zéro inclus. L'offset
+ *    maximal, 31998, reste positif pour le test BPL. Les accès longs ne
+ *    dépendent pas de DBR. L'offset statique rend la routine non réentrante.
+ *
+ *  Registres et indicateurs :
+ *    Le bloc assembleur préserve P, A et X ; Y et DBR ne sont pas utilisés.
+ *    Le code C de préparation reste soumis à la convention d'appel ORCA/C.
+ *
+ * ----------------------------------------------------------------------------
+ */
+static void screenClearTopLines(int line_count)
+{
+    /* Limiter l'écriture à la zone de pixels, sans toucher aux tables SHR. */
+    if (line_count <= 0) return;
+    if (line_count > 200) line_count = 200;
+    screen_clear_last_offset = (unsigned int)(line_count * 160 - 2);
+    asm {
+        /* Sauvegarder le contexte et charger le dernier offset de mot. */
+        php
+        rep #0x30
+        pha
+        phx
+        lda >screen_clear_last_offset
+        tax
+        lda #0
+    screen_clear_top_loop:
+        /* Écrire un mot puis reculer ; BPL inclut le mot d'offset zéro. */
+        sta >0xE12000,x
+        dex
+        dex
+        bpl screen_clear_top_loop
+        /* Restaurer le contexte avant de rendre la main au code C. */
+        plx
+        pla
         plp
     }
 }

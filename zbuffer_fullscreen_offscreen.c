@@ -412,346 +412,6 @@ typedef struct {
 
 /*
  * ----------------------------------------------------------------------------
- *  Off_LerpZ
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Interpoler linéairement un code Z entre deux abscisses.
- *
- *  Paramètres :
- *    [entrée] za/zb, codes aux positions xa/xb ; x, position demandée.
- *
- *  Retour :
- *    Za si xa==xb, sinon za+(zb-za)*(x-xa)/(xb-xa), calcul intermédiaire
- *    long.
- *
- *  Fonctionnement :
- *    Aucune saturation ; le domaine interpolé et les produits doivent être
- *    valides.
- *
- * ----------------------------------------------------------------------------
- */
-static UWORD16 Off_LerpZ(UWORD16 za, UWORD16 zb, int xa, int xb, int x)
-{
-    long num;
-    /* Éviter la division nulle puis interpoler le code avec troncature entière. */
-    if (xb == xa) return za;
-    num = ((long)zb - (long)za) * (long)(x - xa);
-    return (UWORD16)((long)za + num / (long)(xb - xa));
-}
-
-
-long off_p_zacc, off_p_zstep;
-unsigned long off_p_zptr, off_p_pptr;
-int off_p_n, off_p_odd, off_p_mode, off_p_cl, off_p_ci, off_p_cr;
-unsigned int off_p_zl, off_p_zr;
-
-/*
- * ----------------------------------------------------------------------------
- *  Off_SpanRun
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Dessiner un span préclippé avec test Z strict dans un noyau 65C816.
- *
- *  Paramètres :
- *    Aucun paramètre explicite.
- *
- *  Entrées et sorties implicites :
- *    Entrée : paquet partagé off_p_* : pointeurs Z et pixels far, parité
- *    gauche, codes gauche/droite, couleurs gauche/intérieur/droite,
- *    accumulateur et pas 16.16, nombre de pixels intérieurs et mode 0
- *    (gauche seul) ou 1 (span complet).
- *
- *  Retour :
- *    Aucun ; écrit Z et les nibbles de couleur.
- *
- *  Registres et indicateurs :
- *    Préserve P et D ; A/X/Y modifiés, DBR inchangé. Mode décimal supposé
- *    désactivé. Cadre D de 32 octets : zacc à 0/2, zstep à 4/6, zptr à 8/10,
- *    pptr à 12/14, compte à 16, couleur basse/haute à 18/20, parité à 22,
- *    masque/valeur à 24/26. Les profondeurs [8],Y peuvent franchir une
- *    banque ; le pointeur de pixels n'est incrémenté que sur 16 bits et doit
- *    rester dans sa banque. Traite les extrémités exactement et l'intérieur
- *    par paires pair/impair. Les pixels de même code Z ne sont pas
- *    remplacés. Non réentrant.
- *
- * ----------------------------------------------------------------------------
- */
-static void Off_SpanRun(void)
-{
-    asm {
-
-
-        /* Sauvegarder le contexte et réserver 32 octets ; D est positionné
-         * sur le premier octet utile.
-         */
-        php
-        phd
-        rep #0x30
-        tsc
-        sec
-        sbc #32
-        tcs
-        inc a
-        tcd
-
-
-        /* Copier le paquet dans le cadre direct et préparer les deux nibbles
-         * de couleur.
-         */
-        lda >off_p_zacc
-        sta 0
-        lda >off_p_zacc+2
-        sta 2
-        lda >off_p_zstep
-        sta 4
-        lda >off_p_zstep+2
-        sta 6
-        lda >off_p_zptr
-        sta 8
-        lda >off_p_zptr+2
-        sta 10
-        lda >off_p_pptr
-        sta 12
-        lda >off_p_pptr+2
-        sta 14
-        lda >off_p_n
-        sta 16
-
-        lda >off_p_ci
-        and #0x000F
-        sta 18
-        asl a
-        asl a
-        asl a
-        asl a
-        sta 20
-
-        lda >off_p_odd
-        eor #1
-        sta 22
-
-
-        ldy #0
-
-        lda >off_p_odd
-        beq sr_l_ev
-        lda #0x00F0
-        sta 24
-        lda >off_p_cl
-        and #0x000F
-        sta 26
-        bra sr_l_go
-    sr_l_ev:
-        lda #0x000F
-        sta 24
-        lda >off_p_cl
-        and #0x000F
-        asl a
-        asl a
-        asl a
-        asl a
-        sta 26
-    /* Tester la profondeur exacte du pixel gauche avant toute écriture du nibble. */
-    sr_l_go:
-
-        lda >off_p_zl
-        cmp [8],y
-        bcs sr_lsk
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and 24
-        ora 26
-        sta [12]
-        rep #0x20
-    sr_lsk:
-
-        lda >off_p_mode
-        bne sr_full
-        brl sr_done
-
-
-    /* Avancer après le pixel gauche ; l'adresse couleur progresse seulement
-     * après un pixel impair.
-     */
-    sr_full:
-        iny
-        iny
-        lda >off_p_odd
-        beq sr_lev
-        inc 12
-    sr_lev:
-
-
-        lda 16
-        bne sr_int
-        brl sr_right
-
-
-    /* Traiter seul un premier pixel impair pour aligner le reste sur des paires. */
-    sr_int:
-        lda 22
-        beq sp_even
-
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs sp_o1
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0xF0
-        ora 18
-        sta [12]
-        rep #0x20
-    sp_o1:
-        iny
-        iny
-        inc 12
-        dec 16
-
-
-    sp_even:
-        lda 16
-        lsr a
-        tax
-        beq sp_tail
-
-    /* Avancer zacc en 32 bits pour chaque pixel ; propager C du mot bas au
-     * mot haut, puis tester Z.
-     */
-    sp_pair:
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs sp_e1
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0x0F
-        ora 20
-        sta [12]
-        rep #0x20
-    sp_e1:
-        iny
-        iny
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs sp_o2
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0xF0
-        ora 18
-        sta [12]
-        rep #0x20
-    sp_o2:
-        iny
-        iny
-        inc 12
-        dex
-        bne sp_pair
-
-
-    /* Traiter l'éventuel pixel pair résiduel après les paires. */
-    sp_tail:
-        lda 16
-        and #1
-        bne sp_t1
-        brl sr_right
-    sp_t1:
-
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs sp_e2
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0x0F
-        ora 20
-        sta [12]
-        rep #0x20
-    sp_e2:
-        iny
-        iny
-
-
-    /* Recalculer la parité et employer le code exact de l'extrémité droite. */
-    sr_right:
-        lda >off_p_n
-        clc
-        adc 22
-        and #1
-        beq sr_r_ev
-        lda #0x00F0
-        sta 24
-        lda >off_p_cr
-        and #0x000F
-        sta 26
-        bra sr_r_go
-    sr_r_ev:
-        lda #0x000F
-        sta 24
-        lda >off_p_cr
-        and #0x000F
-        asl a
-        asl a
-        asl a
-        asl a
-        sta 26
-    sr_r_go:
-        lda >off_p_zr
-        cmp [8],y
-        bcs sr_rsk
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and 24
-        ora 26
-        sta [12]
-        rep #0x20
-    sr_rsk:
-
-
-    /* Libérer exactement le cadre avant de restaurer D et P. */
-    sr_done:
-        rep #0x30
-        tsc
-        clc
-        adc #32
-        tcs
-        pld
-        plp
-    }
-}
-
-
-/*
- * ----------------------------------------------------------------------------
  *  Off_PaintSpanZ
  * ----------------------------------------------------------------------------
  *
@@ -804,13 +464,13 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
     if (x0 == x1) {
 
         zq_end = zq0;
-        off_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
-        off_p_pptr = (unsigned long)(off_row[screenY] + (sx0 >> 1));
-        off_p_odd  = sx0 & 1;
-        off_p_zl   = zq0;
-        off_p_cl   = frameColor;
-        off_p_mode = 0;
-        Off_SpanRun();
+        zspan_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
+        zspan_p_pptr = (unsigned long)(off_row[screenY] + (sx0 >> 1));
+        zspan_p_odd  = sx0 & 1;
+        zspan_p_zl   = zq0;
+        zspan_p_cl   = frameColor;
+        zspan_p_mode = 0;
+        ZBuffer_SpanRun();
     } else {
         nsteps    = x1 - x0;
 
@@ -826,19 +486,19 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
             if (zr != ZBUF_FAR_VALUE && (int)zq_end - (int)zr >= -1) silhouette_r = 0;
         }
 
-        off_p_zptr  = (unsigned long)(zbuf_row[screenY] + sx0);
-        off_p_pptr  = (unsigned long)(off_row[screenY] + (sx0 >> 1));
-        off_p_odd   = sx0 & 1;
-        off_p_zl    = zq0;
-        off_p_zr    = zq_end;
-        off_p_zacc  = z_acc;
-        off_p_zstep = z_step_16;
-        off_p_n     = nsteps - 1;
-        off_p_cl    = frameColor;
-        off_p_ci    = whole_span_is_border ? frameColor : fillColor;
-        off_p_cr    = (silhouette_r || whole_span_is_border) ? frameColor : fillColor;
-        off_p_mode  = 1;
-        Off_SpanRun();
+        zspan_p_zptr  = (unsigned long)(zbuf_row[screenY] + sx0);
+        zspan_p_pptr  = (unsigned long)(off_row[screenY] + (sx0 >> 1));
+        zspan_p_odd   = sx0 & 1;
+        zspan_p_zl    = zq0;
+        zspan_p_zr    = zq_end;
+        zspan_p_zacc  = z_acc;
+        zspan_p_zstep = z_step_16;
+        zspan_p_n     = nsteps - 1;
+        zspan_p_cl    = frameColor;
+        zspan_p_ci    = whole_span_is_border ? frameColor : fillColor;
+        zspan_p_cr    = (silhouette_r || whole_span_is_border) ? frameColor : fillColor;
+        zspan_p_mode  = 1;
+        ZBuffer_SpanRun();
     }
 
 
@@ -1201,8 +861,8 @@ static void Off_RenderCore(Model3D* model, int biased)
                     x0 = xa;  x1 = xb;
                     zq0 = zqa; zq1 = zqb;
 
-                    if (x0 < clip_x_min) { zq0 = Off_LerpZ(zqa, zqb, xa, xb, clip_x_min); x0 = clip_x_min; }
-                    if (x1 > clip_x_max) { zq1 = Off_LerpZ(zqa, zqb, xa, xb, clip_x_max); x1 = clip_x_max; }
+                    if (x0 < clip_x_min) { zq0 = ZBuffer_LerpZ(zqa, zqb, xa, xb, clip_x_min); x0 = clip_x_min; }
+                    if (x1 > clip_x_max) { zq1 = ZBuffer_LerpZ(zqa, zqb, xa, xb, clip_x_max); x1 = clip_x_max; }
                     if (x0 > x1) continue;
 
                     Off_PaintSpanZ(x0, x1, y, screenY, zq0, zq1,

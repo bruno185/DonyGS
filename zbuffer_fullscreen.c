@@ -25,23 +25,18 @@
  * ============================================================================
  */
 
-
 segment "ZBUF";
 #include "zbuffer_fullscreen.h"
 
-
 FarWordPtr zbuf_row[ZBUF_HEIGHT];
-
 
 static Handle  zbuf_handle = NULL;
 static int     zbuf_bank_lo = 0;
 static void ZBFS_FreeScratch(void);
 static int     zbuf_bank_hi = 0;
 
-
 #define ZBUF_USABLE_SIZE   (2UL * 65536UL)
 #define ZBUF_ALLOC_SIZE    (ZBUF_USABLE_SIZE + 65536UL)
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -71,7 +66,6 @@ int ZBuffer_Init(void)
     ULONG32 aligned;
     int     y;
 
-
     /* Réutiliser l'allocation existante ; nettoyer le handle partiel après
      * une erreur Toolbox.
      */
@@ -82,7 +76,6 @@ int ZBuffer_Init(void)
         zbuf_handle = NULL;
         return 0;
     }
-
 
     /* Arrondir l'adresse du bloc à la banque supérieure puis construire les
      * pointeurs de lignes.
@@ -100,7 +93,6 @@ int ZBuffer_Init(void)
     ZBuffer_Clear();
     return 1;
 }
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -139,7 +131,6 @@ void ZBuffer_Shutdown(void)
     zbuf_bank_lo = zbuf_bank_hi = 0;
 }
 
-
 /*
  * ----------------------------------------------------------------------------
  *  ZBuffer_Clear
@@ -171,7 +162,6 @@ void ZBuffer_Clear(void)
 {
     asm {
 
-
         /* Sauvegarder P/DBR/D et réserver le cadre avant les accès multi-banques. */
         php
         phb
@@ -186,7 +176,6 @@ void ZBuffer_Clear(void)
         lda #0
         sta 0
 
-
     /* Charger le pointeur far de ligne et détecter un franchissement de banque. */
     zc_row:
         ldx 0
@@ -195,12 +184,10 @@ void ZBuffer_Clear(void)
         lda >zbuf_row+2,x
         sta 4
 
-
         lda 2
         clc
         adc #ZBUF_WIDTH*2-1
         bcs zc_slow
-
 
         lda 4
         sep #0x20
@@ -236,7 +223,6 @@ void ZBuffer_Clear(void)
         dey
         bne zc_loop
         bra zc_next
-
 
     /* Pour une ligne à cheval, employer [dp],Y qui propage l'adresse dans la
      * banque.
@@ -318,9 +304,7 @@ void ZBuffer_Clear(void)
     }
 }
 
-
 static float zbuffer_scale = ZBUFFER_INV_Z_SCALE;
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -349,7 +333,6 @@ void ZBuffer_SetScaleForFrame(float max_inv_z)
         zbuffer_scale = ZBUFFER_TARGET_MAX_CODE / max_inv_z;
     }
 }
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -391,165 +374,12 @@ UWORD16 ZBuffer_QuantizeInvZ(float inv_z)
     return (UWORD16)(0xFFFFUL - (ULONG32)q);
 }
 
-
-/*
- * ----------------------------------------------------------------------------
- *  ZBuffer_TestAndSet
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Tester et remplacer une profondeur pour un pixel valide.
- *
- *  Paramètres :
- *    [entrée] x/y dans les limites et Z-buffer initialisé ; z, code 16 bits.
- *
- *  Retour :
- *    1 si z est strictement plus petit que le contenu remplacé, 0 sinon.
- *
- *  Fonctionnement :
- *    Ne dessine aucun pixel et ne contrôle ni coordonnées ni pointeur de
- *    ligne.
- *
- * ----------------------------------------------------------------------------
- */
-int ZBuffer_TestAndSet(int x, int y, UWORD16 z)
-{
-    FarWordPtr row = zbuf_row[y];
-    /* Les égalités conservent la profondeur déjà présente. */
-    if (z < row[x]) {
-        row[x] = z;
-        return 1;
-    }
-    return 0;
-}
-
-
-/*
- * ----------------------------------------------------------------------------
- *  ZBuffer_ClearFast
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Effacer intégralement deux banques de mémoire en mots $FFFF.
- *
- *  Paramètres :
- *    [entrée] bank_lo et bank_hi, octets de banques valides
- *
- *  Retour :
- *    Aucun.
- *
- *  Registres et indicateurs :
- *    Préserve P et DBR ; A et X modifiés. Boucle 16 bits jusqu'au rebouclage
- *    de X. Écrit deux fois 64 Kio ; ne pas l'appeler avec des banques non
- *    réservées. Cette routine à paramètres ORCA/C est distincte du clear par
- *    table de lignes.
- *
- * ----------------------------------------------------------------------------
- */
-asm void ZBuffer_ClearFast(int bank_lo, int bank_hi)
-    {
-        /* Sauvegarder DBR et P puis sélectionner la première banque par un
-         * push/pull d'octet.
-         */
-        php
-        phb
-        sep     #0x20
-        lda     bank_lo
-        pha
-        plb
-        rep     #0x30
-        ldx     #0x0000
-        lda     #0xFFFF
-/* Remplir les 32768 mots de la première banque. */
-clear_bank_lo:
-        sta     0x0000,x
-        inx
-        inx
-        bne     clear_bank_lo
-        sep     #0x20
-        lda     bank_hi
-        pha
-        plb
-        rep     #0x30
-        ldx     #0x0000
-        lda     #0xFFFF
-/* Remplir la seconde banque puis restaurer DBR et P. */
-clear_bank_hi:
-        sta     0x0000,x
-        inx
-        inx
-        bne     clear_bank_hi
-        plb
-        plp
-        rtl
-    }
-
-
-/*
- * ----------------------------------------------------------------------------
- *  ZBuffer_TestSetRow
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Mettre à jour une suite de profondeurs par incrément constant, sans
- *    couleur.
- *
- *  Paramètres :
- *    [entrée] zbuf_ptr far, z_start, dz_step signé 16 bits, count non
- *    négatif.
- *
- *  Retour :
- *    Aucun.
- *
- *  Fonctionnement :
- *    Compare en non signé, écrit seulement si le code est plus petit.
- *    L'accumulation reboucle sur 16 bits ; la plage doit être garantie par
- *    l'appelant.
- *
- *    L'adressage [zbuf_ptr],Y permet le franchissement de banque.
- *
- *  Registres et indicateurs :
- *    Préserve P, impose le mode binaire puis le restaure ; A/X/Y modifiés.
- *
- * ----------------------------------------------------------------------------
- */
-asm void ZBuffer_TestSetRow(FarWordPtr zbuf_ptr, UWORD16 z_start,
-                             SWORD16 dz_step, int count)
-    {
-        /* Passer en calcul binaire 16 bits avant de lire les paramètres ORCA/C. */
-        php
-        rep     #0x30
-        cld
-        ldy     #0x0000
-        lda     z_start
-        ldx     count
-        beq     zsr_done
-/* Tester le code, avancer la profondeur et l'offset de deux octets par pixel. */
-zsr_loop:
-        cmp     [zbuf_ptr],y
-        bcs     zsr_skip
-        sta     [zbuf_ptr],y
-zsr_skip:
-        clc
-        adc     dz_step
-        iny
-        iny
-        dex
-        bne     zsr_loop
-zsr_done:
-        plp
-        rtl
-    }
-
-
 #define ZB_Z_BIAS    0.0005f
 #define ZB_SHR_BASE  0xE12000UL
-
 
 typedef struct {
     long x;
 } ZbHit;
-
 
 typedef struct {
     long x;
@@ -557,315 +387,6 @@ typedef struct {
     int  ya, yb;
     int  xb;
 } ZbEdge;
-
-
-long zb_p_zacc, zb_p_zstep;
-unsigned long zb_p_zptr, zb_p_pptr;
-int zb_p_n, zb_p_odd, zb_p_mode, zb_p_cl, zb_p_ci, zb_p_cr;
-unsigned int zb_p_zl, zb_p_zr;
-
-/*
- * ----------------------------------------------------------------------------
- *  ZBuffer_SpanRun
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Dessiner un span préclippé avec test Z strict dans un noyau 65C816.
- *
- *  Paramètres :
- *    Aucun paramètre explicite.
- *
- *  Entrées et sorties implicites :
- *    Entrée : paquet partagé zb_p_* : pointeurs Z et pixels far, parité
- *    gauche, codes gauche/droite, couleurs gauche/intérieur/droite,
- *    accumulateur et pas 16.16, nombre de pixels intérieurs et mode 0
- *    (gauche seul) ou 1 (span complet).
- *
- *  Retour :
- *    Aucun ; écrit Z et les nibbles de couleur.
- *
- *  Registres et indicateurs :
- *    Préserve P et D ; A/X/Y modifiés, DBR inchangé. Mode décimal supposé
- *    désactivé. Cadre D de 32 octets : zacc à 0/2, zstep à 4/6, zptr à 8/10,
- *    pptr à 12/14, compte à 16, couleur basse/haute à 18/20, parité à 22,
- *    masque/valeur à 24/26. Les profondeurs [8],Y peuvent franchir une
- *    banque ; le pointeur de pixels n'est incrémenté que sur 16 bits et doit
- *    rester dans sa banque. Traite les extrémités exactement et l'intérieur
- *    par paires pair/impair. Les pixels de même code Z ne sont pas
- *    remplacés. Non réentrant.
- *
- * ----------------------------------------------------------------------------
- */
-static void ZBuffer_SpanRun(void)
-{
-    asm {
-
-
-        /* Sauvegarder le contexte et réserver 32 octets ; D est positionné
-         * sur le premier octet utile.
-         */
-        php
-        phd
-        rep #0x30
-        tsc
-        sec
-        sbc #32
-        tcs
-        inc a
-        tcd
-
-
-        /* Copier le paquet dans le cadre direct et préparer les deux nibbles
-         * de couleur.
-         */
-        lda >zb_p_zacc
-        sta 0
-        lda >zb_p_zacc+2
-        sta 2
-        lda >zb_p_zstep
-        sta 4
-        lda >zb_p_zstep+2
-        sta 6
-        lda >zb_p_zptr
-        sta 8
-        lda >zb_p_zptr+2
-        sta 10
-        lda >zb_p_pptr
-        sta 12
-        lda >zb_p_pptr+2
-        sta 14
-        lda >zb_p_n
-        sta 16
-
-        lda >zb_p_ci
-        and #0x000F
-        sta 18
-        asl a
-        asl a
-        asl a
-        asl a
-        sta 20
-
-        lda >zb_p_odd
-        eor #1
-        sta 22
-
-
-        ldy #0
-
-        lda >zb_p_odd
-        beq zbr_l_ev
-        lda #0x00F0
-        sta 24
-        lda >zb_p_cl
-        and #0x000F
-        sta 26
-        bra zbr_l_go
-    zbr_l_ev:
-        lda #0x000F
-        sta 24
-        lda >zb_p_cl
-        and #0x000F
-        asl a
-        asl a
-        asl a
-        asl a
-        sta 26
-    /* Tester la profondeur exacte du pixel gauche avant toute écriture du nibble. */
-    zbr_l_go:
-
-        lda >zb_p_zl
-        cmp [8],y
-        bcs zbr_lsk
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and 24
-        ora 26
-        sta [12]
-        rep #0x20
-    zbr_lsk:
-
-        lda >zb_p_mode
-        bne zbr_full
-        brl zbr_done
-
-
-    /* Avancer après le pixel gauche ; l'adresse couleur progresse seulement
-     * après un pixel impair.
-     */
-    zbr_full:
-        iny
-        iny
-        lda >zb_p_odd
-        beq zbr_lev
-        inc 12
-    zbr_lev:
-
-
-        lda 16
-        bne zbr_int
-        brl zbr_right
-
-
-    /* Traiter seul un premier pixel impair pour aligner le reste sur des paires. */
-    zbr_int:
-        lda 22
-        beq zbp_even
-
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs zbp_o1
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0xF0
-        ora 18
-        sta [12]
-        rep #0x20
-    zbp_o1:
-        iny
-        iny
-        inc 12
-        dec 16
-
-
-    zbp_even:
-        lda 16
-        lsr a
-        tax
-        beq zbp_tail
-
-    /* Avancer zacc en 32 bits pour chaque pixel ; propager C du mot bas au
-     * mot haut, puis tester Z.
-     */
-    zbp_pair:
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs zbp_e1
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0x0F
-        ora 20
-        sta [12]
-        rep #0x20
-    zbp_e1:
-        iny
-        iny
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs zbp_o2
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0xF0
-        ora 18
-        sta [12]
-        rep #0x20
-    zbp_o2:
-        iny
-        iny
-        inc 12
-        dex
-        bne zbp_pair
-
-
-    /* Traiter l'éventuel pixel pair résiduel après les paires. */
-    zbp_tail:
-        lda 16
-        and #1
-        bne zbp_t1
-        brl zbr_right
-    zbp_t1:
-
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs zbp_e2
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0x0F
-        ora 20
-        sta [12]
-        rep #0x20
-    zbp_e2:
-        iny
-        iny
-
-
-    /* Recalculer la parité et employer le code exact de l'extrémité droite. */
-    zbr_right:
-        lda >zb_p_n
-        clc
-        adc 22
-        and #1
-        beq zbr_r_ev
-        lda #0x00F0
-        sta 24
-        lda >zb_p_cr
-        and #0x000F
-        sta 26
-        bra zbr_r_go
-    zbr_r_ev:
-        lda #0x000F
-        sta 24
-        lda >zb_p_cr
-        and #0x000F
-        asl a
-        asl a
-        asl a
-        asl a
-        sta 26
-    zbr_r_go:
-        lda >zb_p_zr
-        cmp [8],y
-        bcs zbr_rsk
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and 24
-        ora 26
-        sta [12]
-        rep #0x20
-    zbr_rsk:
-
-
-    /* Libérer exactement le cadre avant de restaurer D et P. */
-    zbr_done:
-        rep #0x30
-        tsc
-        clc
-        adc #32
-        tcs
-        pld
-        plp
-    }
-}
 
 
 typedef struct {
@@ -890,7 +411,6 @@ static int zbfs_face_capacity = 0;
 
 static ZbEdge* zbfs_edge_buf = NULL;
 static int zbfs_edge_capacity = 0;
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -1201,29 +721,28 @@ static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY,
     /* Appliquer pan horizontal et calculer les adresses du premier pixel. */
     sx0 = x0 + pan_dx;
     raw = ZBuffer_PlaneAt(plane, (long)sx0, (long)screenY);
-    zb_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
-    zb_p_pptr = ZB_SHR_BASE + (unsigned long)screenY * 160UL +
+    zspan_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
+    zspan_p_pptr = ZB_SHR_BASE + (unsigned long)screenY * 160UL +
                 (unsigned long)(sx0 >> 1);
-    zb_p_odd = sx0 & 1;
-    zb_p_zl = ZBuffer_PlaneCode(raw);
-    zb_p_cl = fillColor;
-    zb_p_mode = 0;
+    zspan_p_odd = sx0 & 1;
+    zspan_p_zl = ZBuffer_PlaneCode(raw);
+    zspan_p_cl = fillColor;
+    zspan_p_mode = 0;
     /* Distinguer un seul pixel d'un span avec intérieur et extrémité droite. */
     if (x0 != x1) {
         nsteps = x1 - x0;
-        zb_p_zstep = (long)(((unsigned long)plane->gx << 4) & 0xFFFFFFFFUL);
-        zb_p_zacc = (long)(((raw << 4) + 0x8000UL) & 0xFFFFFFFFUL);
-        zb_p_zr = ZBuffer_PlaneCode(raw +
+        zspan_p_zstep = (long)(((unsigned long)plane->gx << 4) & 0xFFFFFFFFUL);
+        zspan_p_zacc = (long)(((raw << 4) + 0x8000UL) & 0xFFFFFFFFUL);
+        zspan_p_zr = ZBuffer_PlaneCode(raw +
                       (unsigned long)plane->gx * (unsigned long)nsteps);
-        zb_p_n = nsteps - 1;
-        zb_p_ci = fillColor;
-        zb_p_cr = fillColor;
-        zb_p_mode = 1;
+        zspan_p_n = nsteps - 1;
+        zspan_p_ci = fillColor;
+        zspan_p_cr = fillColor;
+        zspan_p_mode = 1;
     }
     /* Exécuter le noyau une seule fois pour le span complet. */
     ZBuffer_SpanRun();
 }
-
 
 static const unsigned char *zb_edge_flags = NULL;
 static unsigned long zb_edge_flag_count = 0UL;
@@ -1256,7 +775,6 @@ void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count)
     zb_edge_flags = flags;
     zb_edge_flag_count = count;
 }
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -1294,7 +812,6 @@ static void ZBuffer_PlotEdge(int x, int y, UWORD16 zq,
     cur = row[x];
     if (zq > cur) return;
 
-
     /* Éviter de faire passer un contour arrière au travers d'une surface à
      * cause du seul échantillon de plan.
      */
@@ -1302,7 +819,6 @@ static void ZBuffer_PlotEdge(int x, int y, UWORD16 zq,
     if (zq < cur) row[x] = zq;
     drawPixel(x, y, color);
 }
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -1380,7 +896,6 @@ static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0,
     zminor = (unsigned long)(steep ? plane->gx : plane->gy);
     if (vstep < 0L) zminor = 0UL - zminor;
 
-
     delta = (long)edge_z1 - (long)edge_z0;
     esign = (delta < 0L) ? -1L : 1L;
     magnitude = (unsigned long)((delta < 0L) ? -delta : delta);
@@ -1402,54 +917,6 @@ static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0,
         if (rem >= major) { rem -= major; v += vstep; raw += zminor; }
     }
 }
-
-
-/*
- * ----------------------------------------------------------------------------
- *  ZBFS_ClearTop12Lines
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Effacer les douze premières lignes de pixels SHR avant le rendu.
- *
- *  Paramètres :
- *    Aucun paramètre explicite.
- *
- *  Retour :
- *    Aucun.
- *
- *  Fonctionnement :
- *    Écrit 1920 octets depuis $E1:2000.
- *
- *    Compteur 16 bits décrémenté de deux, test BPL incluant le mot d'offset
- *    zéro ; accès longs indépendants de DBR.
- *
- *  Registres et indicateurs :
- *    Préserve P, A et X ; Y et DBR non utilisés.
- *
- * ----------------------------------------------------------------------------
- */
-static void ZBFS_ClearTop12Lines(void)
-{
-    asm {
-        /* Sauvegarder le contexte puis effacer les mots de $077E à zéro inclus. */
-        php
-        rep #0x30
-        pha
-        phx
-        lda #0
-        ldx #0x077E
-    zbfs_ct12_loop:
-        sta >0xE12000,x
-        dex
-        dex
-        bpl zbfs_ct12_loop
-        plx
-        pla
-        plp
-    }
-}
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -1499,10 +966,8 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
     ZbEdge* ed;
     ZbHit hits[MAX_SPAN_INTERSECTIONS];
 
-
     static int bucket[ZBUF_HEIGHT + 1];
     static int bucket_cur[ZBUF_HEIGHT + 1];
-
 
     if (!ZBFS_SizeFits(vcount, sizeof(float)) ||
         !ZBFS_SizeFits(vcount, sizeof(UWORD16)) ||
@@ -1552,7 +1017,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         zbfs_edge_capacity = total_edges;
     }
 
-
     frame_max_inv_z = 0.0f;
     /* Calculer les profondeurs inverses et les codes selon le format de
      * cette version.
@@ -1573,14 +1037,12 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
     SetPenMode(0);
     applyPalette(palette);
 
-
     clip_x_min = -pan_dx;
     clip_x_max = SCREEN_WIDTH - 1 - pan_dx;
     y_lo = -pan_dy;
     y_hi = SCREEN_HEIGHT - 1 - pan_dy;
 
     ZBuffer_Clear();
-
 
     /* Transformer l'histogramme en offsets cumulés pour classer les débuts
      * de faces.
@@ -1601,7 +1063,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         fmin = faces->miny[f];
         fmax = faces->maxy[f];
         if (fmax < y_lo || fmin > y_hi) continue;
-
 
         b = ((fmin > y_lo) ? fmin : y_lo) - y_lo;
         zbfs_face_start[f] = b;
@@ -1633,15 +1094,12 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
                 continue;
             }
 
-
             sx = (((long)vtx->x2d[vid2] - (long)vtx->x2d[vid1]) * 4096L) / (long)dy;
-
 
             if (dy > 0) { ya = y1; yb = y2; xs = 0; }
             else        { ya = y2; yb = y1; xs = vtx->x2d[vid2] - vtx->x2d[vid1]; }
 
             ex = (long)xs * 4096L;
-
 
             if (ya < y_lo && yb > y_lo) {
                 skip = (long)(y_lo - ya);
@@ -1655,7 +1113,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         }
     }
 
-
     for (b = 0; b < ZBUF_HEIGHT; b++) bucket[b + 1] += bucket[b];
     for (b = 0; b <= ZBUF_HEIGHT; b++) bucket_cur[b] = bucket[b];
     for (f = 0; f < fcount; f++) {
@@ -1663,16 +1120,13 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         if (b >= 0) zbfs_face_sorted[bucket_cur[b]++] = f;
     }
 
-
-    ZBFS_ClearTop12Lines();
-
+    screenClearTopLines(12);
 
     /* Démarrer la liste des faces actives, puis balayer les lignes visibles. */
     active_count = 0;
     for (y = y_lo; y <= y_hi; y++) {
         int screenY = y + pan_dy;
         int row = y - y_lo;
-
 
         /* Insérer les faces commençant sur cette ligne en gardant l'ordre
          * d'identifiants.
@@ -1704,7 +1158,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
             offt = faces->vertex_indices_ptr[f];
             hit_count = 0;
 
-
             ed = zbfs_edge_buf + offt;
             for (k = 0; k < n; k++, ed++) {
                 if (y < ed->ya || y >= ed->yb) continue;
@@ -1717,7 +1170,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
             }
 
             if (hit_count < 2) continue;
-
 
             /* Ordonner les intersections : échange simple pour deux, tri par
              * insertion au-delà.
@@ -1743,7 +1195,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
 
             fillColor  = zbfs_face_fill[f];
 
-
             {
                 int p;
                 /* Apparier les intersections par parité, clipper les spans
@@ -1754,7 +1205,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
                     long right = hits[p + 1].x;
                     long xa, xb;
                     int x0, x1;
-
 
                     xa = (left >= 0L) ? ((left + 4095L) >> 12) :
                                          -((-left) >> 12);
@@ -1770,7 +1220,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         }
         active_count = keep;
     }
-
 
     for (f = 0; f < fcount; f++) {
         int n, offt, color, nudge;
@@ -1797,7 +1246,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
             sx1 = (long)vtx->x2d[vid2] + (long)pan_dx;
             sy1 = (long)vtx->y2d[vid2] + (long)pan_dy;
 
-
             if (sx0 < -32768L || sx0 > 32767L ||
                 sy0 < -32768L || sy0 > 32767L ||
                 sx1 < -32768L || sx1 > 32767L ||
@@ -1809,7 +1257,6 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         }
     }
 }
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -1837,7 +1284,6 @@ void renderModelFullscreenZBuffer_fastV2(Model3D* model)
     ZBuffer_RenderCore(model, 0);
 }
 
-
 /*
  * ----------------------------------------------------------------------------
  *  renderModelFullscreenZBuffer_biasedV2
@@ -1863,7 +1309,6 @@ void renderModelFullscreenZBuffer_biasedV2(Model3D* model)
     /* Transmettre explicitement le choix du biais au noyau commun. */
     ZBuffer_RenderCore(model, 1);
 }
-
 
 /*
  * ----------------------------------------------------------------------------

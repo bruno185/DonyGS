@@ -24,7 +24,6 @@
  * ============================================================================
  */
 
-
 #define FRACTIONAL_CACHE_BLOCK_SIZE 256
 #define FRACTIONAL_CACHE_BLOCKS ((MAX_VERTICES + FRACTIONAL_CACHE_BLOCK_SIZE - 1) / FRACTIONAL_CACHE_BLOCK_SIZE)
 typedef struct {
@@ -460,7 +459,6 @@ static int on_seg_ll(int ax,int ay,int bx,int by,int cx,int cy) {
            ((ay<=cy && cy<=by)||(by<=cy && cy<=ay));
 }
 
-
 /*
  * ----------------------------------------------------------------------------
  *  segs_intersect_int_fixed64
@@ -561,10 +559,8 @@ static int point_in_poly_int(int px,int py,FaceArrays3D* faces, VertexArrays3D* 
         vj=faces->vertex_indices_buffer[off+next]-1;
         xj=vtx->x2d[vj];yj=vtx->y2d[vj];
 
-
         if(on_seg_ll(xi,yi,xj,yj,px,py) && orient_ll(xi,yi,xj,yj,px,py)==0)return 0;
         if((yi>py)!=(yj>py)){
-
 
             int dx=xj-xi,dpy=py-yi,dy=yj-yi;
             long crossing=(long)dx*(long)dpy/(long)dy+(long)xi;
@@ -628,7 +624,6 @@ static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1
     return 0;
 }
 
-
 /*
  * ----------------------------------------------------------------------------
  *  compute_intersection_centroid_ordered_fixed_work
@@ -666,7 +661,6 @@ static int faces_vertices_equal(FaceArrays3D* faces, VertexArrays3D* vtx, int f1
  */
 static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int subj, int clip, int* outx, int* outy, long long* out_area2, double* shared_work, double* fractional_x, double* fractional_y, double* fractional_area2) {
 
-
     /* Vérifier les faces et les longueurs avant d'organiser les espaces de
      * travail.
      */
@@ -679,7 +673,6 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     if (sn < 3 || cn < 3) {
         debug_clip_fixed_vcount = 0; debug_clip_raw_area2 = 0; debug_clip_fixed_area = 0.0; return 0;
     }
-
 
     double *work_storage;
     double *precise_sx, *precise_sy, *precise_cx, *precise_cy;
@@ -733,7 +726,6 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     }
     }
 
-
     if (fractional) {
         /* En subpixel, construire les contours normalisés et réutiliser les
          * vecteurs du clip.
@@ -750,7 +742,6 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             return 0;
         }
     }
-
 
     if (!fractional) {
         /* Normaliser le winding des deux contours entiers pour conserver le
@@ -875,7 +866,6 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
             if (sj == cur_n) sj = 0;
             sx2d = buf_x1[sj]; sy2d = buf_y1[sj];
 
-
             side2 = (sj==0)?first_side:
                     ex * (sy2d - cy1d) - ey * (sx2d - cx1d);
             inside2 = (side2 >= 0.0);
@@ -890,7 +880,6 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
                 }
             } else if (inside1 != inside2) {
                 double dx = sx2d - sx1d, dy = sy2d - sy1d;
-
 
                 double denom = fractional ? side1 - side2 : dx * ey - dy * ex;
                 double t = 0.0;
@@ -931,7 +920,6 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         }
     }
 
-
     /* Calculer aire et centroïde subpixel autour d'une origine locale pour
      * réduire la perte numérique.
      */
@@ -968,7 +956,6 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         if (!shared_work) free(work_storage);
         return 1;
     }
-
 
     /* Pour la voie entière, arrondir puis retirer doublons adjacents et
      * points colinéaires.
@@ -1011,7 +998,6 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
         for (int i = 0; i < final_n; ++i) fprintf(dlog, "%d %d\n", out_px[i], out_py[i]);
         fflush(dlog);
     }
-
 
     /* Calculer aire orientée et moments ; prendre les sommes 32 bits
      * seulement sous les bornes vérifiées.
@@ -1076,7 +1062,6 @@ static int compute_intersection_centroid_ordered_fixed_work(Model3D* model, int 
     long long abs_raw = (raw_area2_signed >= 0) ? raw_area2_signed : -raw_area2_signed;
     debug_clip_raw_area2 = abs_raw;
     debug_clip_fixed_area = fabs((double)raw_area2_signed) * 0.5;
-
 
     /* Normaliser le signe du dénominateur et arrondir le centroïde avec une
      * division 32 bits si prouvée sûre.
@@ -1250,7 +1235,6 @@ static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, i
      */
     if (out_fallback) *out_fallback = 0;
 
-
     {
         FaceArrays3D* f = &model->faces;
         int sn, cn;
@@ -1288,7 +1272,6 @@ static int compute_intersection_centroid_ordered_fixed_tryboth(Model3D* model, i
     if (debug_clip_fixed_vcount >= 3) { if (out_fallback) *out_fallback = 0;  return res2; }
 
     }
-
 
     FaceArrays3D* faces = &model->faces;
     VertexArrays3D* vtx = &model->vertices;
@@ -1476,14 +1459,12 @@ static int compute_intersection_region_bbox(Model3D* model, int subj, int clip, 
         int h_left = (raw_left < raw_right) ? raw_left : raw_right;
         int h_right = (raw_left < raw_right) ? raw_right : raw_left;
 
-
         *ix0 = h_left; *iy0 = h_top; *ix1 = h_right; *iy1 = h_bottom;
         if (*ix0 <= *ix1 && *iy0 <= *iy1) {
             /* Estimer la taille par l'aire de bbox ; ce champ ne représente
              * pas l'aire exacte de région.
              */
             if (out_area2) *out_area2 = (long long)((*ix1 - *ix0) * (*iy1 - *iy0));
-
 
             HUnlock((Handle)r3);
             DisposeRgn(r1); DisposeRgn(r2); DisposeRgn(r3);
@@ -1529,7 +1510,6 @@ static int compute_intersection_centroid_ordered_qd_fixed(Model3D* model, int su
     return 1;
 }
 
-
 segment "ordering";
 
 /*
@@ -1574,7 +1554,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
     /* Démarrer instrumentation et garde temporelle avant le rejet de boîtes. */
     overlapCheckCount++;
 
-
     long proj_start_tick = GetTick();
     const long PROJ_OVERLAP_WATCHDOG_MS = 1000;
     int minx1 = faces->minx[f1];
@@ -1586,7 +1565,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
     int miny2 = faces->miny[f2];
     int maxy2 = faces->maxy[f2];
 
-
     if (maxx1 <= minx2 ||
         maxx2 <= minx1 ||
         maxy1 <= miny2 ||
@@ -1596,7 +1574,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
     }
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
-
 
     int f2_precomputed = (n2 <= MAX_FACE_VERTICES);
     int f2_cx[MAX_FACE_VERTICES];
@@ -1641,7 +1618,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
             f2_maxy[j] = (cy > dy) ? cy : dy;
         }
     }
-
 
     /* Chercher des indices de chevauchement sans encore valider une aire commune. */
     int candidate = 0;
@@ -1720,7 +1696,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                         cmaxy = (cy > dy) ? cy : dy;
                     }
 
-
                     if (amaxx <= cminx ||
                         cmaxx <= aminx ||
                         amaxy <= cminy ||
@@ -1745,7 +1720,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                 return 1;
         }
     }
-
 
     /* Sans croisement propre, chercher un sommet strictement intérieur ; les
      * recherches suivantes affinent le cas resté indécis.
@@ -1827,7 +1801,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
         }
     }
 
-
     if (!candidate) {
         /* Reconnaître des contours projetés égaux, sans en déduire une
          * égalité des faces 3D.
@@ -1841,7 +1814,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
             return 1;
         }
     }
-
 
     {
         int oxmin;
@@ -1866,7 +1838,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
             return 0;
         }
 
-
         {
             int cx;
             int cy;
@@ -1885,7 +1856,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                 return 1;
             }
         }
-
 
         {
             int ixmin;
@@ -1951,7 +1921,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
             }
         }
 
-
         overlapClipCalls++;
         {
             /* Préparer les seuils d'aire et une borne maximale liée à la
@@ -1987,7 +1956,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                     bbox_pixels *
                     scale2;
             }
-
 
             {
                 int tx;
@@ -2031,7 +1999,6 @@ static int projected_polygons_overlap_v1(Model3D* model, int f1, int f2)
                     return 1;
                 }
             }
-
 
             {
                 int tx2;
@@ -2113,7 +2080,6 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
     int off1 = faces->vertex_indices_ptr[f1];
     int off2 = faces->vertex_indices_ptr[f2];
 
-
     /* Chercher une intersection propre entre les deux contours. */
     for (int i = 0; i < n1; ++i) {
         int i2 = (i+1) % n1;
@@ -2136,7 +2102,6 @@ static int projected_polygons_overlap_simple(Model3D* model, int f1, int f2) {
             if (segs_intersect_int(ax,ay,bx,by,cx,cy,dx,dy)) return 1;
         }
     }
-
 
     /* Essayer ensuite les sommets de chaque face strictement à l'intérieur
      * de l'autre.
@@ -2198,7 +2163,6 @@ static int projected_polygons_overlap_raster_x10(
         return 0;
     faces = &model->faces;
 
-
     if (faces->maxx[f1] < faces->minx[f2] ||
         faces->maxx[f2] < faces->minx[f1] ||
         faces->maxy[f1] < faces->miny[f2] ||
@@ -2222,9 +2186,7 @@ static int projected_polygons_overlap_raster_x10(
     return result;
 }
 
-
 #define RASTER_MAX_INTERSECTIONS MAX_FACE_VERTICES
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -2311,10 +2273,8 @@ static int raster_intervals_share_pixel(
         (a2 < b2) ?
         a2 : b2;
 
-
     if (left >= right)
         return 0;
-
 
     /* Chercher le premier entier impair strictement après la borne gauche. */
     first = left + 1;
@@ -2322,7 +2282,6 @@ static int raster_intervals_share_pixel(
         ++first;
     return (first < right);
 }
-
 
 typedef struct {
     long x1;
@@ -2439,7 +2398,6 @@ static int raster_prepare_edges_incremental(
         ymin = (y1 < y2) ? y1 : y2;
         ymax = (y1 > y2) ? y1 : y2;
 
-
         if (ymax <= range_min ||
             ymin > range_max)
         {
@@ -2453,19 +2411,16 @@ static int raster_prepare_edges_incremental(
         e->ymin = ymin;
         e->ymax = ymax;
 
-
         if (dy < 0) {
             dy = -dy;
             dx = -dx;
         }
         e->divisor = dy;
 
-
         first_y = range_min;
         if (first_y < ymin)
             first_y = ymin + 1L;
         e->start_y = first_y;
-
 
         numerator =
             (long long)(first_y - y1) *
@@ -2475,7 +2430,6 @@ static int raster_prepare_edges_incremental(
             dy,
             &e->quotient,
             &e->remainder);
-
 
         step = (long long)dx * 2LL;
         raster_euclidean_divide(
@@ -2594,7 +2548,6 @@ static int raster_incremental_scanline(
             intersections[count++] =
                 raster_edge_intersection(e);
         }
-
 
         if (scan_y < e->ymax)
             raster_advance_edge(e);
@@ -2745,10 +2698,9 @@ static int projected_polygons_overlap_raster(
     return 0;
 }
 
-
 /*
  * ----------------------------------------------------------------------------
- *  overlap_v2_cross
+ *  overlap_cross_double
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
@@ -2766,8 +2718,8 @@ static int projected_polygons_overlap_raster(
  *
  * ----------------------------------------------------------------------------
  */
-static double overlap_v2_cross(double ax, double ay, double bx, double by,
-                               double px, double py)
+static double overlap_cross_double(double ax, double ay, double bx, double by,
+                                  double px, double py)
 {
     /* Conserver la même convention d'orientation dans les variantes flottantes. */
     return (bx-ax)*(py-ay) - (by-ay)*(px-ax);
@@ -2815,7 +2767,7 @@ static int overlap_v2_point_in_face(Model3D *model, int face,
         ay = (double)vtx->y2d[faces->vertex_indices_buffer[off+i]-1];
         bx = (double)vtx->x2d[faces->vertex_indices_buffer[off+j]-1];
         by = (double)vtx->y2d[faces->vertex_indices_buffer[off+j]-1];
-        c = overlap_v2_cross(ax,ay,bx,by,px,py);
+        c = overlap_cross_double(ax,ay,bx,by,px,py);
         minx = (ax < bx) ? ax : bx;
         maxx = (ax > bx) ? ax : bx;
         miny = (ay < by) ? ay : by;
@@ -2855,12 +2807,12 @@ static int overlap_v2_proper_cross(double ax, double ay, double bx, double by,
 {
     double c1,c2,c3,c4;
     /* Tester les côtés dans les deux sens sans accepter de déterminant nul. */
-    c1=overlap_v2_cross(ax,ay,bx,by,cx,cy);
-    c2=overlap_v2_cross(ax,ay,bx,by,dx,dy);
+    c1=overlap_cross_double(ax,ay,bx,by,cx,cy);
+    c2=overlap_cross_double(ax,ay,bx,by,dx,dy);
     if (!((c1 > 0.0 && c2 < 0.0) ||
           (c1 < 0.0 && c2 > 0.0))) return 0;
-    c3=overlap_v2_cross(cx,cy,dx,dy,ax,ay);
-    c4=overlap_v2_cross(cx,cy,dx,dy,bx,by);
+    c3=overlap_cross_double(cx,cy,dx,dy,ax,ay);
+    c4=overlap_cross_double(cx,cy,dx,dy,bx,by);
     return ((c3 > 0.0 && c4 < 0.0) ||
             (c3 < 0.0 && c4 > 0.0));
 }
@@ -2999,130 +2951,6 @@ static int projected_polygons_overlap_v2_original(Model3D *model, int f1, int f2
     return overlap_v2_edge_probes(model,f1,f2);
 }
 
-
-/*
- * ----------------------------------------------------------------------------
- *  overlap_v2_opt_cross
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Calculer le déterminant orienté de AB et AP en double.
- *
- *  Paramètres :
- *    [entrée] ax/ay, bx/by et px/py.
- *
- *  Retour :
- *    (bx-ax)*(py-ay)-(by-ay)*(px-ax).
- *
- *  Fonctionnement :
- *    Aucun état modifié ; zéro signifie colinéaire selon l'arithmétique
- *    double.
- *
- * ----------------------------------------------------------------------------
- */
-static double overlap_v2_opt_cross(double ax, double ay, double bx, double by,
-                                   double px, double py)
-{
-    /* Conserver la même convention d'orientation dans les variantes flottantes. */
-    return (bx-ax)*(py-ay) - (by-ay)*(px-ax);
-}
-
-/*
- * ----------------------------------------------------------------------------
- *  overlap_v2_opt_point_in_face
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Classer un point double par rapport au contour projeté entier d'une
- *    face.
- *
- *  Paramètres :
- *    [entrée] model, face valide et px/py.
- *
- *  Retour :
- *    -1 sur le contour, 1 intérieur, 0 extérieur.
- *
- *  Fonctionnement :
- *    Parité du rayon horizontal et test explicite de colinéarité. La
- *    variante optimisée filtre le test de bord par la boîte de l'arête.
- *
- * ----------------------------------------------------------------------------
- */
-static int overlap_v2_opt_point_in_face(Model3D *model, int face,
-                                        double px, double py)
-{
-    FaceArrays3D *faces;
-    VertexArrays3D *vtx;
-    int *indices;
-    int *x2d, *y2d;
-    int n, off, i, j, inside;
-    double ax, ay, bx, by, c, ix;
-    double minx, maxx, miny, maxy;
-
-    faces = &model->faces;
-    vtx = &model->vertices;
-    indices = faces->vertex_indices_buffer;
-    x2d = vtx->x2d;
-    y2d = vtx->y2d;
-    n = faces->vertex_count[face];
-    off = faces->vertex_indices_ptr[face];
-    /* Parcourir les arêtes en distinguant bord et parité intérieure. */
-    inside = 0;
-
-    j = indices[off+n-1]-1;
-    bx = (double)x2d[j];
-    by = (double)y2d[j];
-    for (i=0; i<n; ++i) {
-        j = indices[off+i]-1;
-        ax = bx; ay = by;
-        bx = (double)x2d[j];
-        by = (double)y2d[j];
-
-
-        minx = (ax < bx) ? ax : bx;
-        maxx = (ax > bx) ? ax : bx;
-        miny = (ay < by) ? ay : by;
-        maxy = (ay > by) ? ay : by;
-        if (px >= minx && px <= maxx &&
-            py >= miny && py <= maxy) {
-            c = overlap_v2_opt_cross(ax,ay,bx,by,px,py);
-            if (c == 0.0) return -1;
-        }
-        if ((ay > py) != (by > py)) {
-            ix = ax + (py-ay)*(bx-ax)/(by-ay);
-            if (ix > px) inside = !inside;
-        }
-    }
-    return inside;
-}
-
-
-/*
- * ----------------------------------------------------------------------------
- *  ovmax_cross
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Calculer le déterminant orienté de AB et AP en double.
- *
- *  Paramètres :
- *    [entrée] ax/ay, bx/by et px/py.
- *
- *  Retour :
- *    (bx-ax)*(py-ay)-(by-ay)*(px-ax).
- *
- *  Fonctionnement :
- *    Aucun état modifié ; zéro signifie colinéaire selon l'arithmétique
- *    double.
- *
- * ----------------------------------------------------------------------------
- */
-static double ovmax_cross(double ax,double ay,double bx,double by,double px,double py)
-{
-    /* Conserver la même convention d'orientation dans les variantes flottantes. */
-    return (bx-ax)*(py-ay)-(by-ay)*(px-ax);
-}
-
 /*
  * ----------------------------------------------------------------------------
  *  ovmax_inside
@@ -3160,7 +2988,7 @@ static int ovmax_inside(const int *ids,const int *xs,const int *ys,
 
         if ((px>=ax && px<=bx || px>=bx && px<=ax) &&
             (py>=ay && py<=by || py>=by && py<=ay) &&
-            ovmax_cross(ax,ay,bx,by,px,py)==0.0) return -1;
+            overlap_cross_double(ax,ay,bx,by,px,py)==0.0) return -1;
         if ((ay>py)!=(by>py)) {
             ix=ax+(py-ay)*(bx-ax)/(by-ay);
             if(ix>px) inside=!inside;
@@ -3292,11 +3120,11 @@ static int projected_polygons_overlap_v2_max(Model3D *model,int f1,int f2)
                (icy<idy?icy:idy)>=maxay) continue;
             cx=(double)icx; cy=(double)icy;
             dx=(double)idx; dy=(double)idy;
-            c1=ovmax_cross(ax,ay,bx,by,cx,cy);
-            c2=ovmax_cross(ax,ay,bx,by,dx,dy);
+            c1=overlap_cross_double(ax,ay,bx,by,cx,cy);
+            c2=overlap_cross_double(ax,ay,bx,by,dx,dy);
             if(!((c1>0.0 && c2<0.0)||(c1<0.0 && c2>0.0))) continue;
-            c3=ovmax_cross(cx,cy,dx,dy,ax,ay);
-            c4=ovmax_cross(cx,cy,dx,dy,bx,by);
+            c3=overlap_cross_double(cx,cy,dx,dy,ax,ay);
+            c4=overlap_cross_double(cx,cy,dx,dy,bx,by);
             if((c3>0.0 && c4<0.0)||(c3<0.0 && c4>0.0)) return 1;
         }
     }
@@ -3312,7 +3140,6 @@ static int projected_polygons_overlap_v2_max(Model3D *model,int f1,int f2)
     }
     return ovmax_probe(ids,xs,ys,off1,n1,off2,n2);
 }
-
 
 typedef signed long long ovf64;
 
@@ -3392,7 +3219,6 @@ static int ovf_inside(const int *ids,const int *xs,const int *ys,
         }
         if (((ovf64)ay*d>ny)!=((ovf64)by*d>ny)) {
 
-
             c=((ovf64)bx-ax)*rhs-((ovf64)by-ay)*lhs;
             if (((by>ay) && c>0) || ((by<ay) && c<0)) inside=!inside;
         }
@@ -3442,7 +3268,6 @@ static int ovf_probe(const int *ids,const int *xs,const int *ys,
             scale=(dx<0)?-(ovf64)dx:dx;
             scale+=(dy<0)?-(ovf64)dy:dy;
             if(scale==0) continue;
-
 
             d=2048*scale;
             for(side=-1;side<=1;side+=2) {
@@ -3543,45 +3368,6 @@ static int projected_polygons_overlap_v2_fixed64(Model3D *model,int f1,int f2)
     }
     return ovf_probe(ids,xs,ys,off1,n1,off2,n2);
 }
-
-
-#define OVERLAP_V2_IMPLEMENTATION 3
-
-/*
- * ----------------------------------------------------------------------------
- *  projected_polygons_overlap_v2
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Choisir à la compilation une implémentation historique de V2.
- *
- *  Paramètres :
- *    [entrée] model, f1/f2
- *
- *  Retour :
- *    Booléen de la variante choisie.
- *
- *  Fonctionnement :
- *    OVERLAP_V2_IMPLEMENTATION vaut 1 original, 2 Max ou 3 Fixed64 ; valeur
- *    invalide interdite par #error. Ce wrapper est distinct du choix runtime
- *    overlap_method.
- *
- * ----------------------------------------------------------------------------
- */
-static int projected_polygons_overlap_v2(Model3D *model,int f1,int f2)
-{
-/* Déléguer à la variante sélectionnée sans calcul supplémentaire. */
-#if OVERLAP_V2_IMPLEMENTATION == 1
-    return projected_polygons_overlap_v2_original(model,f1,f2);
-#elif OVERLAP_V2_IMPLEMENTATION == 2
-    return projected_polygons_overlap_v2_max(model,f1,f2);
-#elif OVERLAP_V2_IMPLEMENTATION == 3
-    return projected_polygons_overlap_v2_fixed64(model,f1,f2);
-#else
-#error Invalid OVERLAP_V2_IMPLEMENTATION value
-#endif
-}
-
 
 #define OVERLAP_SIMPLE      0
 #define OVERLAP_V1          1
@@ -3732,7 +3518,6 @@ static int select_overlap_method(int current_method)
         if (fgets(user_choice, sizeof(user_choice), stdin) == NULL)
             return current_method;
 
-
         if (user_choice[0] == '\n' ||
             user_choice[0] == '\r' ||
             user_choice[0] == '\0')
@@ -3765,7 +3550,6 @@ static int select_overlap_method(int current_method)
         printf("Invalid selection.\n");
     }
 }
-
 
 #define OVERLAP_BENCH_ALGOS 6
 #define OVERLAP_BENCH_REPEAT 1
@@ -3937,7 +3721,6 @@ static void benchmark_projected_overlap_all(Model3D *model,
         }
         calculateFaceDepths(model, NULL, nf);
 
-
         /* Chronométrer chaque méthode dans des blocs séparés des écritures
          * disque.
          */
@@ -3959,7 +3742,6 @@ static void benchmark_projected_overlap_all(Model3D *model,
             total_ticks[alg] += angle_ticks[alg];
             timing_sink += checksum;
         }
-
 
         for (f1 = 0; f1 < nf-1; ++f1) {
             for (f2 = f1+1; f2 < nf; ++f2) {

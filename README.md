@@ -83,7 +83,7 @@ Les méthodes de classement produisent `faces.sorted_face_indices`, permutation 
 | `3` | NEWELL SANCHA | `painter_newell_sancha` : balayage des intervalles Z, liste de candidats et insertions avec table inverse des positions. |
 | `4` | GEO | `painter_geoV2` : correction de voisins par plans puis chevauchement et ray casting ; cache et nombre de passes borné. |
 | `5` | GEO V3 | `painter_geoV3` : tri stable par `z_max`, sélection et reprise après permutation ; filtrage assembleur et replis de ray casting. |
-| `6` | CORRECT | `painter_correct` : partition selon `plane_d`, insertions locales ; sa passe arrière est sautée par un `goto`. |
+| `6` | CORRECT | `painter_correct` : partition selon `plane_d`, puis insertions locales sur le groupe avant. |
 | `7` | CORRECT V2 | `painter_correctV2` : variante des insertions et vérifications croisées sans culling initial. |
 
 Aucun de ces sept chemins ne découpe automatiquement les faces pendant le tri. Le découpage appartient à la préparation expérimentale des intersections. `painter_newell_sancha_selection` est présent, mais hors du dispatch de `processModelFast`.
@@ -132,10 +132,11 @@ Le programme forme une unité de compilation par inclusions de fichiers C ; ses 
 | `dony.c`, `dony_scan_asm.c` | GEO V3 et rejet rapide des candidats. |
 | `geo_relation_asm.c`, `face_depth_asm.c` | Classification par plan ; métriques et Newell. |
 | `overlap_raster.c` | Chevauchement, clipping, régions, projection subpixel et benchmark. |
-| `zbuffer_scanline.c` | Variantes scanline et écriture d’un pixel SHR. |
+| `zbuffer_scanline.c` | Rendu scanline V3, avec ou sans biais, et écriture d’un pixel SHR. |
+| `zbuffer_common.c` | Interpolation entière des codes de profondeur et noyau assembleur commun aux spans direct/offscreen. |
 | `zbuffer_fullscreen.c`, `.h` | Z-buffer et rendu direct avec contours sur plan. |
 | `zbuffer_fullscreen_offscreen.c` | Rendu en RAM et transfert vers SHR. |
-| `screen_save_restore.c` | Copie de 32768 octets SHR pour les vues temporaires. |
+| `screen_save_restore.c` | Copie de 32768 octets SHR pour les vues temporaires et effacement paramétrable des lignes du haut. |
 | `color.c`, `asm.h` | Sélecteur de couleurs ; clavier et soft switches SHR. |
 | `DEPLOY.py` | Compilation Golden Gate, lien et déploiement dans les images disque. |
 

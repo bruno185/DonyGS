@@ -60,7 +60,6 @@ loop:
         rtl
         }
 
-
 /*
  * ----------------------------------------------------------------------------
  *  getkeypress
@@ -97,11 +96,9 @@ loop:
         rtl
         }
 
-
 #define KBD       0xC000
 #define KBDSTRB   0xC010
 #define OASK      0xC061
-
 
 /*
  * ----------------------------------------------------------------------------
@@ -151,46 +148,6 @@ loop:
         rtl
         }
 
-
-/*
- * ----------------------------------------------------------------------------
- *  debug
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Présenter la signature A=$AAAA, X=$BBBB à un breakpoint d'émulateur.
- *
- *  Paramètres :
- *    Aucun paramètre explicite.
- *
- *  Retour :
- *    Aucun contrat de valeur ; A et X sont sauvegardés puis restaurés.
- *
- *  Sorties et effets de bord :
- *    modifie les indicateurs.
- *
- *  Fonctionnement :
- *    Entrées et
- *
- *  Préconditions :
- *    tailles de registres compatibles avec les immédiats 16 bits. Le
- *    breakpoint doit être configuré dans l'émulateur.
- *
- * ----------------------------------------------------------------------------
- */
-asm  debug ()
-        {
-        /* Sauvegarder les registres avant de présenter la signature de diagnostic. */
-        pha
-        phx
-        lda #0xAAAA
-        ldx #0xBBBB
-        plx
-        pla
-        rtl
-        }
-
-
 /*
  * ----------------------------------------------------------------------------
  *  shroff
@@ -216,37 +173,6 @@ asm shroff ()
         sep #0x20
         /* Écriture matérielle sur un octet ; REP impose ensuite les tailles de sortie. */
         lda #0x41
-        sta >0xC029
-        rep #0x30
-        rtl
-        }
-
-
-/*
- * ----------------------------------------------------------------------------
- *  shron
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Activer l'affichage SHR en écrivant $C1 dans $00C029.
- *
- *  Paramètres :
- *    Aucun paramètre explicite.
- *
- *  Retour :
- *    Aucun.
- *
- *  Sorties et effets de bord :
- *    A et les indicateurs sont modifiés ; la routine termine avec A, X et Y
- *    configurés sur 16 bits.
- *
- * ----------------------------------------------------------------------------
- */
-asm shron ()
-        {
-        sep #0x20
-        /* Écriture matérielle sur un octet ; REP impose ensuite les tailles de sortie. */
-        lda #0xC1
         sta >0xC029
         rep #0x30
         rtl
