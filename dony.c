@@ -6,14 +6,16 @@
  *  Rôle :
  *    Construire un ordre arrière-vers-avant selon une stratégie inspirée de
  *    Robert Dony : sélectionner une face, comparer les candidates et
- *    reprendre la sélection après permutation.
+ *    reprendre la sélection après permutation. Le repair réutilise ce
+ *    parcours depuis la permutation courante.
  *
  *  Organisation :
  *    Un tri stable par profondeur maximale prépare le parcours. Les
  *    intervalles disjoints sont rejetés, puis les plans sont testés dans les
  *    deux sens. Les cas ambigus utilisent le chevauchement projeté et le ray
  *    casting hiérarchique. Des stamps et un cache de paires limitent les
- *    cycles.
+ *    cycles. Le callback facultatif du repair confirme chaque échange,
+ *    sans dupliquer les décisions de classement.
  *
  *  Dépendances et contraintes :
  *    Inclus par engine.c ; dony_scan_asm.c fournit le filtrage par défaut.
@@ -216,35 +218,39 @@ static void sort_by_zmax(int *sorted,Fixed32 *z_max,int nf)
 
 /*
  * ----------------------------------------------------------------------------
- *  painter_geoV3
+ *  geov3_run
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Construire l'ordre arrière-vers-avant par sélection et reprise des
- *    comparaisons.
+ *    Partager le parcours GEO V3 entre le classement et le repair interactif.
  *
  *  Paramètres :
- *    [entrée] model et face_count, nombre de faces à ordonner.
+ *    [entrée] model et face_count : modèle aux métriques de vue à jour.
+ *    [entrée] preserve_order : 0 initialise et trie par zmax ; 1 part de la
+ *    permutation courante, sans tri initial silencieux.
+ *    [entrée] on_exchange/context : confirmation facultative et son contexte.
+ *    Le callback reçoit les deux faces, leurs positions avant échange et la
+ *    raison ; -1 arrête, 0 ignore cet échange, 1 l'applique. NULL applique tout.
  *
  *  Retour :
- *    Aucun.
- *
- *  Sorties et effets de bord :
- *    model->faces.sorted_face_indices
+ *    Nombre d'échanges appliqués, y compris avant un arrêt demandé ; -1 en
+ *    cas d'échec d'allocation du repair. Le classement conserve son erreur
+ *    fatale historique d'allocation.
  *
  *  Fonctionnement :
- *    Initialise l'ordre canonique, trie par zmax, rejette les intervalles
- *    disjoints, puis teste les plans dans les deux sens. Une face devant
- *    précéder P est permutée en tête de la passe, qui reprend avec ce
- *    nouveau P. En cas d'ambiguïté ou de cycle, utilise le chevauchement
- *    projeté et le ray casting hiérarchique. Aucun découpage : des cycles
- *    peuvent rester insolubles. État statique conservé entre appels ; arrêt
- *    du processus si la réserve échoue.
+ *    Réutilise sans duplication le filtrage C/assembleur, les deux tests de
+ *    plans, les stamps anti-cycle, le chevauchement et le rayon hiérarchique
+ *    GEO V3. Le callback intervient avant chaque échange, sans modifier la
+ *    géométrie ni la permutation. Un refus avance au candidat suivant.
+ *    Les limites de permutations et les cas non résolus restent ceux de GEO V3.
+ *    Les buffers persistants sont partagés : ce parcours n'est pas réentrant.
  *
  * ----------------------------------------------------------------------------
  */
-void painter_geoV3(Model3D* model, int face_count)
+static int geov3_run(Model3D* model, int face_count, int preserve_order,
+                     GeoV3ExchangeCallback on_exchange, void *context)
 {
+    if (!model || face_count <= 0) return 0;
     FaceArrays3D* faces = &model->faces;
     int* sorted = faces->sorted_face_indices;
 
@@ -255,6 +261,7 @@ void painter_geoV3(Model3D* model, int face_count)
 
     int nf = face_count;
     int fs = 0;
+    int exchanges = 0;
 
 
     /* Invalider explicitement les relations préparées avant le tri de cette vue. */
@@ -268,6 +275,11 @@ void painter_geoV3(Model3D* model, int face_count)
 
         if (!dd_flag || !dony_ray_pairs_reserve(&ray_pairs, face_count)) {
             fprintf(stderr, "painter_geoV3: allocation failed\n");
+            if (preserve_order) {
+                free(dd_flag); dd_flag = NULL; allocated = 0;
+                memset(ray_pairs.stamps, 0, sizeof(ray_pairs.stamps));
+                return -1;
+            }
             exit(1);
         }
 
@@ -279,14 +291,13 @@ void painter_geoV3(Model3D* model, int face_count)
     /* Repartir de l'ordre canonique pour que les égalités ne dépendent pas
      * de la vue précédente.
      */
-    for (int i = 0; i < nf; ++i)
-        sorted[i] = i;
-
-
-    /* Produire l'ordre initial et préparer le filtrage assembleur si
-     * celui-ci est activé.
+    if (!preserve_order) {
+        for (int i = 0; i < nf; ++i) sorted[i] = i;
+        sort_by_zmax(sorted, faces->z_max, nf);
+    }
+    /* Le filtrage parcourt la permutation choisie, sans supposer que le
+     * repair a préalablement trié les profondeurs.
      */
-    sort_by_zmax(sorted, faces->z_max, nf);
 #if !defined(GEOV3_DISABLE_ASM_SCAN)
     GeoV3_ScanSetup(faces, sorted, nf);
 #endif
@@ -407,8 +418,16 @@ do_permute:
             if (++permutes_this_pass > face_count)
                 goto do_split_giveup;
 
+            /* Proposer exactement l'échange décidé par les tests de plans. */
+            if (on_exchange) {
+                int decision = on_exchange(model, p, q, fs, f2,
+                                           GEOV3_EXCHANGE_PLANES, context);
+                if (decision < 0) return exchanges;
+                if (!decision) goto skip_q;
+            }
             sorted[fs]=q;
             sorted[f2]=p;
+            ++exchanges;
 
 
             dd_flag[p] = generation;
@@ -438,10 +457,18 @@ do_split_giveup:
                     if (++permutes_this_pass > face_count)
                         goto skip_q;
 
+                    /* Même confirmation pour le repli par rayon hiérarchique. */
+                    if (on_exchange) {
+                        int decision = on_exchange(model, p, q, fs, f2,
+                                                   GEOV3_EXCHANGE_RAY, context);
+                        if (decision < 0) return exchanges;
+                        if (!decision) goto skip_q;
+                    }
                     dony_ray_pair_record(&ray_pairs, p, q, generation);
 
                     sorted[fs]=q;
                     sorted[f2]=p;
+                    ++exchanges;
 
                     dd_flag[p] = generation;
 
@@ -466,4 +493,40 @@ skip_q:
 
         ++fs;
     }
+    return exchanges;
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  painter_geoV3
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Construire l'ordre arrière-vers-avant par sélection et reprise des
+ *    comparaisons.
+ *
+ *  Paramètres :
+ *    [entrée] model et face_count, nombre de faces à ordonner.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Sorties et effets de bord :
+ *    model->faces.sorted_face_indices
+ *
+ *  Fonctionnement :
+ *    Initialise l'ordre canonique, trie par zmax, rejette les intervalles
+ *    disjoints, puis teste les plans dans les deux sens. Une face devant
+ *    précéder P est permutée en tête de la passe, qui reprend avec ce
+ *    nouveau P. En cas d'ambiguïté ou de cycle, utilise le chevauchement
+ *    projeté et le ray casting hiérarchique. Aucun découpage : des cycles
+ *    peuvent rester insolubles. État statique conservé entre appels ; arrêt
+ *    du processus si la réserve échoue.
+ *
+ * ----------------------------------------------------------------------------
+ */
+void painter_geoV3(Model3D* model, int face_count)
+{
+    /* Le classement normal conserve son ordre canonique et son tri par zmax. */
+    (void)geov3_run(model, face_count, 0, NULL, NULL);
 }

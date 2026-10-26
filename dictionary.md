@@ -66,12 +66,12 @@ Les contrats ci-dessous sont reconstruits depuis les en-têtes français des dé
 | Interface | Résultat et particularités |
 | --- | --- |
 | `geometric_face_relation` | −1 : f1 avant f2 ; +1 : après ; 0 : indéterminé. Tolérance proportionnelle à la distance. |
-| `pair_plane_before/after` | Booléens de deux hypothèses complémentaires ; epsilon fixe 0,01. |
+| `geo_face_order` | −1 : f1 avant f2 ; +1 : f1 après f2 ; 0 : indéterminé. Utilise le noyau optimisé et sa tolérance adaptative. |
 | `PairCache` | +1 : f1 avant f2 ; −1 : sens inverse ; 0 : absent ou indéterminé. |
 | `ray_cast_at`, `ray_cast_hierarchical` | +1 : f1 plus loin, donc avant ; −1 : f1 plus proche ; 0 : échec/égalité/indéterminé. |
 | `run_raycast_test` | 1 : f1 plus proche ; 2 : f2 plus proche ; 0 : indéterminé. |
-| `compute_face_plane_float` | Produit vectoriel des trois premiers sommets objet convertis en unités réelles ; non normalisé. |
-| `compute_face_plane` | Même triangle initial, mais doubles contenant les entiers 16.16 bruts ; coefficients à une autre échelle. |
+| `compute_face_plane`, mode `FACE_PLANE_OBJECT_UNITS` | Produit vectoriel des trois premiers sommets objet convertis par `FIXED_TO_FLOAT` ; non normalisé. |
+| `compute_face_plane`, mode `FACE_PLANE_RAW_FIXED` | Même triangle initial, mais doubles contenant les entiers 16.16 bruts ; coefficients à une autre échelle. |
 | `calculateFaceDepths` | Normale de Newell sur le contour observateur ; échelle et repère distincts des deux fonctions précédentes. |
 | Clipping entier | Aire et centroïde calculés après arrondi du contour ; un succès peut accompagner une aire nulle. |
 | Clipping fractionnaire | Double de l’aire positive en pixels carrés ; coordonnées de centroïde subpixel. |
@@ -126,9 +126,9 @@ Inclus par engine.c après declare.c. Les changements de transformation, d'époq
 
 ### dony.c
 
-Construire un ordre arrière-vers-avant selon une stratégie inspirée de Robert Dony : sélectionner une face, comparer les candidates et reprendre la sélection après permutation.
+Construire un ordre arrière-vers-avant selon une stratégie inspirée de Robert Dony : sélectionner une face, comparer les candidates et reprendre la sélection après permutation. Le repair réutilise ce parcours depuis la permutation courante.
 
-Un tri stable par profondeur maximale prépare le parcours. Les intervalles disjoints sont rejetés, puis les plans sont testés dans les deux sens. Les cas ambigus utilisent le chevauchement projeté et le ray casting hiérarchique. Des stamps et un cache de paires limitent les cycles.
+Un tri stable par profondeur maximale prépare le parcours. Les intervalles disjoints sont rejetés, puis les plans sont testés dans les deux sens. Les cas ambigus utilisent le chevauchement projeté et le ray casting hiérarchique. Des stamps et un cache de paires limitent les cycles. Le callback facultatif du repair confirme chaque échange, sans dupliquer les décisions de classement.
 
 Inclus par engine.c ; dony_scan_asm.c fournit le filtrage par défaut. GEOV3_DISABLE_ASM_SCAN sélectionne le filtrage C. Les métriques doivent être préparées avant le tri et rester stables pendant son exécution. Cette variante ne découpe pas les faces.
 
@@ -235,8 +235,6 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [benchmark_projected_overlap_all](#fn-benchmark_projected_overlap_all) — `overlap_raster.c` : Comparer six méthodes sur toutes les paires et plusieurs orientations.
 - [calculateFaceDepths](#fn-calculateFaceDepths) — `engine.c` : Recalculer les métriques et plans observateur des faces de la vue courante.
 - [check_intersect](#fn-check_intersect) — `engine.c` : Examiner les intersections objet et tenter des découpages avant la visualisation.
-- [check_sort_repair](#fn-check_sort_repair) — `engine.c` : Examiner les paires et proposer des réparations minimales de la permutation.
-- [check_sort_repair_fast](#fn-check_sort_repair_fast) — `engine.c` : Réparer automatiquement l'ordre avec le centre de bbox de région QuickDraw.
 - [cleanup_list](#fn-cleanup_list) — `engine.c` : Compacter une liste cyclique d'indices en retirant les répétitions adjacentes.
 - [cmp_faces_by_zmean](#fn-cmp_faces_by_zmean) — `engine.c` : Comparer deux identifiants de faces pour qsort.
 - [colorChooser](#fn-colorChooser) — `color.c` : Exécuter la sélection interactive de couleur jusqu'à confirmation.
@@ -245,8 +243,7 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [compute_bbox_intersection](#fn-compute_bbox_intersection) — `overlap_raster.c` : Calculer le rectangle commun aux boîtes projetées de deux faces.
 - [compute_bbox_intersection_center](#fn-compute_bbox_intersection_center) — `overlap_raster.c` : Retourner le centre entier du rectangle commun des boîtes de deux faces.
 - [compute_face_bboxes3D](#fn-compute_face_bboxes3D) — `engine.c` : Recalculer les six bornes objet de chaque face.
-- [compute_face_plane](#fn-compute_face_plane) — `engine.c` : Calculer le plan défini par les trois premiers sommets d'une face objet.
-- [compute_face_plane_float](#fn-compute_face_plane_float) — `engine.c` : Calculer le plan défini par les trois premiers sommets d'une face objet.
+- [compute_face_plane](#fn-compute_face_plane) — `engine.c` : Calculer le plan du triangle initial d'une face dans le repère objet.
 - [compute_intersection_centroid_fractional_tryboth](#fn-compute_intersection_centroid_fractional_tryboth) — `overlap_raster.c` : Essayer le clipping subpixel dans les deux sens sans arrondir le centroïde.
 - [compute_intersection_centroid_ordered_fixed](#fn-compute_intersection_centroid_ordered_fixed) — `overlap_raster.c` : Appeler le clipping ordonné entier avec un espace de travail réutilisé.
 - [compute_intersection_centroid_ordered_fixed_tryboth](#fn-compute_intersection_centroid_ordered_fixed_tryboth) — `overlap_raster.c` : Essayer le clipping entier puis chercher un point de repli commun.
@@ -281,7 +278,6 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [dumpSortedFaceIndices](#fn-dumpSortedFaceIndices) — `engine.c` : Exporter la permutation courante dans l'ordre de dessin de la méthode de classement.
 - [edge_crosses_interior](#fn-edge_crosses_interior) — `engine.c` : Détecter une arête de ei qui traverse strictement l'intérieur de fj.
 - [encodePaletteColor](#fn-encodePaletteColor) — `declare.c` : Encoder une couleur RGB dans le mot $0RGB du matériel SHR.
-- [enforce_mandatory_after_relations](#fn-enforce_mandatory_after_relations) — `engine.c` : Réappliquer les contraintes « a après b » après une réparation d'ordre.
 - [evaluate_pair_tests](#fn-evaluate_pair_tests) — `engine.c` : Exposer séparément les sept tests d'ordre d'une paire pour le diagnostic.
 - [FaceDepth_CentroidCoordinate](#fn-FaceDepth_CentroidCoordinate) — `face_depth_asm.c` : Diviser une somme de coordonnées par le nombre de sommets valides.
 - [FaceDepth_ScanFace](#fn-FaceDepth_ScanFace) — `face_depth_asm.c` : Calculer les métriques d'une liste d'indices de face.
@@ -299,7 +295,7 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [fractional_projection_cached](#fn-fractional_projection_cached) — `overlap_raster.c` : Projeter un sommet en double en mémorisant xo/zo et yo/zo indépendamment du zoom.
 - [frameInconclusivePairs](#fn-frameInconclusivePairs) — `engine.c` : Surligner les faces des paires inconclusives conservées par les méthodes de classement.
 - [generate_random_colors](#fn-generate_random_colors) — `engine.c` : Générer deux tableaux de couleurs non noires pour les faces.
-- [geo_face_order](#fn-geo_face_order) — `engine.c` : Combiner les prédicats de plans dans les deux sens pour le diagnostic.
+- [geo_face_order](#fn-geo_face_order) — `engine.c` : Fournir une préférence d'ordre en utilisant le noyau géométrique optimisé.
 - [geometric_face_relation](#fn-geometric_face_relation) — `engine.c` : Classer f1 par rapport à f2 en utilisant le plan de f1 dans la vue observateur.
 - [GeoRel_Classify32](#fn-GeoRel_Classify32) — `geo_relation_asm.c` : Construire le paquet complet et appeler le noyau de classement.
 - [GeoRel_Classify32Kernel](#fn-GeoRel_Classify32Kernel) — `geo_relation_asm.c` : Classer une face candidate par rapport au plan et au côté de l'observateur.
@@ -308,6 +304,7 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [GeoV3_Mul32x32](#fn-GeoV3_Mul32x32) — `engine.c` : Multiplier exactement deux entiers signés 32 bits et publier le produit 64 bits brut.
 - [GeoV3_Mul32x32SetInputs](#fn-GeoV3_Mul32x32SetInputs) — `engine.c` : Préparer les deux opérandes natifs et exécuter le multiplicateur assembleur.
 - [GeoV3_MulFixed64Fixed32Shift](#fn-GeoV3_MulFixed64Fixed32Shift) — `engine.c` : Évaluer une contribution de plan : (coefficient * coordinate) >> 16.
+- [geov3_run](#fn-geov3_run) — `dony.c` : Partager le parcours GEO V3 entre le classement et le repair interactif.
 - [GeoV3_ScanCandidates](#fn-GeoV3_ScanCandidates) — `dony_scan_asm.c` : Trouver le prochain candidat non rejeté par les tests rapides de la méthode de classement.
 - [GeoV3_ScanSetup](#fn-GeoV3_ScanSetup) — `dony_scan_asm.c` : Préparer les pointeurs invariants du filtrage pour un appel à la méthode de classement.
 - [getFaceFillColor](#fn-getFaceFillColor) — `zbuffer_scanline.c` : Résoudre la couleur de remplissage d'une face.
@@ -320,8 +317,10 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [initPalettes](#fn-initPalettes) — `engine.c` : Construire les quinze palettes de dégradé et demander la capture de la palette zéro.
 - [initScreenSaveBuffer](#fn-initScreenSaveBuffer) — `screen_save_restore.c` : Allouer le buffer fixe utilisé par les transferts MVN de l'écran.
 - [inspect_face_pair_ui](#fn-inspect_face_pair_ui) — `engine.c` : Piloter l'inspecteur graphique et textuel de deux faces.
-- [inspect_faces_after](#fn-inspect_faces_after) — `engine.c` : Inspecter les faces placées après une face choisie dans la permutation.
-- [inspect_faces_before](#fn-inspect_faces_before) — `engine.c` : Inspecter les faces placées avant une face choisie dans la permutation.
+- [inspect_faces_order](#fn-inspect_faces_order) — `engine.c` : Inspecter les faces avant ou après une cible et proposer sa correction.
+- [inspection_view_begin](#fn-inspection_view_begin) — `engine.c` : Sauvegarder visibilité, mode filaire et culling avant une inspection.
+- [inspection_view_end](#fn-inspection_view_end) — `engine.c` : Restaurer la vue puis libérer sa sauvegarde.
+- [inspection_view_restore](#fn-inspection_view_restore) — `engine.c` : Restaurer l'état sauvegardé sans libérer le buffer réutilisable.
 - [keypress](#fn-keypress) — `asm.h` : Attendre une frappe et acquitter le strobe clavier.
 - [loadModel3D](#fn-loadModel3D) — `engine.c` : Charger sommets et faces OBJ dans un modèle déjà alloué.
 - [main](#fn-main) — `OBJExplorer.cc` : Piloter le chargement, les vues graphiques et les commandes de l'explorateur.
@@ -364,8 +363,7 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [ovmax_inside](#fn-ovmax_inside) — `overlap_raster.c` : Classer un point double avec les tableaux projetés passés directement.
 - [ovmax_probe](#fn-ovmax_probe) — `overlap_raster.c` : Sonder les milieux d'arêtes dans la variante à tableaux directs.
 - [painter_bubble_sort](#fn-painter_bubble_sort) — `engine.c` : Corriger l'ordre FAST par échanges de voisins avec tests géométriques.
-- [painter_correct](#fn-painter_correct) — `engine.c` : Corriger localement une permutation initiale FAST séparée selon le signe de d.
-- [painter_correctV2](#fn-painter_correctV2) — `engine.c` : Corriger localement une permutation initiale FAST séparée selon le signe de d.
+- [painter_correct](#fn-painter_correct) — `engine.c` : Exécuter CORRECT ou CORRECT V2 à partir de la même préparation FAST.
 - [painter_geoV2](#fn-painter_geoV2) — `engine.c` : Corriger l'ordre FAST par passes de voisins et cache de paires borné.
 - [painter_geoV3](#fn-painter_geoV3) — `dony.c` : Construire l'ordre arrière-vers-avant par sélection et reprise des comparaisons.
 - [painter_newell_sancha](#fn-painter_newell_sancha) — `engine.c` : Corriger l'ordre FAST à partir des paires dont les intervalles Z se recouvrent.
@@ -376,9 +374,6 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [pair_cache_insert](#fn-pair_cache_insert) — `engine.c` : Mémoriser une relation en cherchant au plus huit slots.
 - [pair_cache_slot](#fn-pair_cache_slot) — `engine.c` : Calculer le slot initial d'une paire non orientée.
 - [pair_order_relation](#fn-pair_order_relation) — `engine.c` : Fournir une préférence d'ordre par profondeur, bornes puis plans.
-- [pair_plane_after](#fn-pair_plane_after) — `engine.c` : Tester si les deux plans suffisent à établir f1 après f2.
-- [pair_plane_before](#fn-pair_plane_before) — `engine.c` : Tester si les deux plans suffisent à établir f1 avant f2.
-- [pair_plane_geometric_tests](#fn-pair_plane_geometric_tests) — `engine.c` : Afficher les calculs détaillés des quatre tests de plans d'une paire.
 - [paletteGradientColor](#fn-paletteGradientColor) — `declare.c` : Construire une entrée d'une palette de dégradé.
 - [point_in_poly_arrays_int](#fn-point_in_poly_arrays_int) — `overlap_raster.c` : Tester un point entier par parité des traversées d'un rayon horizontal.
 - [point_in_poly_int](#fn-point_in_poly_int) — `overlap_raster.c` : Tester l'intérieur strict d'une face projetée à un point entier.
@@ -424,6 +419,8 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [renderModelScanlineZBuffer_coreV3](#fn-renderModelScanlineZBuffer_coreV3) — `zbuffer_scanline.c` : Rendre les surfaces par balayage scanline V3 quantifié.
 - [renderModelScanlineZBuffer_fastV3](#fn-renderModelScanlineZBuffer_fastV3) — `zbuffer_scanline.c` : Appeler renderModelScanlineZBuffer_coreV3 sans rapprochement des faces de plane_d>0.
 - [reorder_poly](#fn-reorder_poly) — `engine.c` : Réordonner une liste de sommets par angle autour de leur centre moyen projeté.
+- [repair_geov3](#fn-repair_geov3) — `engine.c` : Inspecter et corriger l'ordre courant par les échanges proposés par GEO V3.
+- [repair_geov3_confirm](#fn-repair_geov3_confirm) — `engine.c` : Montrer les deux faces d'un échange GEO V3 et recueillir la décision.
 - [restoreAllFaces](#fn-restoreAllFaces) — `engine.c` : Restaurer les longueurs de toutes les faces précédemment masquées.
 - [restoreFace](#fn-restoreFace) — `engine.c` : Restaurer la longueur d'une face précédemment masquée.
 - [restoreScreen](#fn-restoreScreen) — `screen_save_restore.c` : Restaurer la zone SHR depuis la dernière sauvegarde.
@@ -440,7 +437,6 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [setProDOSFileType](#fn-setProDOSFileType) — `engine.c` : Affecter les métadonnées GS/OS d'un fichier existant.
 - [show_face_normal](#fn-show_face_normal) — `engine.c` : Dessiner en jaune la normale de la face sélectionnée dans l'inspecteur.
 - [show_help_pager](#fn-show_help_pager) — `engine.c` : Afficher cycliquement les pages d'aide textuelle jusqu'à Échap.
-- [show_inspect_faces_with_message](#fn-show_inspect_faces_with_message) — `engine.c` : Afficher deux faces sur le modèle filaire avec un message et attendre une réponse.
 - [showFace](#fn-showFace) — `engine.c` : Explorer une face, sa normale et ses données détaillées dans une vue interactive.
 - [shroff](#fn-shroff) — `asm.h` : Désactiver l'affichage SHR en écrivant $41 dans $00C029.
 - [sin_deg_int](#fn-sin_deg_int) — `declare.c` : Lire le sinus d'un angle entier dans la table 16.16.
@@ -480,7 +476,7 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 
 ### add_vertex
 
-Définition : [engine.c](engine.c), ligne 1689.
+Définition : [engine.c](engine.c), ligne 1644.
 
 ```c
 static int add_vertex(Model3D* model, Fixed32 x, Fixed32 y, Fixed32 z)
@@ -512,7 +508,7 @@ Appels internes directs : [fractional_projection_cache_invalidate](arbre_appels.
 
 ### applyPalette
 
-Définition : [engine.c](engine.c), ligne 6584.
+Définition : [engine.c](engine.c), ligne 6299.
 
 ```c
 void applyPalette(int palette_num)
@@ -572,7 +568,7 @@ Appels internes directs : [calculateFaceDepths](arbre_appels.html#fn-calculateFa
 
 ### calculateFaceDepths
 
-Définition : [engine.c](engine.c), ligne 5350.
+Définition : [engine.c](engine.c), ligne 4965.
 
 ```c
 void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count)
@@ -632,75 +628,11 @@ réserves des nouvelles faces/indices non vérifiées ici, échec des bbox non c
 
 Appels internes directs : [compute_face_bboxes3D](arbre_appels.html#fn-compute_face_bboxes3D), [compute_face_plane](arbre_appels.html#fn-compute_face_plane), [count_edge_crossings](arbre_appels.html#fn-count_edge_crossings), [edge_crosses_interior](arbre_appels.html#fn-edge_crosses_interior), [faces_share_vertex_or_edge](arbre_appels.html#fn-faces_share_vertex_or_edge), [keypress](arbre_appels.html#fn-keypress), [split_face_by_plane](arbre_appels.html#fn-split_face_by_plane).
 
-<a id="fn-check_sort_repair"></a>
-
-### check_sort_repair
-
-Définition : [engine.c](engine.c), ligne 7971.
-
-```c
-int check_sort_repair(Model3D* model, int face_count)
-```
-
-**Rôle :**
-
-Examiner les paires et proposer des réparations minimales de la permutation.
-
-**Paramètres :**
-
-[entrée] model et face_count.
-
-**Retour :**
-
-Nombre de déplacements appliqués, ou 0 si aucun ou si la réserve initiale échoue.
-
-**Sorties et effets de bord :**
-
-sorted_face_indices
-
-**Fonctionnement :**
-
-Filtre visibilité, profondeur et chevauchement puis compare les distances des deux plans ; mémorise et réapplique les contraintes « face proche après face loin ». Essaye les plans, les centroïdes SH dans les deux sens puis le centre de bbox. L'utilisateur peut appliquer, sauter, interrompre ou passer en mode automatique. Les contraintes peuvent être cycliques ; leur réapplication n'est pas bornée.
-
-Appels internes directs : [compute_bbox_intersection](arbre_appels.html#fn-compute_bbox_intersection), [compute_intersection_centroid_ordered_fixed](arbre_appels.html#fn-compute_intersection_centroid_ordered_fixed), [enforce_mandatory_after_relations](arbre_appels.html#fn-enforce_mandatory_after_relations), [geo_face_order](arbre_appels.html#fn-geo_face_order), [projected_polygons_overlap](arbre_appels.html#fn-projected_polygons_overlap), [ray_cast_distances](arbre_appels.html#fn-ray_cast_distances), [show_inspect_faces_with_message](arbre_appels.html#fn-show_inspect_faces_with_message).
-
-<a id="fn-check_sort_repair_fast"></a>
-
-### check_sort_repair_fast
-
-Définition : [engine.c](engine.c), ligne 8193.
-
-```c
-int check_sort_repair_fast(Model3D* model, int face_count)
-```
-
-**Rôle :**
-
-Réparer automatiquement l'ordre avec le centre de bbox de région QuickDraw.
-
-**Paramètres :**
-
-[entrée] model et face_count.
-
-**Retour :**
-
-Nombre de déplacements appliqués, ou 0 si aucun ou si la réserve initiale échoue.
-
-**Sorties et effets de bord :**
-
-sorted_face_indices
-
-**Fonctionnement :**
-
-Filtre visibilité, profondeur et chevauchement puis compare les distances des deux plans ; mémorise et réapplique les contraintes « face proche après face loin ». Ouvre QuickDraw, ignore les paires sans centroïde de région utilisable, affiche le bilan et attend une touche avant de revenir au texte.
-
-Appels internes directs : [compute_bbox_intersection](arbre_appels.html#fn-compute_bbox_intersection), [compute_intersection_centroid_ordered_qd_fixed](arbre_appels.html#fn-compute_intersection_centroid_ordered_qd_fixed), [DoText](arbre_appels.html#fn-DoText), [enforce_mandatory_after_relations](arbre_appels.html#fn-enforce_mandatory_after_relations), [keypress](arbre_appels.html#fn-keypress), [projected_polygons_overlap](arbre_appels.html#fn-projected_polygons_overlap), [ray_cast_distances](arbre_appels.html#fn-ray_cast_distances).
-
 <a id="fn-cleanup_list"></a>
 
 ### cleanup_list
 
-Définition : [engine.c](engine.c), ligne 1731.
+Définition : [engine.c](engine.c), ligne 1686.
 
 ```c
 static void cleanup_list(int *arr, int *n)
@@ -728,7 +660,7 @@ Appels internes directs : aucun repéré.
 
 ### cmp_faces_by_zmean
 
-Définition : [engine.c](engine.c), ligne 2201.
+Définition : [engine.c](engine.c), ligne 2156.
 
 ```c
 static int cmp_faces_by_zmean(const void* pa, const void* pb)
@@ -792,7 +724,7 @@ Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [dr
 
 ### compare_faces_diagnostic
 
-Définition : [engine.c](engine.c), ligne 8922.
+Définition : [engine.c](engine.c), ligne 8125.
 
 ```c
 static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out)
@@ -820,13 +752,15 @@ caches et buffers partagés de clipping ; ne corrige pas la permutation.
 
 Produit verdicts, boîtes, centroïdes, aires et temps en ticks. Les verdicts 1/2 désignent les positions f1/f2 de la paire ; certaines légendes historiques doivent être confrontées aux valeurs.
 
+Mémorise le rectangle du contour SH dans le résultat, avec le centroïde de la même projection, avant toute réutilisation des buffers partagés.
+
 Appels internes directs : [compute_bbox_intersection](arbre_appels.html#fn-compute_bbox_intersection), [compute_intersection_centroid_ordered_fixed_tryboth](arbre_appels.html#fn-compute_intersection_centroid_ordered_fixed_tryboth), [compute_intersection_centroid_ordered_qd_fixed](arbre_appels.html#fn-compute_intersection_centroid_ordered_qd_fixed), [geo_face_order](arbre_appels.html#fn-geo_face_order), [projected_polygons_overlap](arbre_appels.html#fn-projected_polygons_overlap), [run_raycast_test](arbre_appels.html#fn-run_raycast_test).
 
 <a id="fn-compute2DFromObserver"></a>
 
 ### compute2DFromObserver
 
-Définition : [engine.c](engine.c), ligne 5543.
+Définition : [engine.c](engine.c), ligne 5158.
 
 ```c
 void compute2DFromObserver(Model3D* model, int angle_w)
@@ -924,7 +858,7 @@ Appels internes directs : [compute_bbox_intersection](arbre_appels.html#fn-compu
 
 ### compute_face_bboxes3D
 
-Définition : [engine.c](engine.c), ligne 1956.
+Définition : [engine.c](engine.c), ligne 1911.
 
 ```c
 static void compute_face_bboxes3D(Model3D* model)
@@ -952,63 +886,31 @@ Appels internes directs : aucun repéré.
 
 ### compute_face_plane
 
-Définition : [engine.c](engine.c), ligne 1212.
+Définition : [engine.c](engine.c), ligne 1150.
 
 ```c
-static void compute_face_plane(Model3D* model, int fidx, double *a, double *b, double *c, double *d)
+static void compute_face_plane(Model3D* model, int fidx, double *a, double *b, double *c, double *d, int coordinate_mode)
 ```
 
 **Rôle :**
 
-Calculer le plan défini par les trois premiers sommets d'une face objet.
+Calculer le plan du triangle initial d'une face dans le repère objet.
 
 **Paramètres :**
 
-[entrée] model et fidx à base zéro.
+[entrée] model et fidx : modèle et identifiant de face à base zéro. [entrée] coordinate_mode : FACE_PLANE_RAW_FIXED pour les entiers 16.16 bruts, FACE_PLANE_OBJECT_UNITS pour les coordonnées en unités objet. [sortie] a/b/c/d : pointeurs valides vers les quatre coefficients.
 
 **Retour :**
 
-Aucun.
-
-**Sorties et effets de bord :**
-
-*a, *b, *c, *d
+Aucun ; modèle absent, face invalide ou moins de trois sommets donnent quatre coefficients nuls.
 
 **Fonctionnement :**
 
-Une face invalide ou de moins de trois sommets donne un plan nul. Le produit vectoriel n'est pas normalisé ; trois sommets colinéaires donnent un plan dégénéré même si d'autres sommets de la face définissent un plan. Les doubles contiennent les entiers 16.16 bruts : les coefficients ne sont pas à la même échelle que compute_face_plane_float.
+Lit les trois premiers sommets puis calcule le produit vectoriel et d, sans normaliser la normale. Le mode objet conserve la conversion par FIXED_TO_FLOAT avant passage en double ; le mode brut convertit les entiers directement en double. Les échelles des coefficients diffèrent entre les modes. Les conversions précèdent toujours les soustractions. Aucun état du modèle n'est modifié.
 
-Appels internes directs : aucun repéré.
+**Limites :**
 
-<a id="fn-compute_face_plane_float"></a>
-
-### compute_face_plane_float
-
-Définition : [engine.c](engine.c), ligne 1144.
-
-```c
-static void compute_face_plane_float(Model3D* model, int fidx, double *a, double *b, double *c, double *d)
-```
-
-**Rôle :**
-
-Calculer le plan défini par les trois premiers sommets d'une face objet.
-
-**Paramètres :**
-
-[entrée] model et fidx à base zéro.
-
-**Retour :**
-
-Aucun.
-
-**Sorties et effets de bord :**
-
-*a, *b, *c, *d
-
-**Fonctionnement :**
-
-Une face invalide ou de moins de trois sommets donne un plan nul. Le produit vectoriel n'est pas normalisé ; trois sommets colinéaires donnent un plan dégénéré même si d'autres sommets de la face définissent un plan. Les coordonnées 16.16 sont converties en unités objet avant le calcul.
+Des sommets initiaux colinéaires donnent un plan dégénéré même si la face complète définit un plan. Ce calcul reste distinct de Newell sur le contour observateur dans calculateFaceDepths.
 
 Appels internes directs : aucun repéré.
 
@@ -1210,7 +1112,7 @@ Appels internes directs : aucun repéré.
 
 ### computeOrientationShading
 
-Définition : [engine.c](engine.c), ligne 6750.
+Définition : [engine.c](engine.c), ligne 6465.
 
 ```c
 static void computeOrientationShading(Model3D* model)
@@ -1270,7 +1172,7 @@ Appels internes directs : aucun repéré.
 
 ### count_edge_crossings
 
-Définition : [engine.c](engine.c), ligne 1328.
+Définition : [engine.c](engine.c), ligne 1283.
 
 ```c
 static int count_edge_crossings(Model3D* model, int ei, int fj)
@@ -1362,7 +1264,7 @@ Appels internes directs : [fractional_projection_cache_release](arbre_appels.htm
 
 ### display_model_face_ids
 
-Définition : [engine.c](engine.c), ligne 6453.
+Définition : [engine.c](engine.c), ligne 6171.
 
 ```c
 void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename)
@@ -1384,17 +1286,19 @@ Aucun.
 
 Sauvegarde les drapeaux et l'option filaire, dessine le modèle puis les faces annotées, attend une touche et revient au texte.
 
+Utilise InspectionViewState pour la sauvegarde et la restauration communes des drapeaux et options ; le cycle de vie graphique reste géré par cet outil.
+
 **Limites :**
 
-l'allocation de la sauvegarde des drapeaux n'est pas vérifiée ici.
+un échec de sauvegarde annule la vue avant le dessin.
 
-Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [keypress](arbre_appels.html#fn-keypress).
+Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [inspection_view_begin](arbre_appels.html#fn-inspection_view_begin), [inspection_view_end](arbre_appels.html#fn-inspection_view_end), [keypress](arbre_appels.html#fn-keypress).
 
 <a id="fn-DoColor"></a>
 
 ### DoColor
 
-Définition : [engine.c](engine.c), ligne 6658.
+Définition : [engine.c](engine.c), ligne 6373.
 
 ```c
 void DoColor()
@@ -1430,7 +1334,7 @@ Appels internes directs : aucun repéré.
 
 ### dony_ray_pair_record
 
-Définition : [dony.c](dony.c), ligne 152.
+Définition : [dony.c](dony.c), ligne 154.
 
 ```c
 static void dony_ray_pair_record(DonyRayPairs *cache, int p, int q, unsigned int generation)
@@ -1462,7 +1366,7 @@ Appels internes directs : aucun repéré.
 
 ### dony_ray_pair_seen
 
-Définition : [dony.c](dony.c), ligne 109.
+Définition : [dony.c](dony.c), ligne 111.
 
 ```c
 static int dony_ray_pair_seen(DonyRayPairs *cache, int p, int q, unsigned int generation)
@@ -1490,7 +1394,7 @@ Appels internes directs : aucun repéré.
 
 ### dony_ray_pairs_reserve
 
-Définition : [dony.c](dony.c), ligne 62.
+Définition : [dony.c](dony.c), ligne 64.
 
 ```c
 static int dony_ray_pairs_reserve(DonyRayPairs *cache, int nf)
@@ -1518,7 +1422,7 @@ Appels internes directs : aucun repéré.
 
 ### DoText
 
-Définition : [engine.c](engine.c), ligne 9870.
+Définition : [engine.c](engine.c), ligne 8655.
 
 ```c
 void DoText()
@@ -1574,7 +1478,7 @@ Appels internes directs : [getSquareRect](arbre_appels.html#fn-getSquareRect).
 
 ### drawFace
 
-Définition : [engine.c](engine.c), ligne 6094.
+Définition : [engine.c](engine.c), ligne 5709.
 
 ```c
 void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index)
@@ -1614,7 +1518,7 @@ Appels internes directs : aucun repéré.
 
 ### drawFaceIndex
 
-Définition : [engine.c](engine.c), ligne 6231.
+Définition : [engine.c](engine.c), ligne 5846.
 
 ```c
 void drawFaceIndex(Model3D* model, int face_id)
@@ -1730,7 +1634,7 @@ Appels internes directs : aucun repéré.
 
 ### drawPolygons
 
-Définition : [engine.c](engine.c), ligne 5838.
+Définition : [engine.c](engine.c), ligne 5453.
 
 ```c
 void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)
@@ -1766,7 +1670,7 @@ Appels internes directs : aucun repéré.
 
 ### drawPolygons_jitter
 
-Définition : [engine.c](engine.c), ligne 6025.
+Définition : [engine.c](engine.c), ligne 5640.
 
 ```c
 void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)
@@ -1890,7 +1794,7 @@ Appels internes directs : [getSquareRect](arbre_appels.html#fn-getSquareRect).
 
 ### dump_compare_results_to_file
 
-Définition : [engine.c](engine.c), ligne 8879.
+Définition : [engine.c](engine.c), ligne 8082.
 
 ```c
 static void dump_compare_results_to_file(const CompareFacesResult *out, int f1, int f2)
@@ -1918,7 +1822,7 @@ Appels internes directs : aucun repéré.
 
 ### dumpFace2DCoordinates
 
-Définition : [engine.c](engine.c), ligne 9676.
+Définition : [engine.c](engine.c), ligne 8463.
 
 ```c
 static void dumpFace2DCoordinates(Model3D* model, const char* txt_filename)
@@ -1946,7 +1850,7 @@ Appels internes directs : aucun repéré.
 
 ### dumpFaceEquationsCSV
 
-Définition : [engine.c](engine.c), ligne 9552.
+Définition : [engine.c](engine.c), ligne 8339.
 
 ```c
 void dumpFaceEquationsCSV(Model3D* model, const char* csv_filename, int alt_format)
@@ -1974,7 +1878,7 @@ Appels internes directs : aucun repéré.
 
 ### dumpSortedFaceIndices
 
-Définition : [engine.c](engine.c), ligne 9722.
+Définition : [engine.c](engine.c), ligne 8509.
 
 ```c
 static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename)
@@ -2058,45 +1962,11 @@ Aucun accès matériel ni effet de bord.
 
 Appels internes directs : aucun repéré.
 
-<a id="fn-enforce_mandatory_after_relations"></a>
-
-### enforce_mandatory_after_relations
-
-Définition : [engine.c](engine.c), ligne 7860.
-
-```c
-static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of_face, int relation_count, const int (*relations)[2])
-```
-
-**Rôle :**
-
-Réappliquer les contraintes « a après b » après une réparation d'ordre.
-
-**Paramètres :**
-
-[entrée] model ; n ; relation_count et relations[][2].
-
-[entrée-sortie] permutation du modèle et pos_of_face.
-
-**Retour :**
-
-Aucun.
-
-**Fonctionnement :**
-
-Déplace a à la position de b puis reprend depuis la première relation.
-
-**Préconditions :**
-
-permutation et table inverse cohérentes ; relations compatibles et sans auto-relation. Aucun watchdog n'empêche une boucle sur contraintes cycliques.
-
-Appels internes directs : aucun repéré.
-
 <a id="fn-evaluate_pair_tests"></a>
 
 ### evaluate_pair_tests
 
-Définition : [engine.c](engine.c), ligne 4732.
+Définition : [engine.c](engine.c), ligne 4407.
 
 ```c
 static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7])
@@ -2120,9 +1990,9 @@ out[0..6]
 
 **Fonctionnement :**
 
-Ordre des cases : profondeur, séparation X, séparation Y, puis quatre tests de côté des plans. -1 valide le sens courant, +1 indique l'inversion, 0 reste indéterminé. X/Y disjoints écrivent -1, ce qui n'est pas une preuve d'occlusion. Utilise epsilon fixe 0,01 et ne modifie pas la permutation.
+Ordre des cases : profondeur, séparation X, séparation Y, puis quatre tests de côté des plans. -1 valide le sens courant, +1 indique l'inversion, 0 reste indéterminé. X/Y disjoints écrivent -1, ce qui n'est pas une preuve d'occlusion. Les quatre tests de plans utilisent geometric_face_relation et sa tolérance adaptative, comme la décision de S/D. Chaque sens ne valide qu'une des deux hypothèses opposées. Les deux sens sont exposés séparément, même s'ils se contredisent ; la décision globale conserve la priorité du premier sens concluant. Peut remplir les caches géométriques ; ne modifie pas la permutation.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometric_face_relation).
 
 <a id="fn-FaceDepth_CentroidCoordinate"></a>
 
@@ -2320,7 +2190,7 @@ Appels internes directs : aucun repéré.
 
 ### fixed_mul32_fast
 
-Définition : [engine.c](engine.c), ligne 2648.
+Définition : [engine.c](engine.c), ligne 2603.
 
 ```c
 static Fixed32 fixed_mul32_fast(Fixed32 a,Fixed32 b)
@@ -2348,7 +2218,7 @@ Appels internes directs : [GeoV3_Mul32x32SetInputs](arbre_appels.html#fn-GeoV3_M
 
 ### fixed_product32_fast
 
-Définition : [engine.c](engine.c), ligne 2683.
+Définition : [engine.c](engine.c), ligne 2638.
 
 ```c
 static Fixed64 fixed_product32_fast(Fixed32 a,Fixed32 b)
@@ -2376,7 +2246,7 @@ Appels internes directs : [GeoV3_Mul32x32SetInputs](arbre_appels.html#fn-GeoV3_M
 
 ### fixed_product64x32_fast
 
-Définition : [engine.c](engine.c), ligne 2717.
+Définition : [engine.c](engine.c), ligne 2672.
 
 ```c
 static Fixed64 fixed_product64x32_fast(Fixed64 a,Fixed32 b)
@@ -2552,7 +2422,7 @@ Appels internes directs : [fractional_projection_cache_invalidate](arbre_appels.
 
 ### frameInconclusivePairs
 
-Définition : [engine.c](engine.c), ligne 6301.
+Définition : [engine.c](engine.c), ligne 5916.
 
 ```c
 void frameInconclusivePairs(Model3D* model)
@@ -2586,7 +2456,7 @@ Appels internes directs : aucun repéré.
 
 ### generate_random_colors
 
-Définition : [engine.c](engine.c), ligne 6412.
+Définition : [engine.c](engine.c), ligne 6027.
 
 ```c
 void generate_random_colors(int face_count)
@@ -2622,7 +2492,7 @@ Appels internes directs : aucun repéré.
 
 ### geo_face_order
 
-Définition : [engine.c](engine.c), ligne 8319.
+Définition : [engine.c](engine.c), ligne 7402.
 
 ```c
 static int geo_face_order(Model3D* model, int f1, int f2)
@@ -2630,27 +2500,31 @@ static int geo_face_order(Model3D* model, int f1, int f2)
 
 **Rôle :**
 
-Combiner les prédicats de plans dans les deux sens pour le diagnostic.
+Fournir une préférence d'ordre en utilisant le noyau géométrique optimisé.
 
 **Paramètres :**
 
-[entrée] model et f1/f2
+[entrée] model : modèle aux métriques observateur à jour ; NULL ignoré. [entrée] f1/f2 : identifiants valides des deux faces.
 
 **Retour :**
 
--1 f1 avant, +1 f1 après, 0 indéterminé.
+-1 si f1 doit précéder f2, +1 si f1 doit suivre f2 ; 0 si aucun des deux tests orientés ne conclut, ou si model est NULL.
+
+**Sorties et effets de bord :**
+
+Peut préparer les plans et remplir les caches du noyau géométrique. Ne modifie ni les faces ni leur permutation et ne vide pas les caches.
 
 **Fonctionnement :**
 
-Priorité aux tests before puis after sur f1/f2, avant leur symétrique. Ne considère ni boîtes, ni profondeur seule, ni rayon ; ne modifie pas le tri.
+Teste le plan de f1 contre f2 avec geometric_face_relation. Si ce test ne conclut pas, teste le sens inverse et oppose son résultat. Le premier verdict non nul est prioritaire, comme dans pair_order_relation. Utilise la tolérance proportionnelle à la distance de l'observateur et les chemins C/assembleur du noyau, sans ajout de test de profondeur, de boîte, de chevauchement ou de rayon.
 
-Appels internes directs : [pair_plane_after](arbre_appels.html#fn-pair_plane_after), [pair_plane_before](arbre_appels.html#fn-pair_plane_before).
+Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometric_face_relation).
 
 <a id="fn-geometric_face_relation"></a>
 
 ### geometric_face_relation
 
-Définition : [engine.c](engine.c), ligne 2806.
+Définition : [engine.c](engine.c), ligne 2761.
 
 ```c
 static int geometric_face_relation(Model3D* model, int f1, int f2)
@@ -2826,7 +2700,7 @@ Appels internes directs : [GeoV3_ScanCandidates](arbre_appels.html#fn-GeoV3_Scan
 
 ### GeoV3_Mul32x32
 
-Définition : [engine.c](engine.c), ligne 2263.
+Définition : [engine.c](engine.c), ligne 2218.
 
 ```c
 asm void GeoV3_Mul32x32(void)
@@ -2874,7 +2748,7 @@ Appels internes directs : aucun repéré.
 
 ### GeoV3_Mul32x32SetInputs
 
-Définition : [engine.c](engine.c), ligne 2617.
+Définition : [engine.c](engine.c), ligne 2572.
 
 ```c
 static void GeoV3_Mul32x32SetInputs(Fixed32 a, Fixed32 b)
@@ -2902,7 +2776,7 @@ Appels internes directs : [GeoV3_Mul32x32](arbre_appels.html#fn-GeoV3_Mul32x32).
 
 ### GeoV3_MulFixed64Fixed32Shift
 
-Définition : [engine.c](engine.c), ligne 2746.
+Définition : [engine.c](engine.c), ligne 2701.
 
 ```c
 static Fixed64 GeoV3_MulFixed64Fixed32Shift(Fixed64 coefficient, Fixed32 coordinate)
@@ -2925,6 +2799,36 @@ Terme Fixed64.
 Choisit le noyau 32x32 uniquement si le coefficient y tient exactement ; les coefficients plus larges utilisent C. Chaque terme est décalé séparément.
 
 Appels internes directs : [GeoV3_Mul32x32SetInputs](arbre_appels.html#fn-GeoV3_Mul32x32SetInputs).
+
+<a id="fn-geov3_run"></a>
+
+### geov3_run
+
+Définition : [dony.c](dony.c), ligne 250.
+
+```c
+static int geov3_run(Model3D* model, int face_count, int preserve_order, GeoV3ExchangeCallback on_exchange, void *context)
+```
+
+**Rôle :**
+
+Partager le parcours GEO V3 entre le classement et le repair interactif.
+
+**Paramètres :**
+
+[entrée] model et face_count : modèle aux métriques de vue à jour. [entrée] preserve_order : 0 initialise et trie par zmax ; 1 part de la permutation courante, sans tri initial silencieux. [entrée] on_exchange/context : confirmation facultative et son contexte. Le callback reçoit les deux faces, leurs positions avant échange et la raison ; -1 arrête, 0 ignore cet échange, 1 l'applique. NULL applique tout.
+
+**Retour :**
+
+Nombre d'échanges appliqués, y compris avant un arrêt demandé ; -1 en cas d'échec d'allocation du repair. Le classement conserve son erreur fatale historique d'allocation.
+
+**Fonctionnement :**
+
+Réutilise sans duplication le filtrage C/assembleur, les deux tests de plans, les stamps anti-cycle, le chevauchement et le rayon hiérarchique GEO V3. Le callback intervient avant chaque échange, sans modifier la géométrie ni la permutation. Un refus avance au candidat suivant. Les limites de permutations et les cas non résolus restent ceux de GEO V3. Les buffers persistants sont partagés : ce parcours n'est pas réentrant.
+
+Appels internes directs : [dony_ray_pair_record](arbre_appels.html#fn-dony_ray_pair_record), [dony_ray_pair_seen](arbre_appels.html#fn-dony_ray_pair_seen), [dony_ray_pairs_reserve](arbre_appels.html#fn-dony_ray_pairs_reserve), [geometric_face_relation](arbre_appels.html#fn-geometric_face_relation), [GeoV3_FindCandidate](arbre_appels.html#fn-GeoV3_FindCandidate), [GeoV3_ScanSetup](arbre_appels.html#fn-GeoV3_ScanSetup), [projected_polygons_overlap_cached](arbre_appels.html#fn-projected_polygons_overlap_cached), [ray_cast_hierarchical](arbre_appels.html#fn-ray_cast_hierarchical), [sort_by_zmax](arbre_appels.html#fn-sort_by_zmax).
+
+Référence indirecte : `repair_geov3_confirm` via `qsort`.
 
 <a id="fn-GeoV3_ScanCandidates"></a>
 
@@ -3130,7 +3034,7 @@ Appels internes directs : aucun repéré.
 
 ### getObserverParams
 
-Définition : [engine.c](engine.c), ligne 5723.
+Définition : [engine.c](engine.c), ligne 5338.
 
 ```c
 void getObserverParams(ObserverParams* params, Model3D* model)
@@ -3196,7 +3100,7 @@ Appels internes directs : aucun repéré.
 
 ### hideFace
 
-Définition : [engine.c](engine.c), ligne 7757.
+Définition : [engine.c](engine.c), ligne 7235.
 
 ```c
 void hideFace(Model3D* model, int face_idx)
@@ -3228,7 +3132,7 @@ Appels internes directs : [ordering_cache_invalidate](arbre_appels.html#fn-order
 
 ### initPalettes
 
-Définition : [engine.c](engine.c), ligne 6621.
+Définition : [engine.c](engine.c), ligne 6336.
 
 ```c
 void initPalettes(void)
@@ -3292,7 +3196,7 @@ Appels internes directs : aucun repéré.
 
 ### inspect_face_pair_ui
 
-Définition : [engine.c](engine.c), ligne 8406.
+Définition : [engine.c](engine.c), ligne 7626.
 
 ```c
 static void inspect_face_pair_ui(Model3D* model)
@@ -3314,25 +3218,27 @@ Aucun.
 
 Lit les deux identifiants puis permet navigation, comparaison des méthodes, export de diagnostic et changements manuels de permutation. Met temporairement les faces en filaire visibles et restaure options et drapeaux à chaque tour. Les modifications d'ordre demandées restent effectives ; pas de fusion de faces.
 
-Appels internes directs : [compare_faces_diagnostic](arbre_appels.html#fn-compare_faces_diagnostic), [compute_intersection_region_bbox](arbre_appels.html#fn-compute_intersection_region_bbox), [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [dump_compare_results_to_file](arbre_appels.html#fn-dump_compare_results_to_file), [getkeypress](arbre_appels.html#fn-getkeypress), [keypress](arbre_appels.html#fn-keypress), [move_element_remove_and_insert](arbre_appels.html#fn-move_element_remove_and_insert), [pair_plane_geometric_tests](arbre_appels.html#fn-pair_plane_geometric_tests), [ray_cast_distances](arbre_appels.html#fn-ray_cast_distances), [rch_patch_pair_at_scale](arbre_appels.html#fn-rch_patch_pair_at_scale), [rch_unpatch_pair](arbre_appels.html#fn-rch_unpatch_pair).
+Utilise InspectionViewState pour la sauvegarde et la restauration communes des drapeaux et options ; le cycle de vie graphique reste géré par cet outil.
 
-<a id="fn-inspect_faces_after"></a>
+Appels internes directs : [compare_faces_diagnostic](arbre_appels.html#fn-compare_faces_diagnostic), [compute_intersection_region_bbox](arbre_appels.html#fn-compute_intersection_region_bbox), [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [dump_compare_results_to_file](arbre_appels.html#fn-dump_compare_results_to_file), [getkeypress](arbre_appels.html#fn-getkeypress), [inspection_view_begin](arbre_appels.html#fn-inspection_view_begin), [inspection_view_end](arbre_appels.html#fn-inspection_view_end), [keypress](arbre_appels.html#fn-keypress), [move_element_remove_and_insert](arbre_appels.html#fn-move_element_remove_and_insert), [ray_cast_distances](arbre_appels.html#fn-ray_cast_distances), [rch_patch_pair_at_scale](arbre_appels.html#fn-rch_patch_pair_at_scale), [rch_unpatch_pair](arbre_appels.html#fn-rch_unpatch_pair).
 
-### inspect_faces_after
+<a id="fn-inspect_faces_order"></a>
 
-Définition : [engine.c](engine.c), ligne 7078.
+### inspect_faces_order
+
+Définition : [engine.c](engine.c), ligne 6524.
 
 ```c
-void inspect_faces_after(Model3D* model, ObserverParams* params, const char* filename)
+static void inspect_faces_order(Model3D* model, ObserverParams* params, int inspect_after)
 ```
 
 **Rôle :**
 
-Inspecter les faces placées après une face choisie dans la permutation.
+Inspecter les faces avant ou après une cible et proposer sa correction.
 
 **Paramètres :**
 
-[entrée] model et params non NULL ; filename, contexte de l'interface.
+[entrée] model et params : contexte valide ; un pointeur NULL annule. [entrée] inspect_after : 0 pour D (faces précédentes), 1 pour S (faces suivantes).
 
 **Retour :**
 
@@ -3340,45 +3246,99 @@ Aucun.
 
 **Sorties et effets de bord :**
 
-entrées-sorties texte, QuickDraw et buffers temporaires de diagnostic.
+Lit le clavier, affiche les sept tests et une prévisualisation. Déplace la cible dans sorted_face_indices uniquement après une commande A/O. Sauvegarde puis restaure culling, visibilité et option de contour.
 
 **Fonctionnement :**
 
-Lit un identifiant, filtre les boîtes puis évalue les relations et chevauchements ; permet de visualiser les anomalies et de déplacer la cible sur confirmation. Modifie éventuellement sorted_face_indices, pas la géométrie. Force temporairement le culling puis restaure son état sur les sorties traitées.
+Parcourt le côté demandé de la permutation, filtre les boîtes puis retient les préférences incompatibles. Sépare les chevauchements réels pour la commande O ; A utilise toutes les candidates. D place la cible avant la plus petite position retenue, S après la plus grande. Le déplacement stable utilise les positions avant retrait de la cible. Les messages et couleurs propres aux deux commandes sont conservés.
 
-Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [evaluate_pair_tests](arbre_appels.html#fn-evaluate_pair_tests), [getkeypress](arbre_appels.html#fn-getkeypress), [keypress](arbre_appels.html#fn-keypress), [move_element_remove_and_insert](arbre_appels.html#fn-move_element_remove_and_insert), [pair_order_relation](arbre_appels.html#fn-pair_order_relation), [projected_polygons_overlap](arbre_appels.html#fn-projected_polygons_overlap).
+Utilise InspectionViewState pour la sauvegarde et la restauration communes des drapeaux et options ; le cycle de vie graphique reste géré par cet outil.
 
-<a id="fn-inspect_faces_before"></a>
+Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [evaluate_pair_tests](arbre_appels.html#fn-evaluate_pair_tests), [getkeypress](arbre_appels.html#fn-getkeypress), [inspection_view_begin](arbre_appels.html#fn-inspection_view_begin), [inspection_view_end](arbre_appels.html#fn-inspection_view_end), [keypress](arbre_appels.html#fn-keypress), [move_element_remove_and_insert](arbre_appels.html#fn-move_element_remove_and_insert), [pair_order_relation](arbre_appels.html#fn-pair_order_relation), [projected_polygons_overlap](arbre_appels.html#fn-projected_polygons_overlap).
 
-### inspect_faces_before
+<a id="fn-inspection_view_begin"></a>
 
-Définition : [engine.c](engine.c), ligne 6804.
+### inspection_view_begin
+
+Définition : [engine.c](engine.c), ligne 6075.
 
 ```c
-void inspect_faces_before(Model3D* model, ObserverParams* params, const char* filename)
+static int inspection_view_begin(Model3D *model, InspectionViewState *state)
 ```
 
 **Rôle :**
 
-Inspecter les faces placées avant une face choisie dans la permutation.
+Sauvegarder visibilité, mode filaire et culling avant une inspection.
 
 **Paramètres :**
 
-[entrée] model et params non NULL ; filename, contexte de l'interface.
+[entrée] model : modèle valide au nombre de faces stable pendant la vue. [sortie] state : sauvegarde non active, possédant ensuite son buffer.
+
+**Retour :**
+
+1 si la sauvegarde est disponible, 0 si l'allocation échoue.
+
+**Fonctionnement :**
+
+Ne modifie ni le modèle ni les options. Les drapeaux sont sauvegardés un par un car display_flag est un tableau d'int, et non d'octets. L'appelant reste responsable de QuickDraw et du choix des faces visibles.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-inspection_view_end"></a>
+
+### inspection_view_end
+
+Définition : [engine.c](engine.c), ligne 6138.
+
+```c
+static void inspection_view_end(Model3D *model, InspectionViewState *state)
+```
+
+**Rôle :**
+
+Restaurer la vue puis libérer sa sauvegarde.
+
+**Paramètres :**
+
+[entrée-sortie] model et state : modèle et sauvegarde associée.
 
 **Retour :**
 
 Aucun.
 
-**Sorties et effets de bord :**
+**Fonctionnement :**
 
-entrées-sorties texte, QuickDraw et buffers temporaires de diagnostic.
+Délègue la restauration commune puis libère le buffer et le met à NULL. N'ouvre ni ne ferme de contexte graphique ; un second appel est sans effet.
+
+Appels internes directs : [inspection_view_restore](arbre_appels.html#fn-inspection_view_restore).
+
+<a id="fn-inspection_view_restore"></a>
+
+### inspection_view_restore
+
+Définition : [engine.c](engine.c), ligne 6109.
+
+```c
+static void inspection_view_restore(Model3D *model, const InspectionViewState *state)
+```
+
+**Rôle :**
+
+Restaurer l'état sauvegardé sans libérer le buffer réutilisable.
+
+**Paramètres :**
+
+[entrée-sortie] model : modèle de la sauvegarde, au même nombre de faces. [entrée] state : sauvegarde active ; flags peut intégrer les actions de V.
+
+**Retour :**
+
+Aucun.
 
 **Fonctionnement :**
 
-Lit un identifiant, filtre les boîtes puis évalue les relations et chevauchements ; permet de visualiser les anomalies et de déplacer la cible sur confirmation. Modifie éventuellement sorted_face_indices, pas la géométrie. Force temporairement le culling puis restaure son état sur les sorties traitées.
+Restaure les drapeaux, le filaire et le culling. Ne ferme pas QuickDraw, ne modifie ni la géométrie ni l'ordre des faces. Une sauvegarde sans buffer est ignorée.
 
-Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [evaluate_pair_tests](arbre_appels.html#fn-evaluate_pair_tests), [getkeypress](arbre_appels.html#fn-getkeypress), [keypress](arbre_appels.html#fn-keypress), [move_element_remove_and_insert](arbre_appels.html#fn-move_element_remove_and_insert), [pair_order_relation](arbre_appels.html#fn-pair_order_relation), [projected_polygons_overlap](arbre_appels.html#fn-projected_polygons_overlap).
+Appels internes directs : aucun repéré.
 
 <a id="fn-keypress"></a>
 
@@ -3472,13 +3432,13 @@ Aucun paramètre explicite.
 
 Possède le modèle et coordonne QuickDraw, palettes, sauvegarde SHR et Z-buffers. Les labels séparent chargement (newmodel), retraitement géométrique (bigloop), redessin (loopReDraw/draw), attente clavier (getakey) et libération (end). Les données numériques restent dans le moteur ; les chaînes visibles de l'interface ne sont pas traduites dans cette révision des commentaires.
 
-Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [benchmark_projected_overlap_all](arbre_appels.html#fn-benchmark_projected_overlap_all), [check_intersect](arbre_appels.html#fn-check_intersect), [check_sort_repair](arbre_appels.html#fn-check_sort_repair), [check_sort_repair_fast](arbre_appels.html#fn-check_sort_repair_fast), [colorChooser](arbre_appels.html#fn-colorChooser), [compute2DFromObserver](arbre_appels.html#fn-compute2DFromObserver), [computeOrientationShading](arbre_appels.html#fn-computeOrientationShading), [createModel3D](arbre_appels.html#fn-createModel3D), [destroyModel3D](arbre_appels.html#fn-destroyModel3D), [display_model_face_ids](arbre_appels.html#fn-display_model_face_ids), [DoColor](arbre_appels.html#fn-DoColor), [DoText](arbre_appels.html#fn-DoText), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [dumpFace2DCoordinates](arbre_appels.html#fn-dumpFace2DCoordinates), [dumpFaceEquationsCSV](arbre_appels.html#fn-dumpFaceEquationsCSV), [dumpSortedFaceIndices](arbre_appels.html#fn-dumpSortedFaceIndices), [frameInconclusivePairs](arbre_appels.html#fn-frameInconclusivePairs), [generate_random_colors](arbre_appels.html#fn-generate_random_colors), [getkeypress_openA](arbre_appels.html#fn-getkeypress_openA), [getObserverParams](arbre_appels.html#fn-getObserverParams), [initPalettes](arbre_appels.html#fn-initPalettes), [initScreenSaveBuffer](arbre_appels.html#fn-initScreenSaveBuffer), [inspect_face_pair_ui](arbre_appels.html#fn-inspect_face_pair_ui), [inspect_faces_after](arbre_appels.html#fn-inspect_faces_after), [inspect_faces_before](arbre_appels.html#fn-inspect_faces_before), [keypress](arbre_appels.html#fn-keypress), [loadModel3D](arbre_appels.html#fn-loadModel3D), [normalize_deg](arbre_appels.html#fn-normalize_deg), [normalizeAutoFitDistanceTo150](arbre_appels.html#fn-normalizeAutoFitDistanceTo150), [Offscreen_Clear](arbre_appels.html#fn-Offscreen_Clear), [Offscreen_FlushToScreen](arbre_appels.html#fn-Offscreen_FlushToScreen), [Offscreen_Init](arbre_appels.html#fn-Offscreen_Init), [Offscreen_Shutdown](arbre_appels.html#fn-Offscreen_Shutdown), [pair_plane_geometric_tests](arbre_appels.html#fn-pair_plane_geometric_tests), [processModelFast](arbre_appels.html#fn-processModelFast), [ReadPalette](arbre_appels.html#fn-ReadPalette), [renderModelFullscreenZBuffer](arbre_appels.html#fn-renderModelFullscreenZBuffer), [renderModelFullscreenZBuffer_offscreen](arbre_appels.html#fn-renderModelFullscreenZBuffer_offscreen), [renderModelScanlineZBuffer](arbre_appels.html#fn-renderModelScanlineZBuffer), [restoreScreen](arbre_appels.html#fn-restoreScreen), [saveNextScreenshot](arbre_appels.html#fn-saveNextScreenshot), [saveScreen](arbre_appels.html#fn-saveScreen), [screen2Black](arbre_appels.html#fn-screen2Black), [select_overlap_method](arbre_appels.html#fn-select_overlap_method), [show_help_pager](arbre_appels.html#fn-show_help_pager), [showFace](arbre_appels.html#fn-showFace), [shroff](arbre_appels.html#fn-shroff), [ZBuffer_Init](arbre_appels.html#fn-ZBuffer_Init), [ZBuffer_Shutdown](arbre_appels.html#fn-ZBuffer_Shutdown).
+Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [benchmark_projected_overlap_all](arbre_appels.html#fn-benchmark_projected_overlap_all), [check_intersect](arbre_appels.html#fn-check_intersect), [colorChooser](arbre_appels.html#fn-colorChooser), [compute2DFromObserver](arbre_appels.html#fn-compute2DFromObserver), [computeOrientationShading](arbre_appels.html#fn-computeOrientationShading), [createModel3D](arbre_appels.html#fn-createModel3D), [destroyModel3D](arbre_appels.html#fn-destroyModel3D), [display_model_face_ids](arbre_appels.html#fn-display_model_face_ids), [DoColor](arbre_appels.html#fn-DoColor), [DoText](arbre_appels.html#fn-DoText), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [dumpFace2DCoordinates](arbre_appels.html#fn-dumpFace2DCoordinates), [dumpFaceEquationsCSV](arbre_appels.html#fn-dumpFaceEquationsCSV), [dumpSortedFaceIndices](arbre_appels.html#fn-dumpSortedFaceIndices), [frameInconclusivePairs](arbre_appels.html#fn-frameInconclusivePairs), [generate_random_colors](arbre_appels.html#fn-generate_random_colors), [getkeypress_openA](arbre_appels.html#fn-getkeypress_openA), [getObserverParams](arbre_appels.html#fn-getObserverParams), [initPalettes](arbre_appels.html#fn-initPalettes), [initScreenSaveBuffer](arbre_appels.html#fn-initScreenSaveBuffer), [inspect_face_pair_ui](arbre_appels.html#fn-inspect_face_pair_ui), [inspect_faces_order](arbre_appels.html#fn-inspect_faces_order), [keypress](arbre_appels.html#fn-keypress), [loadModel3D](arbre_appels.html#fn-loadModel3D), [normalize_deg](arbre_appels.html#fn-normalize_deg), [normalizeAutoFitDistanceTo150](arbre_appels.html#fn-normalizeAutoFitDistanceTo150), [Offscreen_Clear](arbre_appels.html#fn-Offscreen_Clear), [Offscreen_FlushToScreen](arbre_appels.html#fn-Offscreen_FlushToScreen), [Offscreen_Init](arbre_appels.html#fn-Offscreen_Init), [Offscreen_Shutdown](arbre_appels.html#fn-Offscreen_Shutdown), [processModelFast](arbre_appels.html#fn-processModelFast), [ReadPalette](arbre_appels.html#fn-ReadPalette), [renderModelFullscreenZBuffer](arbre_appels.html#fn-renderModelFullscreenZBuffer), [renderModelFullscreenZBuffer_offscreen](arbre_appels.html#fn-renderModelFullscreenZBuffer_offscreen), [renderModelScanlineZBuffer](arbre_appels.html#fn-renderModelScanlineZBuffer), [repair_geov3](arbre_appels.html#fn-repair_geov3), [restoreScreen](arbre_appels.html#fn-restoreScreen), [saveNextScreenshot](arbre_appels.html#fn-saveNextScreenshot), [saveScreen](arbre_appels.html#fn-saveScreen), [screen2Black](arbre_appels.html#fn-screen2Black), [select_overlap_method](arbre_appels.html#fn-select_overlap_method), [show_help_pager](arbre_appels.html#fn-show_help_pager), [showFace](arbre_appels.html#fn-showFace), [shroff](arbre_appels.html#fn-shroff), [ZBuffer_Init](arbre_appels.html#fn-ZBuffer_Init), [ZBuffer_Shutdown](arbre_appels.html#fn-ZBuffer_Shutdown).
 
 <a id="fn-move_element_remove_and_insert"></a>
 
 ### move_element_remove_and_insert
 
-Définition : [engine.c](engine.c), ligne 4477.
+Définition : [engine.c](engine.c), ligne 4294.
 
 ```c
 static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx)
@@ -3508,7 +3468,7 @@ Appels internes directs : aucun repéré.
 
 ### move_element_remove_and_insert_pos
 
-Définition : [engine.c](engine.c), ligne 4519.
+Définition : [engine.c](engine.c), ligne 4336.
 
 ```c
 static int move_element_remove_and_insert_pos(int *arr, int n, int from, int insert_idx, int *pos_of_face)
@@ -3566,7 +3526,7 @@ Appels internes directs : aucun repéré.
 
 ### normalizeAutoFitDistanceTo150
 
-Définition : [engine.c](engine.c), ligne 5660.
+Définition : [engine.c](engine.c), ligne 5275.
 
 ```c
 void normalizeAutoFitDistanceTo150(Model3D* model)
@@ -4614,7 +4574,7 @@ Appels internes directs : [ovmax_inside](arbre_appels.html#fn-ovmax_inside).
 
 ### painter_bubble_sort
 
-Définition : [engine.c](engine.c), ligne 3031.
+Définition : [engine.c](engine.c), ligne 2986.
 
 ```c
 void painter_bubble_sort(Model3D* model, int face_count)
@@ -4646,79 +4606,47 @@ Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometr
 
 ### painter_correct
 
-Définition : [engine.c](engine.c), ligne 4037.
+Définition : [engine.c](engine.c), ligne 3998.
 
 ```c
-static int painter_correct(Model3D* model, int face_count, int debug)
+static int painter_correct(Model3D* model, int face_count, int use_v2)
 ```
 
 **Rôle :**
 
-Corriger localement une permutation initiale FAST séparée selon le signe de d.
+Exécuter CORRECT ou CORRECT V2 à partir de la même préparation FAST.
 
 **Paramètres :**
 
-[entrée] model et face_count ; debug, paramètre conservé mais non exploité.
+[entrée] model : modèle aux métriques à jour ; NULL annule le traitement. [entrée] face_count : nombre de faces de la permutation à corriger. [entrée] use_v2 : 0 pour CORRECT, 1 pour CORRECT V2.
 
 **Retour :**
 
-Compteur moves, pas une preuve de correction.
+Nombre de déplacements des passes locales ; 0 si aucun traitement ou si une allocation échoue. Les déplacements de la vérification croisée V2 ne sont pas ajoutés à ce compteur, comme dans l'ancienne version.
 
 **Sorties et effets de bord :**
 
-sorted_face_indices
+Modifie sorted_face_indices et les caches utilisés par FAST et les tests géométriques. Alloue puis libère les tables temporaires et affiche les messages propres à chaque variante.
 
 **Fonctionnement :**
 
-Désactive temporairement le culling, place les faces d<=0 avant les faces d>0, puis effectue des insertions fondées sur les boîtes, le chevauchement simple et les prédicats de plans. min_allowed_pos limite certains déplacements. Seul le groupe de faces avant est corrigé. Aucun appel à split_face_by_plane : ce mode ne découpe pas les faces.
+Désactive le culling pour FAST, partitionne les faces selon plane_d, prépare les positions inverses et les limites de déplacement. Partage la passe avant ; conserve les différences de rejet Y, de validation de position et d'affichage entre les variantes. V2 ajoute la passe arrière et la vérification croisée si le culling était désactivé. Restaure le culling sur le chemin normal et ne découpe aucune face.
 
 **Limites :**
 
-plusieurs retours d'échec d'allocation surviennent avant restauration de cull_back_faces ; ce comportement est conservé, pas corrigé ici.
 
-Appels internes directs : [move_element_remove_and_insert_pos](arbre_appels.html#fn-move_element_remove_and_insert_pos), [painter_newell_sancha_fast](arbre_appels.html#fn-painter_newell_sancha_fast), [pair_plane_after](arbre_appels.html#fn-pair_plane_after), [pair_plane_before](arbre_appels.html#fn-pair_plane_before), [projected_polygons_overlap_simple](arbre_appels.html#fn-projected_polygons_overlap_simple).
 
-<a id="fn-painter_correctV2"></a>
+**Les retours d'échec d'allocation conservent le comportement antérieur :**
 
-### painter_correctV2
+ils ne restaurent pas tous le culling. Le compteur ne prouve pas la correction globale de la permutation.
 
-Définition : [engine.c](engine.c), ligne 4185.
-
-```c
-static int painter_correctV2(Model3D* model, int face_count, int debug)
-```
-
-**Rôle :**
-
-Corriger localement une permutation initiale FAST séparée selon le signe de d.
-
-**Paramètres :**
-
-[entrée] model et face_count ; debug, paramètre conservé mais non exploité.
-
-**Retour :**
-
-Compteur moves, pas une preuve de correction.
-
-**Sorties et effets de bord :**
-
-sorted_face_indices
-
-**Fonctionnement :**
-
-Désactive temporairement le culling, place les faces d<=0 avant les faces d>0, puis effectue des insertions fondées sur les boîtes, le chevauchement simple et les prédicats de plans. min_allowed_pos limite certains déplacements. Ajoute, sans culling initial, des corrections entre faces arrière et avant sur un snapshot ; leur total_moves n'est pas ajouté au compteur retourné. Aucun appel à split_face_by_plane : ce mode ne découpe pas les faces.
-
-**Limites :**
-
-plusieurs retours d'échec d'allocation surviennent avant restauration de cull_back_faces ; ce comportement est conservé, pas corrigé ici.
-
-Appels internes directs : [move_element_remove_and_insert_pos](arbre_appels.html#fn-move_element_remove_and_insert_pos), [painter_newell_sancha_fast](arbre_appels.html#fn-painter_newell_sancha_fast), [pair_plane_after](arbre_appels.html#fn-pair_plane_after), [pair_plane_before](arbre_appels.html#fn-pair_plane_before), [projected_polygons_overlap_simple](arbre_appels.html#fn-projected_polygons_overlap_simple).
+Appels internes directs : [geo_face_order](arbre_appels.html#fn-geo_face_order), [move_element_remove_and_insert_pos](arbre_appels.html#fn-move_element_remove_and_insert_pos), [painter_newell_sancha_fast](arbre_appels.html#fn-painter_newell_sancha_fast), [projected_polygons_overlap_simple](arbre_appels.html#fn-projected_polygons_overlap_simple).
 
 <a id="fn-painter_geoV2"></a>
 
 ### painter_geoV2
 
-Définition : [engine.c](engine.c), ligne 3867.
+Définition : [engine.c](engine.c), ligne 3822.
 
 ```c
 void painter_geoV2(Model3D* model, int face_count)
@@ -4750,7 +4678,7 @@ Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometr
 
 ### painter_geoV3
 
-Définition : [dony.c](dony.c), ligne 246.
+Définition : [dony.c](dony.c), ligne 528.
 
 ```c
 void painter_geoV3(Model3D* model, int face_count)
@@ -4776,13 +4704,13 @@ model->faces.sorted_face_indices
 
 Initialise l'ordre canonique, trie par zmax, rejette les intervalles disjoints, puis teste les plans dans les deux sens. Une face devant précéder P est permutée en tête de la passe, qui reprend avec ce nouveau P. En cas d'ambiguïté ou de cycle, utilise le chevauchement projeté et le ray casting hiérarchique. Aucun découpage : des cycles peuvent rester insolubles. État statique conservé entre appels ; arrêt du processus si la réserve échoue.
 
-Appels internes directs : [dony_ray_pair_record](arbre_appels.html#fn-dony_ray_pair_record), [dony_ray_pair_seen](arbre_appels.html#fn-dony_ray_pair_seen), [dony_ray_pairs_reserve](arbre_appels.html#fn-dony_ray_pairs_reserve), [geometric_face_relation](arbre_appels.html#fn-geometric_face_relation), [GeoV3_FindCandidate](arbre_appels.html#fn-GeoV3_FindCandidate), [GeoV3_ScanSetup](arbre_appels.html#fn-GeoV3_ScanSetup), [projected_polygons_overlap_cached](arbre_appels.html#fn-projected_polygons_overlap_cached), [ray_cast_hierarchical](arbre_appels.html#fn-ray_cast_hierarchical), [sort_by_zmax](arbre_appels.html#fn-sort_by_zmax).
+Appels internes directs : [geov3_run](arbre_appels.html#fn-geov3_run).
 
 <a id="fn-painter_newell_sancha"></a>
 
 ### painter_newell_sancha
 
-Définition : [engine.c](engine.c), ligne 3226.
+Définition : [engine.c](engine.c), ligne 3181.
 
 ```c
 void painter_newell_sancha(Model3D* model, int face_count)
@@ -4814,7 +4742,7 @@ Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometr
 
 ### painter_newell_sancha_fast
 
-Définition : [engine.c](engine.c), ligne 2972.
+Définition : [engine.c](engine.c), ligne 2927.
 
 ```c
 void painter_newell_sancha_fast(Model3D* model, int face_count)
@@ -4848,7 +4776,7 @@ Référence indirecte : `cmp_faces_by_zmean` via `qsort`.
 
 ### pair_cache_create
 
-Définition : [engine.c](engine.c), ligne 3696.
+Définition : [engine.c](engine.c), ligne 3651.
 
 ```c
 static PairCache* pair_cache_create(int capacity)
@@ -4876,7 +4804,7 @@ Appels internes directs : aucun repéré.
 
 ### pair_cache_destroy
 
-Définition : [engine.c](engine.c), ligne 3836.
+Définition : [engine.c](engine.c), ligne 3791.
 
 ```c
 static void pair_cache_destroy(PairCache* c)
@@ -4900,7 +4828,7 @@ Appels internes directs : aucun repéré.
 
 ### pair_cache_find
 
-Définition : [engine.c](engine.c), ligne 3757.
+Définition : [engine.c](engine.c), ligne 3712.
 
 ```c
 static int pair_cache_find(PairCache* c, int f1, int f2)
@@ -4928,7 +4856,7 @@ Appels internes directs : [pair_cache_slot](arbre_appels.html#fn-pair_cache_slot
 
 ### pair_cache_insert
 
-Définition : [engine.c](engine.c), ligne 3798.
+Définition : [engine.c](engine.c), ligne 3753.
 
 ```c
 static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation)
@@ -4960,7 +4888,7 @@ Appels internes directs : [pair_cache_slot](arbre_appels.html#fn-pair_cache_slot
 
 ### pair_cache_slot
 
-Définition : [engine.c](engine.c), ligne 3728.
+Définition : [engine.c](engine.c), ligne 3683.
 
 ```c
 static int pair_cache_slot(PairCache* c, int f1, int f2)
@@ -4988,7 +4916,7 @@ Appels internes directs : aucun repéré.
 
 ### pair_order_relation
 
-Définition : [engine.c](engine.c), ligne 7912.
+Définition : [engine.c](engine.c), ligne 7337.
 
 ```c
 static int pair_order_relation(Model3D* model, int f1, int f2)
@@ -5015,94 +4943,6 @@ caches de relations ; ne modifie pas la permutation.
 Réinitialise explicitement le cache géométrique. Les séparations X/Y produisent une préférence déterministe même sans occlusion ; aucun ray casting ici.
 
 Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometric_face_relation).
-
-<a id="fn-pair_plane_after"></a>
-
-### pair_plane_after
-
-Définition : [engine.c](engine.c), ligne 4653.
-
-```c
-static int pair_plane_after(Model3D* model, int f1, int f2)
-```
-
-**Rôle :**
-
-Tester si les deux plans suffisent à établir f1 après f2.
-
-**Paramètres :**
-
-[entrée] model et f1/f2 à base zéro, métriques observateur calculées.
-
-**Retour :**
-
-1 si un des tests suffit, 0 si aucun ne conclut ; aucun tri effectué.
-
-**Fonctionnement :**
-
-Tolérance fixe 0,01 en 16.16, distincte d'epsilon proportionnel à la distance dans geometric_face_relation. Les points dans la bande sont ignorés.
-
-Appels internes directs : aucun repéré.
-
-<a id="fn-pair_plane_before"></a>
-
-### pair_plane_before
-
-Définition : [engine.c](engine.c), ligne 4577.
-
-```c
-static int pair_plane_before(Model3D* model, int f1, int f2)
-```
-
-**Rôle :**
-
-Tester si les deux plans suffisent à établir f1 avant f2.
-
-**Paramètres :**
-
-[entrée] model et f1/f2 à base zéro, métriques observateur calculées.
-
-**Retour :**
-
-1 si un des tests suffit, 0 si aucun ne conclut ; aucun tri effectué.
-
-**Fonctionnement :**
-
-Tolérance fixe 0,01 en 16.16, distincte d'epsilon proportionnel à la distance dans geometric_face_relation. Les points dans la bande sont ignorés.
-
-Appels internes directs : aucun repéré.
-
-<a id="fn-pair_plane_geometric_tests"></a>
-
-### pair_plane_geometric_tests
-
-Définition : [engine.c](engine.c), ligne 9122.
-
-```c
-static int pair_plane_geometric_tests(Model3D* model, int f1, int f2)
-```
-
-**Rôle :**
-
-Afficher les calculs détaillés des quatre tests de plans d'une paire.
-
-**Paramètres :**
-
-[entrée] model ; f1/f2, ou valeurs négatives pour demander les IDs au clavier.
-
-**Retour :**
-
-1 si le premier ou le deuxième test valide le sens courant, 0 sinon.
-
-**Fonctionnement :**
-
-Affiche aussi des comparaisons numériques et attend une touche.
-
-**Préconditions :**
-
-modèle valide et identifiants dans les bornes après saisie ; la fonction ne fournit pas de validation générale des indices.
-
-Appels internes directs : [keypress](arbre_appels.html#fn-keypress).
 
 <a id="fn-paletteGradientColor"></a>
 
@@ -5192,7 +5032,7 @@ Appels internes directs : [on_seg_ll](arbre_appels.html#fn-on_seg_ll), [orient_l
 
 ### poly_signed_area
 
-Définition : [engine.c](engine.c), ligne 1797.
+Définition : [engine.c](engine.c), ligne 1752.
 
 ```c
 static double poly_signed_area(Model3D* model, int *list, int n, double a, double b, double c)
@@ -5220,7 +5060,7 @@ Appels internes directs : aucun repéré.
 
 ### processModelFast
 
-Définition : [engine.c](engine.c), ligne 2045.
+Définition : [engine.c](engine.c), ligne 2000.
 
 ```c
 void processModelFast(Model3D* model, ObserverParams* params, const char* filename)
@@ -5246,7 +5086,7 @@ xo/yo/zo, x2d/y2d, métriques et permutation des faces, couleurs de shading.
 
 Précalcule la matrice de rotation puis projette les sommets de profondeur positive. Pour zo <= 0, écrit xo=yo=0 et x2d=y2d=-1. En filaire, calcule encore les métriques mais saute le tri. Invalide les caches dépendant de la transformation.
 
-Appels internes directs : [calculateFaceDepths](arbre_appels.html#fn-calculateFaceDepths), [computeOrientationShading](arbre_appels.html#fn-computeOrientationShading), [cos_deg_int](arbre_appels.html#fn-cos_deg_int), [fixed_mul32_fast](arbre_appels.html#fn-fixed_mul32_fast), [FIXED_ROUND_TO_INT](arbre_appels.html#fn-FIXED_ROUND_TO_INT), [fractional_projection_cache_invalidate](arbre_appels.html#fn-fractional_projection_cache_invalidate), [painter_bubble_sort](arbre_appels.html#fn-painter_bubble_sort), [painter_correct](arbre_appels.html#fn-painter_correct), [painter_correctV2](arbre_appels.html#fn-painter_correctV2), [painter_geoV2](arbre_appels.html#fn-painter_geoV2), [painter_geoV3](arbre_appels.html#fn-painter_geoV3), [painter_newell_sancha](arbre_appels.html#fn-painter_newell_sancha), [painter_newell_sancha_fast](arbre_appels.html#fn-painter_newell_sancha_fast), [sin_deg_int](arbre_appels.html#fn-sin_deg_int).
+Appels internes directs : [calculateFaceDepths](arbre_appels.html#fn-calculateFaceDepths), [computeOrientationShading](arbre_appels.html#fn-computeOrientationShading), [cos_deg_int](arbre_appels.html#fn-cos_deg_int), [fixed_mul32_fast](arbre_appels.html#fn-fixed_mul32_fast), [FIXED_ROUND_TO_INT](arbre_appels.html#fn-FIXED_ROUND_TO_INT), [fractional_projection_cache_invalidate](arbre_appels.html#fn-fractional_projection_cache_invalidate), [painter_bubble_sort](arbre_appels.html#fn-painter_bubble_sort), [painter_correct](arbre_appels.html#fn-painter_correct), [painter_geoV2](arbre_appels.html#fn-painter_geoV2), [painter_geoV3](arbre_appels.html#fn-painter_geoV3), [painter_newell_sancha](arbre_appels.html#fn-painter_newell_sancha), [painter_newell_sancha_fast](arbre_appels.html#fn-painter_newell_sancha_fast), [sin_deg_int](arbre_appels.html#fn-sin_deg_int).
 
 <a id="fn-projected_polygons_overlap"></a>
 
@@ -5732,7 +5572,7 @@ Appels internes directs : aucun repéré.
 
 ### ray_cast_at
 
-Définition : [engine.c](engine.c), ligne 4918.
+Définition : [engine.c](engine.c), ligne 4533.
 
 ```c
 static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy)
@@ -5760,7 +5600,7 @@ Appels internes directs : [ray_cast_distances](arbre_appels.html#fn-ray_cast_dis
 
 ### ray_cast_at_fractional
 
-Définition : [engine.c](engine.c), ligne 4952.
+Définition : [engine.c](engine.c), ligne 4567.
 
 ```c
 static int ray_cast_at_fractional(Model3D *model, int f1, int f2, double cx, double cy)
@@ -5792,7 +5632,7 @@ Appels internes directs : [ordering_plane](arbre_appels.html#fn-ordering_plane).
 
 ### ray_cast_distances
 
-Définition : [engine.c](engine.c), ligne 4858.
+Définition : [engine.c](engine.c), ligne 4473.
 
 ```c
 static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2)
@@ -5826,7 +5666,7 @@ Appels internes directs : [ordering_plane](arbre_appels.html#fn-ordering_plane).
 
 ### ray_cast_hierarchical
 
-Définition : [engine.c](engine.c), ligne 5262.
+Définition : [engine.c](engine.c), ligne 4877.
 
 ```c
 static int ray_cast_hierarchical(Model3D* model, int f1, int f2)
@@ -5854,7 +5694,7 @@ Appels internes directs : [compute_intersection_centroid_fractional_tryboth](arb
 
 ### ray_cast_hierarchical_impl
 
-Définition : [engine.c](engine.c), ligne 5206.
+Définition : [engine.c](engine.c), ligne 4821.
 
 ```c
 static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)
@@ -5886,7 +5726,7 @@ Appels internes directs : [compute_bbox_intersection_center](arbre_appels.html#f
 
 ### rch_gather_pair_vertex_indices
 
-Définition : [engine.c](engine.c), ligne 5016.
+Définition : [engine.c](engine.c), ligne 4631.
 
 ```c
 static int rch_gather_pair_vertex_indices(FaceArrays3D* faces, int f1, int f2, int* out_idx)
@@ -5918,7 +5758,7 @@ Appels internes directs : aucun repéré.
 
 ### rch_patch_pair_at_scale
 
-Définition : [engine.c](engine.c), ligne 5106.
+Définition : [engine.c](engine.c), ligne 4721.
 
 ```c
 static void rch_patch_pair_at_scale(Model3D* model, int f1, int f2, Fixed32 test_scale, RCHZoomPatch* p)
@@ -5954,7 +5794,7 @@ Appels internes directs : [FIXED_ROUND_TO_INT](arbre_appels.html#fn-FIXED_ROUND_
 
 ### rch_recompute_face_bbox_cache
 
-Définition : [engine.c](engine.c), ligne 5062.
+Définition : [engine.c](engine.c), ligne 4677.
 
 ```c
 static void rch_recompute_face_bbox_cache(Model3D* model, int f)
@@ -5986,7 +5826,7 @@ Appels internes directs : aucun repéré.
 
 ### rch_unpatch_pair
 
-Définition : [engine.c](engine.c), ligne 5167.
+Définition : [engine.c](engine.c), ligne 4782.
 
 ```c
 static void rch_unpatch_pair(Model3D* model, RCHZoomPatch* p, int f1, int f2)
@@ -6052,7 +5892,7 @@ Appels internes directs : aucun repéré.
 
 ### ReadPalette
 
-Définition : [engine.c](engine.c), ligne 6545.
+Définition : [engine.c](engine.c), ligne 6260.
 
 ```c
 GS_Palette ReadPalette(int palette_num)
@@ -6112,7 +5952,7 @@ Appels internes directs : [cos_deg_int](arbre_appels.html#fn-cos_deg_int), [keyp
 
 ### remove_duplicates
 
-Définition : [engine.c](engine.c), ligne 1765.
+Définition : [engine.c](engine.c), ligne 1720.
 
 ```c
 static void remove_duplicates(int *arr, int *n)
@@ -6426,7 +6266,7 @@ Appels internes directs : [renderModelScanlineZBuffer_coreV3](arbre_appels.html#
 
 ### reorder_poly
 
-Définition : [engine.c](engine.c), ligne 1858.
+Définition : [engine.c](engine.c), ligne 1813.
 
 ```c
 static void reorder_poly(Model3D* model, int fidx, int *list, int *n)
@@ -6456,11 +6296,71 @@ le test d'aire utilise les tableaux px/py dans leur ordre d'origine, pas dans l'
 
 Appels internes directs : [compute_face_plane](arbre_appels.html#fn-compute_face_plane).
 
+<a id="fn-repair_geov3"></a>
+
+### repair_geov3
+
+Définition : [engine.c](engine.c), ligne 7518.
+
+```c
+static void repair_geov3(Model3D* model)
+```
+
+**Rôle :**
+
+Inspecter et corriger l'ordre courant par les échanges proposés par GEO V3.
+
+**Paramètres :**
+
+[entrée-sortie] model : modèle aux métriques de vue à jour ; NULL ignoré.
+
+**Retour :**
+
+Aucun ; affiche les nombres de propositions, d'échanges et de refus.
+
+**Fonctionnement :**
+
+Sauvegarde la visibilité puis lance geov3_run sans réinitialiser ni prétrier la permutation. Chaque échange est confirmé dans la vue filaire, dans un contexte QuickDraw maintenu pendant tous les tests. Échap conserve les échanges déjà acceptés ; N ignore la proposition courante ; Retour applique automatiquement les suivantes. Ne modifie ni les sommets, ni les paramètres de vue, ni le mode de tri. Les limites et paires non résolues de GEO V3 restent applicables : les propositions ne constituent pas une preuve d'ordre global sans erreur.
+
+Utilise InspectionViewState pour la sauvegarde et la restauration communes des drapeaux et options ; le cycle de vie graphique reste géré par cet outil.
+
+Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [geov3_run](arbre_appels.html#fn-geov3_run), [inspection_view_begin](arbre_appels.html#fn-inspection_view_begin), [inspection_view_end](arbre_appels.html#fn-inspection_view_end), [keypress](arbre_appels.html#fn-keypress).
+
+<a id="fn-repair_geov3_confirm"></a>
+
+### repair_geov3_confirm
+
+Définition : [engine.c](engine.c), ligne 7446.
+
+```c
+static int repair_geov3_confirm(Model3D *model, int p, int q, int pos_p, int pos_q, int reason, void *context)
+```
+
+**Rôle :**
+
+Montrer les deux faces d'un échange GEO V3 et recueillir la décision.
+
+**Paramètres :**
+
+[entrée] model, p/q et pos_p/pos_q : état avant l'échange proposé. [entrée] reason : GEOV3_EXCHANGE_PLANES ou GEOV3_EXCHANGE_RAY. [entrée-sortie] context : GeoV3RepairUI, compteurs et mode automatique.
+
+**Retour :**
+
+-1 pour Échap, 0 pour N, 1 pour appliquer ; Retour active l'automatique.
+
+**Fonctionnement :**
+
+Dessine le modèle en fil de fer, P en vert clair et Q en orange, comme l'ancienne UI du repair. Conserve la géométrie et la permutation ; restaure visibilité et framePolyOnly avant de revenir au moteur. En automatique, valide sans ouvrir de vue graphique supplémentaire.
+
+Utilise InspectionViewState pour la sauvegarde et la restauration communes des drapeaux et options ; le cycle de vie graphique reste géré par cet outil.
+
+Appels internes directs : [drawFace](arbre_appels.html#fn-drawFace), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [getkeypress](arbre_appels.html#fn-getkeypress), [inspection_view_restore](arbre_appels.html#fn-inspection_view_restore), [projected_polygons_overlap_cached](arbre_appels.html#fn-projected_polygons_overlap_cached), [screenClearTopLines](arbre_appels.html#fn-screenClearTopLines).
+
 <a id="fn-restoreAllFaces"></a>
 
 ### restoreAllFaces
 
-Définition : [engine.c](engine.c), ligne 7822.
+Définition : [engine.c](engine.c), ligne 7300.
 
 ```c
 void restoreAllFaces(Model3D* model)
@@ -6488,7 +6388,7 @@ Appels internes directs : [ordering_cache_invalidate](arbre_appels.html#fn-order
 
 ### restoreFace
 
-Définition : [engine.c](engine.c), ligne 7791.
+Définition : [engine.c](engine.c), ligne 7269.
 
 ```c
 void restoreFace(Model3D* model, int face_idx)
@@ -6548,7 +6448,7 @@ Appels internes directs : aucun repéré.
 
 ### reverseFaceVertexOrder
 
-Définition : [engine.c](engine.c), ligne 7700.
+Définition : [engine.c](engine.c), ligne 7178.
 
 ```c
 static void reverseFaceVertexOrder(Model3D* model, int face_idx)
@@ -6580,7 +6480,7 @@ Appels internes directs : [ordering_cache_invalidate](arbre_appels.html#fn-order
 
 ### run_raycast_test
 
-Définition : [engine.c](engine.c), ligne 8372.
+Définition : [engine.c](engine.c), ligne 7592.
 
 ```c
 static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py)
@@ -6608,7 +6508,7 @@ Appels internes directs : [ray_cast_at](arbre_appels.html#fn-ray_cast_at), [ray_
 
 ### saveNextScreenshot
 
-Définition : [engine.c](engine.c), ligne 9980.
+Définition : [engine.c](engine.c), ligne 8765.
 
 ```c
 void saveNextScreenshot(void)
@@ -6672,7 +6572,7 @@ Appels internes directs : aucun repéré.
 
 ### saveSHRAsRawPic
 
-Définition : [engine.c](engine.c), ligne 9934.
+Définition : [engine.c](engine.c), ligne 8719.
 
 ```c
 void saveSHRAsRawPic(const char *filename)
@@ -6700,7 +6600,7 @@ Appels internes directs : [setProDOSFileType](arbre_appels.html#fn-setProDOSFile
 
 ### screen2Black
 
-Définition : [engine.c](engine.c), ligne 6710.
+Définition : [engine.c](engine.c), ligne 6425.
 
 ```c
 void screen2Black()
@@ -6856,7 +6756,7 @@ Appels internes directs : aucun repéré.
 
 ### setProDOSFileType
 
-Définition : [engine.c](engine.c), ligne 9896.
+Définition : [engine.c](engine.c), ligne 8681.
 
 ```c
 void setProDOSFileType(const char* filename, int fileType, long auxType)
@@ -6884,7 +6784,7 @@ Appels internes directs : aucun repéré.
 
 ### show_face_normal
 
-Définition : [engine.c](engine.c), ligne 7319.
+Définition : [engine.c](engine.c), ligne 6801.
 
 ```c
 static void show_face_normal(Model3D* model, int target_face)
@@ -6916,7 +6816,7 @@ Appels internes directs : [FIXED_ROUND_TO_INT](arbre_appels.html#fn-FIXED_ROUND_
 
 ### show_help_pager
 
-Définition : [engine.c](engine.c), ligne 9768.
+Définition : [engine.c](engine.c), ligne 8555.
 
 ```c
 static void show_help_pager(void)
@@ -6944,39 +6844,11 @@ Réserve l'espace de l'en-tête et du pied ; recommence à la première page apr
 
 Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [getkeypress](arbre_appels.html#fn-getkeypress).
 
-<a id="fn-show_inspect_faces_with_message"></a>
-
-### show_inspect_faces_with_message
-
-Définition : [engine.c](engine.c), ligne 9499.
-
-```c
-static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const char* msg, int screenx, int screeny)
-```
-
-**Rôle :**
-
-Afficher deux faces sur le modèle filaire avec un message et attendre une réponse.
-
-**Paramètres :**
-
-[entrée] model, f1/f2 valides, msg, screenx/screeny en pixels.
-
-**Retour :**
-
-Touche pressée sur le chemin normal.
-
-**Limites :**
-
-les retours pour modèle NULL ou réserve impossible n'ont pas de valeur définie malgré le type int. Sauvegarde puis restaure options et drapeaux, libère le backup et revient au texte.
-
-Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [getkeypress](arbre_appels.html#fn-getkeypress).
-
 <a id="fn-showFace"></a>
 
 ### showFace
 
-Définition : [engine.c](engine.c), ligne 7405.
+Définition : [engine.c](engine.c), ligne 6886.
 
 ```c
 void showFace(Model3D* model, ObserverParams* params, const char* filename)
@@ -6996,9 +6868,11 @@ Aucun.
 
 **Fonctionnement :**
 
-Les flèches naviguent par identifiant ou position triée ; N bascule la normale, Espace ouvre les informations et les commandes de masquage, restauration et inversion du winding. Peut modifier les listes de faces et leurs plans. Sauvegarde les options de rendu et les drapeaux ; l'inspection utilise QuickDraw et les entrées-sorties texte. La réserve initiale de backup_flags n'est pas vérifiée.
+Les flèches naviguent par identifiant ou position triée ; N bascule la normale, Espace ouvre les informations et les commandes de masquage, restauration et inversion du winding. Peut modifier les listes de faces et leurs plans. Sauvegarde les options de rendu et les drapeaux ; l'inspection utilise QuickDraw et les entrées-sorties texte. La sauvegarde commune vérifie l'allocation avant d'ouvrir la vue.
 
-Appels internes directs : [calculateFaceDepths](arbre_appels.html#fn-calculateFaceDepths), [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawFaceIndex](arbre_appels.html#fn-drawFaceIndex), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [getkeypress](arbre_appels.html#fn-getkeypress), [hideFace](arbre_appels.html#fn-hideFace), [keypress](arbre_appels.html#fn-keypress), [restoreAllFaces](arbre_appels.html#fn-restoreAllFaces), [restoreFace](arbre_appels.html#fn-restoreFace), [reverseFaceVertexOrder](arbre_appels.html#fn-reverseFaceVertexOrder), [show_face_normal](arbre_appels.html#fn-show_face_normal).
+Utilise InspectionViewState pour la sauvegarde et la restauration communes des drapeaux et options ; le cycle de vie graphique reste géré par cet outil.
+
+Appels internes directs : [calculateFaceDepths](arbre_appels.html#fn-calculateFaceDepths), [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawFaceIndex](arbre_appels.html#fn-drawFaceIndex), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [getkeypress](arbre_appels.html#fn-getkeypress), [hideFace](arbre_appels.html#fn-hideFace), [inspection_view_begin](arbre_appels.html#fn-inspection_view_begin), [inspection_view_end](arbre_appels.html#fn-inspection_view_end), [keypress](arbre_appels.html#fn-keypress), [restoreAllFaces](arbre_appels.html#fn-restoreAllFaces), [restoreFace](arbre_appels.html#fn-restoreFace), [reverseFaceVertexOrder](arbre_appels.html#fn-reverseFaceVertexOrder), [show_face_normal](arbre_appels.html#fn-show_face_normal).
 
 <a id="fn-shroff"></a>
 
@@ -7212,7 +7086,7 @@ Appels internes directs : aucun repéré.
 
 ### sort_by_zmax
 
-Définition : [dony.c](dony.c), ligne 194.
+Définition : [dony.c](dony.c), ligne 196.
 
 ```c
 static void sort_by_zmax(int *sorted,Fixed32 *z_max,int nf)
@@ -7242,7 +7116,7 @@ Appels internes directs : aucun repéré.
 
 ### split_face_by_plane
 
-Définition : [engine.c](engine.c), ligne 1440.
+Définition : [engine.c](engine.c), ligne 1395.
 
 ```c
 static int split_face_by_plane(Model3D* model, int f1, int f2, int *out_newverts, int *out_n, int *constraint_verts, int constraint_n, int force_one_edge)
@@ -7270,13 +7144,13 @@ out_newverts et out_n, nouveaux indices à base zéro, au plus MAX_FACE_VERTICES
 
 Classe les sommets, crée les intersections, déduplique et trie les contours, puis réécrit les listes à base un et recalcule les bornes 3D. Ce traitement n'est pas transactionnel : de nouveaux sommets peuvent subsister après un retour 0. Les capacités de faces et d'indices ne sont pas contrôlées ici. Les deux fonctions de plan utilisées ont des échelles différentes ; les tolérances et contraintes doivent être réévaluées avant une rationalisation.
 
-Appels internes directs : [add_vertex](arbre_appels.html#fn-add_vertex), [cleanup_list](arbre_appels.html#fn-cleanup_list), [compute_face_bboxes3D](arbre_appels.html#fn-compute_face_bboxes3D), [compute_face_plane](arbre_appels.html#fn-compute_face_plane), [compute_face_plane_float](arbre_appels.html#fn-compute_face_plane_float), [poly_signed_area](arbre_appels.html#fn-poly_signed_area), [remove_duplicates](arbre_appels.html#fn-remove_duplicates), [reorder_poly](arbre_appels.html#fn-reorder_poly).
+Appels internes directs : [add_vertex](arbre_appels.html#fn-add_vertex), [cleanup_list](arbre_appels.html#fn-cleanup_list), [compute_face_bboxes3D](arbre_appels.html#fn-compute_face_bboxes3D), [compute_face_plane](arbre_appels.html#fn-compute_face_plane), [poly_signed_area](arbre_appels.html#fn-poly_signed_area), [remove_duplicates](arbre_appels.html#fn-remove_duplicates), [reorder_poly](arbre_appels.html#fn-reorder_poly).
 
 <a id="fn-strict_inside"></a>
 
 ### strict_inside
 
-Définition : [engine.c](engine.c), ligne 1274.
+Définition : [engine.c](engine.c), ligne 1229.
 
 ```c
 static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_local)
@@ -7304,7 +7178,7 @@ Appels internes directs : [point_in_poly_arrays_int](arbre_appels.html#fn-point_
 
 ### updateFace2DBounds
 
-Définition : [engine.c](engine.c), ligne 5596.
+Définition : [engine.c](engine.c), ligne 5211.
 
 ```c
 static void updateFace2DBounds(Model3D* model)

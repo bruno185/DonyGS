@@ -58,9 +58,7 @@ Les lettres acceptent majuscules et minuscules. Les commandes des inspecteurs pe
 | Espace | Modèle, paramètres, options et derniers temps mesurés. |
 | `V` / `Q` | Inspecteur de face / inspecteur de paire. |
 | `D` / `S` | Inspection des faces placées avant / après une cible. |
-| `M` / `L` | Détail des tests de plans / vue avec identifiants de faces. |
-| `;` | Réparation interactive de l’ordre ; Entrée passe en automatique, Échap interrompt. |
-| `.` | Réparation automatique utilisant le point issu de la bbox de région QuickDraw. |
+| `;` | Repair GEO V3 interactif : filaire et surlignage des deux faces avant chaque échange proposé. |
 | `(` | Choix de la méthode de chevauchement projeté. |
 | `/` | Benchmark des six méthodes comparées, export dans `overlap.all.txt`. |
 | `F` | Export de `Faces3D.csv`, `Faces2D.txt` et `FacesOrder.txt`. |
@@ -83,10 +81,10 @@ Les méthodes de classement produisent `faces.sorted_face_indices`, permutation 
 | `3` | NEWELL SANCHA | `painter_newell_sancha` : balayage des intervalles Z, liste de candidats et insertions avec table inverse des positions. |
 | `4` | GEO | `painter_geoV2` : correction de voisins par plans puis chevauchement et ray casting ; cache et nombre de passes borné. |
 | `5` | GEO V3 | `painter_geoV3` : tri stable par `z_max`, sélection et reprise après permutation ; filtrage assembleur et replis de ray casting. |
-| `6` | CORRECT | `painter_correct` : partition selon `plane_d`, puis insertions locales sur le groupe avant. |
-| `7` | CORRECT V2 | `painter_correctV2` : variante des insertions et vérifications croisées sans culling initial. |
+| `6` | CORRECT | `painter_correct`, variante 0 : partition selon `plane_d`, puis insertions locales sur le groupe avant. |
+| `7` | CORRECT V2 | `painter_correct`, variante 1 : passe arrière et vérifications croisées supplémentaires sans culling initial. |
 
-Aucun de ces sept chemins ne découpe automatiquement les faces pendant le tri. Le découpage appartient à la préparation expérimentale des intersections. `painter_newell_sancha_selection` est présent, mais hors du dispatch de `processModelFast`.
+Aucun de ces sept chemins ne découpe automatiquement les faces pendant le tri. Le découpage appartient à la préparation expérimentale des intersections.
 
 Un ordre global ne peut pas représenter tous les recouvrements cycliques et toutes les interpénétrations. Les gardes de permutations limitent les reprises ; elles ne prouvent pas la correction visuelle du résultat.
 
@@ -152,7 +150,7 @@ Les maxima déclarés sont 6000 sommets, 6000 faces, seize indices par face et d
 
 Il n’existe pas de clipping 3D général au plan proche. Les règles à profondeur nulle diffèrent entre transformation, métriques et zoom. Les formats fixes et différences 16 bits imposent aussi des bornes numériques.
 
-Certains chemins conservent des réserves non contrôlées, des états statiques à cycles de vie distincts ou des contraintes de réparation potentiellement cycliques. La révision documentaire les décrit sans les corriger ; voir le bilan avant rationalisation.
+Certains chemins conservent des réserves non contrôlées, des états statiques à cycles de vie distincts. La révision documentaire les décrit sans les corriger ; voir le bilan avant rationalisation.
 
 ## Compilation et déploiement
 
@@ -171,4 +169,10 @@ Les voies de comparaison C/assembleur sont sélectionnables par `GEOV3_DISABLE_A
 
 Comparer les appelants, formats, signes, tolérances, règles de bord et cycles de vie des ressources avant de fusionner des fonctions. En particulier, les plans objet et observateur, les différents résultats « avant », les champs d’aire et les deux rendus plein écran ne sont pas interchangeables.
 
-Les graphes décrivent les appels syntaxiques présents, sans évaluer les branches conditionnelles comme ORCA/C. Ils distinguent appels C directs, appels assembleur et référence indirecte connue du comparateur `qsort`.
+Les graphes décrivent les appels syntaxiques présents, sans évaluer les branches conditionnelles comme ORCA/C. Ils distinguent appels C directs, appels assembleur et références indirectes connues du comparateur `qsort` et de la confirmation des échanges du repair GEO V3.
+
+Les anciennes réparations complète et rapide sont archivées à la fin de `old/chutier.c`. La commande `.` reste retirée. La commande `;` lance désormais le repair GEO V3 : il part de la permutation courante, sans réinitialisation ni tri préalable. Les tests et échanges proviennent du même moteur que le classement GEO V3 accessible par `5`.
+
+Avant chaque échange, les 200 lignes de pixels sont effacées, puis le modèle est redessiné en fil de fer, avec la face P en vert clair et Q en orange. Deux lignes courtes proposent d’afficher P devant Q (« Draw face P in front of face Q »), puis les commandes. Cela correspond à dessiner Q avant P dans la permutation arrière-vers-avant. Les paires sans chevauchement selon la méthode configurée sont ignorées avant toute proposition, y compris en mode automatique. `N` ignore la proposition, Échap arrête en conservant les échanges déjà acceptés, Retour active l’application automatique des suivantes ; une autre touche applique l’échange courant. Le bilan compte propositions, échanges appliqués et refus. Les limites anti-cycle de GEO V3 restent actives : une proposition n’est pas une preuve exhaustive de correction géométrique. Les commandes S/D et Q restent disponibles pour l’examen manuel.
+
+Les vues S/D, Q, V, le repair et l’affichage des identifiants partagent la sauvegarde de visibilité, du mode filaire et du culling. Chaque outil conserve son cycle QuickDraw. Les actions volontaires de V sur les faces sont intégrées à la sauvegarde pour rester effectives à la fermeture. Un échec de sauvegarde annule la vue proprement.

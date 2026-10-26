@@ -655,19 +655,37 @@ void drawPolygons(Model3D *model, int *vertex_count, int face_count, int vertex_
 void drawPolygons_jitter(Model3D *model, int *vertex_count, int face_count, int vertex_count_total);
 void calculateFaceDepths(Model3D *model, Face3D *faces, int face_count);
 
+/* Confirmation d'un échange GEO V3 : -1 arrête, 0 ignore, 1 applique.
+ * Les positions et faces décrivent l'ordre avant échange ; reason distingue
+ * les tests de plans du repli par rayon. Le callback ne change pas le modèle.
+ */
+#define GEOV3_EXCHANGE_PLANES 1
+#define GEOV3_EXCHANGE_RAY 2
+typedef int (*GeoV3ExchangeCallback)(Model3D *model, int p, int q,
+                                    int pos_p, int pos_q, int reason,
+                                    void *context);
+static int geov3_run(Model3D* model, int face_count, int preserve_order,
+                     GeoV3ExchangeCallback on_exchange, void *context);
+static void repair_geov3(Model3D* model);
+
 void painter_newell_sancha_fast(Model3D* model, int face_count);
 void painter_bubble_sort(Model3D* model, int face_count);
 void painter_newell_sancha(Model3D* model, int face_count);
 void painter_geoV2(Model3D* model, int face_count);
-static int painter_correct(Model3D* model, int face_count, int debug);
-static int painter_correctV2(Model3D* model, int face_count, int debug);
+static int painter_correct(Model3D* model, int face_count, int use_v2);
 void painter_geoV2(Model3D* model, int face_count);
 
+/* Modes du calcul du plan objet ; les conversions et échelles sont distinctes. */
+#define FACE_PLANE_RAW_FIXED 0
+#define FACE_PLANE_OBJECT_UNITS 1
+static void compute_face_plane(Model3D* model, int fidx,
+                               double *a, double *b, double *c, double *d,
+                               int coordinate_mode);
+
 static int geometric_face_relation(Model3D* model, int f1, int f2);
+static int geo_face_order(Model3D* model, int f1, int f2);
 int projected_polygons_overlap(Model3D* model, int f1, int f2);
 int projected_polygons_overlap_simple(Model3D* model, int f1, int f2);
-int pair_plane_before(Model3D* model, int f1, int f2);
-int pair_plane_after(Model3D* model, int f1, int f2);
 int ray_cast_hierarchical(Model3D* model, int f1, int f2);
 
 void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index);
@@ -701,8 +719,7 @@ void processModelFast(Model3D* model, ObserverParams* params, const char* filena
 void getObserverParams(ObserverParams* params, Model3D* model);
 void normalizeAutoFitDistanceTo150(Model3D* model);
 
-void inspect_faces_before(Model3D* model, ObserverParams* params, const char* filename);
-void inspect_faces_after(Model3D* model, ObserverParams* params, const char* filename);
+static void inspect_faces_order(Model3D* model, ObserverParams* params, int inspect_after);
 void showFace(Model3D* model, ObserverParams* params, const char* filename);
 void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename);
 void inspect_face_pair_ui(Model3D* model);

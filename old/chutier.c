@@ -5828,3 +5828,405 @@ int check_sort_repair_fast(Model3D* model, int face_count)
     if (all_opp) return 1;
     return 0;
 }
+
+
+/*
+ * ============================================================================
+ *  Archive des deux stratégies de réparation d'ordre retirées le 26/10/2026
+ * ============================================================================
+ *
+ *  Rôle :
+ *    Conserver le code des réparations complète et rapide, retirées du
+ *    programme actif car leurs résultats ne sont pas satisfaisants.
+ *
+ *  Organisation :
+ *    check_sort_repair(..., 0) exécute l'ancienne stratégie complète ;
+ *    check_sort_repair(..., 1) exécute la stratégie rapide QuickDraw.
+ *    sort_repair_pair_order choisit le verdict, puis les deux auxiliaires
+ *    assurent la réapplication des contraintes et la confirmation graphique.
+ *
+ *  Dépendances et contraintes :
+ *    Copie de la dernière implémentation commune avant retrait des commandes
+ *    ; et . dans main. Dépend des types, fonctions graphiques et primitives
+ *    géométriques du programme ; ce bloc n'est pas autonome. GEO V3 reste
+ *    disponible dans les sources actives comme méthode de classement.
+ *
+ * ============================================================================
+ */
+#if 0
+/*
+ * ----------------------------------------------------------------------------
+ *  enforce_mandatory_after_relations
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Réappliquer les contraintes « a après b » après une réparation d'ordre.
+ *
+ *  Paramètres :
+ *    [entrée] model ; n ; relation_count et relations[][2].
+ *
+ *    [entrée-sortie] permutation du modèle et pos_of_face.
+ *
+ *  Retour :
+ *    Aucun.
+ *
+ *  Fonctionnement :
+ *    Déplace a à la position de b puis reprend depuis la première relation.
+ *
+ *  Préconditions :
+ *    permutation et table inverse cohérentes ; relations compatibles et sans
+ *    auto-relation. Aucun watchdog n'empêche une boucle sur contraintes
+ *    cycliques.
+ *
+ * ----------------------------------------------------------------------------
+ */
+static void enforce_mandatory_after_relations(Model3D* model, int n, int *pos_of_face, int relation_count, const int (*relations)[2]) {
+    if (!model || !pos_of_face || !relations) return;
+    FaceArrays3D* faces = &model->faces;
+    /* Parcourir les contraintes et ignorer leurs identifiants hors limites. */
+    for (int i = 0; i < relation_count; ++i) {
+        int a = relations[i][0];
+        int b = relations[i][1];
+
+        if (a < 0 || a >= n || b < 0 || b >= n) continue;
+        int pa = pos_of_face[a];
+        int pb = pos_of_face[b];
+
+        /* Déplacer a derrière b, reconstruire les positions affectées et
+         * vérifier à nouveau toutes les contraintes.
+         */
+        if (pa <= pb) {
+            int tmp = faces->sorted_face_indices[pa];
+            memmove(&faces->sorted_face_indices[pa], &faces->sorted_face_indices[pa + 1], sizeof(int) * (pb - pa));
+            faces->sorted_face_indices[pb] = tmp;
+
+            for (int k = pa; k <= pb; ++k) {
+                pos_of_face[faces->sorted_face_indices[k]] = k;
+            }
+
+            i = -1;
+        }
+    }
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  sort_repair_pair_order
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Choisir le verdict d'une paire selon la stratégie de réparation demandée.
+ *
+ *  Paramètres :
+ *    [entrée] model, f1/f2 : modèle et faces déjà filtrées pour la réparation.
+ *    [entrée] _ix0/_iy0/_ix1/_iy1 : intersection de leurs boîtes projetées.
+ *    [entrée] fast : 0 pour plans puis SH et replis, 1 pour QuickDraw seul.
+ *
+ *  Retour :
+ *    -1 si f1 est plus proche, +1 si f2 est plus proche, 0 si indéterminé.
+ *
+ *  Fonctionnement :
+ *    Le chemin complet essaie les plans, les centroïdes SH dans les deux
+ *    sens puis le centre de bbox. Le chemin rapide exige le point QuickDraw
+ *    et une aire non nulle. Les rayons passent par ray_cast_at, sans changer
+ *    ses seuils. Conserve les messages de diagnostic du chemin complet.
+ *    Peut remplir les caches et buffers de clipping, sans modifier le tri.
+ *
+ * ----------------------------------------------------------------------------
+ */
+static int sort_repair_pair_order(Model3D* model, int f1, int f2,
+                                  int _ix0, int _iy0, int _ix1, int _iy1,
+                                  int fast) {
+    /* La stratégie rapide conserve son point QuickDraw et aucun repli. */
+    if (fast) {
+        int cx = 0, cy = 0;
+        long long area2 = 0;
+        if (!compute_intersection_centroid_ordered_qd_fixed(model, f1, f2, &cx, &cy, &area2) || area2 == 0) return 0;
+        return ray_cast_at(model, f1, f2, cx, cy);
+    }
+    /* Le chemin complet conserve l'ordre des essais et ses replis. */
+    int cx = 0, cy = 0;
+    int point_source = 0;
+    int rc = 0;
+
+    {
+        int geo = geo_face_order(model, f1, f2);
+        if (geo != 0) {
+
+            rc = (geo == -1) ? 1 : -1;
+            point_source = 4;
+        }
+    }
+    long long a1 = 0, a2 = 0;
+    int cx1 = 0, cy1 = 0, cx2 = 0, cy2 = 0;
+    int have1 = 0;
+    int have2 = 0;
+
+    /* Si les plans ne tranchent pas, essayer successivement les
+     * points de clipping et les replis.
+     */
+    if (rc == 0) {
+        have1 = compute_intersection_centroid_ordered_fixed(model, f1, f2, &cx1, &cy1, &a1) && a1 > 0;
+        if (have1) {
+            cx = cx1; cy = cy1; point_source = 1;
+            rc = ray_cast_at(model, f1, f2, cx, cy);
+        }
+    }
+    if (rc == 0) {
+        have2 = compute_intersection_centroid_ordered_fixed(model, f2, f1, &cx2, &cy2, &a2) && a2 > 0;
+        if (!have1 && have2) {
+            cx = cx2; cy = cy2; point_source = 2;
+            rc = ray_cast_at(model, f1, f2, cx, cy);
+        } else if (have1 && have2 && rc == 0) {
+            cx = cx2; cy = cy2; point_source = 2;
+            rc = ray_cast_at(model, f1, f2, cx, cy);
+        }
+    }
+
+    if (rc == 0) {
+        int ix0 = _ix0; int ix1 = _ix1; int iy0 = _iy0; int iy1 = _iy1;
+        cx = (ix0 + ix1) / 2; cy = (iy0 + iy1) / 2; point_source = 3;
+        rc = ray_cast_at(model, f1, f2, cx, cy);
+    }
+    if (debug_overlap_subj == f1 && debug_overlap_clip == f2) {
+        if (point_source == 1) printf("check_sort_repair: using centroid f1->f2 (%d,%d) area1=%lld\n", cx, cy, a1);
+        else if (point_source == 2) printf("check_sort_repair: using centroid f2->f1 (%d,%d) area2=%lld\n", cx, cy, a2);
+        else if (point_source == 4) printf("check_sort_repair: using geo_face_order decision (%d,%d)\n", cx, cy);
+        else printf("check_sort_repair: using bbox-center (%d,%d)\n", cx, cy);
+    }
+
+    return rc;
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  check_sort_repair
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Vérifier et réparer l'ordre des faces avec un parcours commun aux deux
+ *    stratégies complète et rapide.
+ *
+ *  Paramètres :
+ *    [entrée] model et face_count : modèle et nombre de faces à examiner.
+ *    [entrée] fast : 0 pour la stratégie complète interactive, 1 pour la
+ *    stratégie QuickDraw automatique dans un contexte graphique.
+ *
+ *  Retour :
+ *    Nombre de réparations directes appliquées, ou 0 sans traitement.
+ *
+ *  Sorties et effets de bord :
+ *    Modifie sorted_face_indices, maintient les positions inverses et les
+ *    contraintes acceptées ; utilise les caches et buffers des comparateurs.
+ *    Le mode complet conserve ESC, N et Retour ; le rapide ouvre puis ferme
+ *    le contexte graphique et attend une touche en fin de traitement.
+ *
+ *  Fonctionnement :
+ *    Filtre visibilité, culling, profondeur, boîtes et chevauchement. Appelle
+ *    sort_repair_pair_order pour le verdict propre à la stratégie choisie,
+ *    puis partage déplacement stable, mise à jour des positions, mémorisation
+ *    et réapplication des contraintes. Conserve seuils et replis existants.
+ *
+ *  Limites :
+ *    La réapplication des contraintes conserve ses limites historiques face
+ *    aux cycles ; ce regroupement ne modifie pas la politique de réparation.
+ *
+ * ----------------------------------------------------------------------------
+ */
+int check_sort_repair(Model3D* model, int face_count, int fast) {
+    if (!model) return 0;
+    FaceArrays3D* faces = &model->faces;
+    if (face_count <= 0) return 0;
+    if (fast) startgraph(mode);
+    int n = face_count;
+    /* Réserver la table inverse et la liste des contraintes déjà acceptées. */
+    int *pos_of_face = (int*)malloc(sizeof(int) * n);
+    if (!pos_of_face) {
+        if (fast) endgraph();
+        return 0;
+    }
+    if (!fast) for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+
+    int relation_capacity = n + 16;
+    int relation_count = 0;
+    int (*after_relations)[2] = (int(*)[2])malloc(sizeof(int) * 2 * relation_capacity);
+    if (!after_relations) {
+        free(pos_of_face);
+        if (fast) endgraph();
+        return 0;
+    }
+    if (fast) {
+        MoveTo(3,10); printf("Computing repairs...");
+        for (int i = 0; i < n; ++i) pos_of_face[faces->sorted_face_indices[i]] = i;
+    }
+    int repairs = 0;
+    const char* instructions = "\nWhen graphics is displayed  :\nESC: abort, RETURN: automatic mode (no graphics), N: skip, any other key: continue.\n\n";
+    int automatic_mode = fast;
+    if (!fast) printf("%s", instructions);
+    /* Examiner les paires de faces affichables dont profondeur et projection
+     * se recouvrent.
+     */
+    for (int f1 = 0; f1 < n; ++f1) {
+        if (!fast) printf("%d ", f1);
+        if (faces->display_flag[f1] == 0) continue;
+        if (cull_back_faces && faces->plane_d[f1] <= 0) continue;
+        for (int f2 = f1 + 1; f2 < n; ++f2) {
+            if (faces->display_flag[f2] == 0) continue;
+            if (cull_back_faces && faces->plane_d[f2] <= 0) continue;
+
+            if (faces->z_max[f1] <= faces->z_min[f2] || faces->z_max[f2] <= faces->z_min[f1]) continue;
+
+            int _ix0, _iy0, _ix1, _iy1;
+            if (!compute_bbox_intersection(model, f1, f2, &_ix0, &_iy0, &_ix1, &_iy1)) continue;
+
+            if (!projected_polygons_overlap(model, f1, f2)) continue;
+
+            /* Chercher un point de comparaison puis évaluer les deux
+             * distances sur le même rayon.
+             */
+            int rc = sort_repair_pair_order(model, f1, f2,
+                                             _ix0, _iy0, _ix1, _iy1, fast);
+            if (rc == 0) continue;
+
+            if (rc == -1 || rc == 1) {
+
+                /* Déplacer la face proche seulement si elle est placée trop
+                 * tôt dans le rendu arrière-vers-avant.
+                 */
+                int closer = (rc == -1) ? f1 : f2;
+                int other  = (rc == -1) ? f2 : f1;
+                int pclos = pos_of_face[closer];
+                int pother = pos_of_face[other];
+                if (pclos <= pother) {
+                    int tmp = faces->sorted_face_indices[pclos];
+                    /* Demander une décision graphique tant que le mode
+                     * automatique n'a pas été choisi.
+                     */
+                    if (!automatic_mode) {
+                        char msg[160];
+                        snprintf(msg, sizeof(msg), "Face %d after face %d ? \n(N=skip, ESC=abort, RET=auto, other=apply)", closer, other);
+                        int _k = show_inspect_faces_with_message(model, closer, other, msg, 3, 188);
+                        if (_k == 27) {           free(pos_of_face); free(after_relations); return repairs; }
+                        if (_k == 'N' || _k == 'n') {
+
+                            if (!automatic_mode) {
+                                printf("Check and repair running...\n"); fflush(stdout);
+                                printf("\n%s\n", instructions);
+                                printf("Face %d\n", f1);
+                            }
+                            continue;
+                        }
+                        if (_k == 13 || _k == 10) {
+                            automatic_mode = 1;
+
+                            if (!automatic_mode) {
+                                printf("Check and repair running...\n"); fflush(stdout);
+                                printf("\n%s\n", instructions);
+                                printf("Face %d\n", f1);
+                            }
+                        }
+                    }
+                    if (pclos < pother) {
+                        memmove(&faces->sorted_face_indices[pclos], &faces->sorted_face_indices[pclos+1], sizeof(int) * (pother - pclos));
+                        faces->sorted_face_indices[pother] = tmp;
+                        for (int k = pclos; k <= pother; ++k) pos_of_face[faces->sorted_face_indices[k]] = k;
+                        ++repairs;
+
+                        /* Agrandir si possible la liste des contraintes ;
+                         * une réserve insuffisante n'annule pas le
+                         * déplacement déjà appliqué.
+                         */
+                        if (relation_count >= relation_capacity) {
+                            int new_cap = relation_capacity * 2;
+                            int (*tmp_rel)[2] = (int(*)[2])realloc(after_relations, sizeof(int) * 2 * new_cap);
+                            if (tmp_rel) {
+                                after_relations = tmp_rel;
+                                relation_capacity = new_cap;
+                            }
+                        }
+                        if (relation_count < relation_capacity) {
+                            after_relations[relation_count][0] = closer;
+                            after_relations[relation_count][1] = other;
+                            relation_count++;
+                        }
+                        /* Réappliquer les décisions précédentes après le déplacement courant. */
+                        enforce_mandatory_after_relations(model, n, pos_of_face, relation_count, after_relations);
+                    }
+                    if (!automatic_mode) {
+                        printf("Check and repair running...\n"); fflush(stdout);
+                        printf("\n%s\n", instructions);
+                    }
+                }
+            }
+        }
+    }
+    /* Libérer les contraintes et la table inverse sur le chemin normal. */
+    free(pos_of_face);
+    free(after_relations);
+    if (fast) {
+        MoveTo(3,20);
+        printf("Repairs done: repairs=%d\n", repairs);
+        printf("Press any key to continue...\n");
+        keypress();
+        endgraph();
+        DoText();
+    } else {
+        printf("\ncheck_sort_repair: repairs=%d\n", repairs);
+    }
+    return repairs;
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  show_inspect_faces_with_message
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Afficher deux faces sur le modèle filaire avec un message et attendre
+ *    une réponse.
+ *
+ *  Paramètres :
+ *    [entrée] model, f1/f2 valides, msg, screenx/screeny en pixels.
+ *
+ *  Retour :
+ *    Touche pressée sur le chemin normal.
+ *
+ *  Limites :
+ *    les retours pour modèle NULL ou réserve impossible n'ont pas de valeur
+ *    définie malgré le type int. Sauvegarde puis restaure options et
+ *    drapeaux, libère le backup et revient au texte.
+ *
+ * ----------------------------------------------------------------------------
+ */
+static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const char* msg, int screenx, int screeny) {
+    if (!model) return;
+    FaceArrays3D* faces = &model->faces;
+    VertexArrays3D* vtx = &model->vertices;
+    /* Réserver une sauvegarde de visibilité avant de forcer la vue filaire. */
+    unsigned char* backup_flags = (unsigned char*)malloc(faces->face_count);
+    if (backup_flags == NULL) { printf("Memory allocation failed\n"); return; }
+    for (int i = 0; i < faces->face_count; ++i) backup_flags[i] = faces->display_flag[i];
+    int old_frame = framePolyOnly;
+    startgraph(mode);
+    framePolyOnly = 1;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = 1;
+    if (jitter) drawPolygons_jitter(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+    else drawPolygons(model, faces->vertex_count, faces->face_count, vtx->vertex_count);
+    unsigned char saved_f1 = faces->display_flag[f1]; unsigned char saved_f2 = faces->display_flag[f2];
+    faces->display_flag[f1] = 1; faces->display_flag[f2] = 1;
+    /* Surligner les deux faces et placer le message de décision. */
+    drawFace(model, f1, COL_LIGHT_GREEN, 1);
+    drawFace(model, f2, COL_ORANGE, 1);
+    faces->display_flag[f1] = saved_f1; faces->display_flag[f2] = saved_f2;
+    MoveTo(screenx, screeny);
+    printf("%s", msg);
+
+    /* Attendre la réponse puis restaurer l'état avant de la transmettre. */
+    int key = getkeypress ();
+    framePolyOnly = old_frame;
+    for (int i = 0; i < faces->face_count; ++i) faces->display_flag[i] = backup_flags[i];
+    free(backup_flags);
+    endgraph(); DoText();
+    return key;
+}
+#endif
