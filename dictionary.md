@@ -1,8 +1,10 @@
 # Dictionnaire technique de l’explorateur OBJ
 
-Ce document décrit les sources actives de la racine. Il accompagne le [guide d’utilisation](README.md), le [graphe des appels](arbre_appels.html), sa [version repliable](arbre_appels_fold.html) et le [bilan de révision](REVISION_DOCUMENTATION.md).
+Ce document décrit les sources actives de la racine. Il accompagne le [guide d’utilisation](README.md), le [graphe des appels](arbre_appels.html), sa [version repliable](arbre_appels_fold.html) et le [audit des appels](AUDIT_ARBRE_APPELS.md).
 
 Les contrats ci-dessous sont reconstruits depuis les en-têtes français des définitions. `old/`, `tools/` et `DEPLOY.py` sont exclus de la révision. Les branches de compilation sont inventoriées sans être évaluées : une définition présente n’est pas nécessairement appelée dans la configuration courante.
+
+Les relations d’appel sont vérifiées depuis `main` ; voir [l’audit reproductible](AUDIT_ARBRE_APPELS.md). Les callbacks sont distingués des appels directs.
 
 ## Repères et formats
 
@@ -605,7 +607,7 @@ SetColorTable ; requiert QuickDraw actif et palettes déjà préparées.
 
 Le numéro sélectionne la source logicielle, pas le numéro de table destination.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-calculateFaceDepths"></a>
 
@@ -697,7 +699,7 @@ Aucun.
 
 Supprime aussi la répétition du premier indice en fin de liste ; les répétitions non adjacentes restent présentes.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-cmp_faces_by_zmean"></a>
 
@@ -725,7 +727,7 @@ Négatif si a précède b, positif sinon, zéro si même identifiant.
 
 Ordre décroissant de z_mean ; les égalités sont départagées par identifiant croissant. Non réentrant en raison du pointeur global de contexte.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-colorChooser"></a>
 
@@ -863,7 +865,7 @@ ix0/iy0/ix1/iy1.
 
 Accepte les contacts d'aire nulle ; les sorties ne sont écrites qu'en réussite.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-compute_bbox_intersection_center"></a>
 
@@ -923,7 +925,7 @@ Aucun ; modèle NULL ou sans face est ignoré.
 
 Remplace les six tableaux min/max en 16.16. Sur échec d'allocation, les libère tous et les remet à NULL. Les indices des faces doivent être valides. L'appelant doit tenir compte de l'absence possible de bornes après cet échec.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-compute_face_plane"></a>
 
@@ -955,7 +957,7 @@ Lit les trois premiers sommets puis calcule le produit vectoriel et d, sans norm
 
 Des sommets initiaux colinéaires donnent un plan dégénéré même si la face complète définit un plan. Ce calcul reste distinct de Newell sur le contour observateur dans calculateFaceDepths.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-compute_intersection_centroid_fractional_tryboth"></a>
 
@@ -1149,7 +1151,7 @@ out_area2.
 
 QuickDraw initialisé. Alloue trois régions et deux polygones. Attention : out_area2 contient le produit largeur*hauteur de la bbox, pas le double de l'aire de la région. Les tableaux sont lus sans pan ; les ressources QuickDraw sont libérées avant retour sur les chemins pris en charge.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-computeOrientationShading"></a>
 
@@ -1181,7 +1183,7 @@ face_shade_color, indice 0..15 arrondi depuis |c|/norme.
 
 Une normale nulle reçoit COL_FILL_DEFAULT. Ce modèle de shading ne représente pas une source lumineuse positionnée et ne tient pas compte d'une occultation.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-cos_deg_int"></a>
 
@@ -1209,7 +1211,7 @@ Cosinus Fixed32.
 
 Ramène l'angle dans [0,359] ; aucune interpolation et aucun effet de bord.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-createModel3D"></a>
 
@@ -1339,7 +1341,7 @@ rectangles, textes et motif QuickDraw ; la case noire est encadrée en blanc pou
 
 Le modèle n'est ni modifié ni recalculé.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-dony_ray_pair_record"></a>
 
@@ -1371,7 +1373,7 @@ count, tableaux de paires, tête de bucket et stamp mis à jour.
 
 l'appelant a vérifié la limite de permutations ; une entrée libre doit exister. Les collisions conservent les clés exactes.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-dony_ray_pair_seen"></a>
 
@@ -1399,7 +1401,7 @@ Tester si une paire non orientée a déjà provoqué un échange dans cette pass
 
 Aucun effet de bord. Les identifiants sont normalisés, puis les collisions de hash sont parcourues dans une liste chaînée dont les liens sont stockés à base un.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-dony_ray_pairs_reserve"></a>
 
@@ -1427,13 +1429,13 @@ Réserver les listes de paires utilisées pour empêcher les cycles de ray casti
 
 buffers remplacés seulement après réussite des trois allocations ; count et stamps sont réinitialisés lors de l'agrandissement.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-DoText"></a>
 
 ### DoText
 
-Définition : [engine.c](engine.c), ligne 8352.
+Définition : [engine.c](engine.c), ligne 8353.
 
 ```c
 void DoText()
@@ -1547,7 +1549,7 @@ Aucun.
 
 Valide visibilité et indices ; applique le pan et l'échelle écran. Conserve et restaure le motif de crayon. Ne dessine pas le contour ni la surface.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-drawInstructions"></a>
 
@@ -1579,7 +1581,7 @@ texte centré au bas du port graphique.
 
 La largeur de chaque ligne est mesurée par CStringWidth.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-drawPaletteNumber"></a>
 
@@ -1607,7 +1609,7 @@ Aucun.
 
 texte centré avec CStringWidth sur le port actif.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-drawPolygons"></a>
 
@@ -1795,7 +1797,7 @@ Aucun.
 
 Ouvre en ajout ; NULL ou échec d'ouverture est ignoré. Ne recalcule aucun test.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-dumpFace2DCoordinates"></a>
 
@@ -1823,7 +1825,7 @@ Aucun.
 
 Écrase le fichier ; écrit IDs de faces base zéro et sommets base un, sans pan appliqué au dessin. Ignore les indices de sommets invalides ; ne recalcule pas la projection.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-dumpFaceEquationsCSV"></a>
 
@@ -1851,7 +1853,7 @@ Aucun.
 
 Écrase le fichier cible ; n'effectue pas de recalcul de vue. Les IDs de face sont à base zéro et les indices de sommets restent au format OBJ.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-dumpSortedFaceIndices"></a>
 
@@ -1879,7 +1881,7 @@ Aucun.
 
 Écrase le fichier ; une ligne par identifiant de face à base zéro, y compris les faces actuellement masquées.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-encodePaletteColor"></a>
 
@@ -1907,7 +1909,7 @@ GS_Color 12 bits.
 
 Aucun accès matériel ni effet de bord.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-evaluate_pair_tests"></a>
 
@@ -1967,7 +1969,7 @@ Moyenne Fixed32 tronquée vers zéro.
 
 Aucun effet de bord. Réduit à une division 32 bits si possible ; pour count=4, ajoute 3 aux sommes négatives avant le décalage de deux bits afin de conserver la troncature C.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-FaceDepth_ScanFace"></a>
 
@@ -2075,7 +2077,7 @@ Aucun.
 
 paquet global ; les pointeurs doivent rester stables jusqu'à la fin du parcours.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-faces_share_vertex_or_edge"></a>
 
@@ -2103,7 +2105,7 @@ Détecter un identifiant de sommet commun à deux faces.
 
 Aucun effet de bord. Le test ne requiert pas une arête entière commune et ne détecte pas les sommets géométriquement égaux portant des indices distincts.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-faces_vertices_equal"></a>
 
@@ -2131,7 +2133,7 @@ Comparer deux contours projetés modulo rotation cyclique et inversion.
 
 Ne compare pas la profondeur, ni l'identité OBJ des sommets ; une égalité projetée n'est pas une égalité 3D.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-fixed_mul32_fast"></a>
 
@@ -2243,7 +2245,7 @@ Convertir un Fixed32 en entier en appliquant le biais de demi-unité du moteur.
 
 Aucun effet de bord. Le cas négatif suit le décalage signé du compilateur ; ne pas l'assimiler à un arrondi symétrique au plus proche ni à une troncature vers zéro.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-fractional_face_gather"></a>
 
@@ -2431,7 +2433,7 @@ Consomme rand sans initialiser sa graine ici.
 
 les retours de realloc ne sont pas vérifiés avant utilisation ; cette révision conserve ce comportement.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-geo_face_order"></a>
 
@@ -2687,7 +2689,7 @@ Préserve P, A, X et D ; Y et DBR ne sont pas modifiés.
 
 Cadre D de 24 octets : signe à 1 ; échange à 3 ; M à 5/7 ; compte à 9 ; facteur 65536 à 11 ; Q à 13/15 ; produit à 17/19/21/23.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-GeoV3_Mul32x32SetInputs"></a>
 
@@ -2773,6 +2775,8 @@ Réutilise sans duplication le filtrage C/assembleur, les deux tests de plans, l
 
 Appels internes directs : [dony_ray_pair_record](arbre_appels.html#fn-dony_ray_pair_record), [dony_ray_pair_seen](arbre_appels.html#fn-dony_ray_pair_seen), [dony_ray_pairs_reserve](arbre_appels.html#fn-dony_ray_pairs_reserve), [geometric_face_relation](arbre_appels.html#fn-geometric_face_relation), [GeoV3_FindCandidate](arbre_appels.html#fn-GeoV3_FindCandidate), [GeoV3_ScanSetup](arbre_appels.html#fn-GeoV3_ScanSetup), [projected_polygons_overlap_cached](arbre_appels.html#fn-projected_polygons_overlap_cached), [ray_cast_hierarchical](arbre_appels.html#fn-ray_cast_hierarchical), [sort_by_zmax](arbre_appels.html#fn-sort_by_zmax).
 
+Appels internes indirects : [repair_geov3_confirm](arbre_appels.html#fn-repair_geov3_confirm).
+
 <a id="fn-GeoV3_ScanCandidates"></a>
 
 ### GeoV3_ScanCandidates
@@ -2819,7 +2823,7 @@ Préserve P, A, Y et D ; X et DBR ne sont pas utilisés.
 
 Cadre D de 44 octets : pointeurs far tri/zmax/minx/maxx/miny/maxy à 1/5/9/13/17/21 ; zmin de P à 25/27, bornes de P à 29/31/33/35, position/fin à 37/39, temporaire à 41 et offset Q*2 à 43.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-GeoV3_ScanSetup"></a>
 
@@ -2851,7 +2855,7 @@ paquet global, limite de recherche et invalidation du P mémorisé.
 
 pointeurs ORCA/C de quatre octets et tableaux stables pendant le tri.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-getFaceFillColor"></a>
 
@@ -2879,7 +2883,7 @@ Indice selon priorité shading, aléatoire disponible, choix utilisateur, défau
 
 Aucun dessin ni modification de l'état. Les sélections spéciales doivent être cohérentes avec les buffers.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-getFaceFrameColor"></a>
 
@@ -2907,7 +2911,7 @@ Remplissage si choix 17, couleur aléatoire disponible si 16, choix explicite ou
 
 Aucun dessin ; ne recalcule pas le remplissage.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-getkeypress"></a>
 
@@ -2939,7 +2943,7 @@ acquitte $00C010 ; attente active.
 
 Accumulateur attendu sur 16 bits.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-getkeypress_openA"></a>
 
@@ -2971,7 +2975,7 @@ strobe acquitté ; A est rendu sur 16 bits, P n'est pas restauré.
 
 accès matériels en 8 bits, sauvegarde du caractère sur la pile, transfert du bit 7 de $00C061 vers B, puis reconstitution de B:A.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-getObserverParams"></a>
 
@@ -3005,7 +3009,7 @@ entrées-sorties texte.
 
 Les angles sont lus en degrés entiers, la distance par atof puis conversion 16.16 ; aucune validation numérique forte. Une distance vide ou un échec de lecture réutilise les suggestions si disponibles, sinon 30. Met à jour current_observer_distance ; la projection globale n'est pas directement réaffectée dans cette fonction.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-getSquareRect"></a>
 
@@ -3037,7 +3041,7 @@ Aucun.
 
 Centre une grille 8x2 et une ligne séparée de une ou deux cases spéciales.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-hideFace"></a>
 
@@ -3133,7 +3137,7 @@ gSaveHandle, gSaveBank et gSaveOffset décrivent le bloc verrouillé.
 
 les transferts suivants utilisent une banque unique et un offset 16 bits ; ils supposent une implantation du bloc compatible avec ces transferts.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-inspect_face_pair_ui"></a>
 
@@ -3225,7 +3229,7 @@ Sauvegarder visibilité, mode filaire et culling avant une inspection.
 
 Ne modifie ni le modèle ni les options. Les drapeaux sont sauvegardés un par un car display_flag est un tableau d'int, et non d'octets. L'appelant reste responsable de QuickDraw et du choix des faces visibles.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-inspection_view_end"></a>
 
@@ -3281,7 +3285,7 @@ Aucun.
 
 Restaure les drapeaux, le filaire et le culling. Ne ferme pas QuickDraw, ne modifie ni la géométrie ni l'ordre des faces. Une sauvegarde sans buffer est ignorée.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-keypress"></a>
 
@@ -3315,7 +3319,7 @@ lecture de $00C000, écriture de $00C010 ; attente active sans timeout.
 
 accumulateur 16 bits conformément aux constantes employées.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-loadModel3D"></a>
 
@@ -3405,7 +3409,7 @@ Déplacer un élément d'un tableau en conservant l'ordre des autres.
 
 La destination est bornée à [0,n-1] ; memmove traite les zones qui se chevauchent.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-move_element_remove_and_insert_pos"></a>
 
@@ -3465,7 +3469,7 @@ Représentant dans [0,359] par modulo corrigé si négatif.
 
 Aucun effet de bord ; ne modifie pas l'argument de l'appelant.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-normalizeAutoFitDistanceTo150"></a>
 
@@ -3497,7 +3501,7 @@ géométrie et métadonnées modifiées, message affiché ; la vue dérivée doi
 
 Multiplie les coordonnées objet et la projection par sqrt(150/D), fixe la distance suggérée et current_observer_distance à 150. La formule conserve un rapport d'échelle global ; elle ne démontre pas une invariance exacte de perspective pour des sommets de profondeurs différentes.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-Off_BridgeBorderZQ"></a>
 
@@ -3581,7 +3585,7 @@ Aucun.
 
 Accepte une profondeur égale à Z ou plus lointaine d'au plus un code selon les différences int natives. N'introduit pas une surface plus proche dans Z. Le test de visibilité diffère de celui des contours du rendu direct. Écrit directement le nibble accepté dans le framebuffer : un seul test de coordonnées et aucun second appel par pixel de liaison.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-Off_RenderCore"></a>
 
@@ -3653,7 +3657,7 @@ Le handle attrNoCross garantit un bloc de 32000 octets dans une banque. Écrit s
 
 Préserve P/DBR, modifie A/X/Y ; le buffer doit rester dans une banque. OFF_PIXELS doit être un multiple de 32.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-Offscreen_FlushToScreen"></a>
 
@@ -3691,7 +3695,7 @@ Ne copie ni les SCB ni les palettes situés après la zone des pixels.
 
 Préserve P/DBR, modifie A/X/Y ; code auto-modifiant non réentrant.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-Offscreen_Init"></a>
 
@@ -3723,7 +3727,7 @@ handle verrouillé, banque, offset, table off_row et off_ready.
 
 Appeler une fois avant utilisation. Contrairement à ZBuffer_Init, l'appel répété n'est pas idempotent : l'ancien handle n'est pas libéré avant remplacement. Le contenu n'est pas effacé ici.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-Offscreen_Shutdown"></a>
 
@@ -3751,7 +3755,7 @@ Aucun.
 
 Annule off_ready et le handle ; appel répété accepté. Ne libère pas les buffers statiques de préparation de Off_RenderCore ni le Z-buffer.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-on_seg_ll"></a>
 
@@ -3779,7 +3783,7 @@ Booléen, sans effet de bord.
 
 Ne teste pas la colinéarité : l'appelant doit aussi vérifier l'orientation nulle.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ordering_cache_invalidate"></a>
 
@@ -3811,7 +3815,7 @@ propriétaire, génération et paquet assembleur invalidé.
 
 Les allocations sont conservées. Lorsque le compteur revient à zéro, effacer les stamps avant de repartir à 1 pour ne pas réutiliser une ancienne vue.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ordering_cache_release"></a>
 
@@ -3843,7 +3847,7 @@ buffers libérés, tables et métadonnées remises à zéro.
 
 Les pointeurs retournés auparavant par les fonctions de cache deviennent invalides.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ordering_fixed_plane"></a>
 
@@ -3909,7 +3913,7 @@ Aucun.
 
 Les autres caches de chevauchement et de ray casting sont conservés.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ordering_geometry_slot"></a>
 
@@ -3965,7 +3969,7 @@ Vrai si génération et clé correspondent, faux sinon.
 
 Aucun effet de bord.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ordering_pair_slot"></a>
 
@@ -4027,7 +4031,7 @@ Aucun.
 
 La génération est publiée avec la clé complète ; une collision évince l'ancien résultat sans produire de faux hit.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ordering_plane"></a>
 
@@ -4087,7 +4091,7 @@ Vrai si génération, face et projection correspondent ; faux sinon.
 
 Aucun effet de bord.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ordering_winding_slot"></a>
 
@@ -4145,7 +4149,7 @@ Aucun.
 
 La valeur est marquée avec la génération courante.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ordering_workspace"></a>
 
@@ -4177,7 +4181,7 @@ remplace l'ancien buffer uniquement après une allocation réussie ; le contenu 
 
 Ne pas libérer le pointeur retourné.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-orient_ll"></a>
 
@@ -4233,7 +4237,7 @@ Calculer le déterminant orienté de AB et AP en double.
 
 Aucun état modifié ; zéro signifie colinéaire selon l'arithmétique double.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-overlap_v2_edge_probes"></a>
 
@@ -4345,7 +4349,7 @@ Déterminant signé ; aucun état modifié.
 
 Les conversions précèdent les différences pour éviter leur débordement en int.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ovf_inside"></a>
 
@@ -4373,7 +4377,7 @@ Classer un point rationnel par rapport à un contour projeté entier.
 
 Utilise des produits ovf64 sans division. L'appelant doit garantir que ces produits restent représentables.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ovf_probe"></a>
 
@@ -4661,9 +4665,11 @@ sorted_face_indices
 
 Avec culling, regroupe les faces affichables en tête et les autres en fin, puis trie uniquement le préfixe visible. Sans culling, trie toutes les faces. Ne teste ni plans, ni chevauchement, ni cycles ; le nom historique ne désigne pas ici l'algorithme Newell/Sancha complet.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 Référence indirecte : `cmp_faces_by_zmean` via `qsort`.
+
+Appels internes indirects : [cmp_faces_by_zmean](arbre_appels.html#fn-cmp_faces_by_zmean).
 
 <a id="fn-pair_cache_create"></a>
 
@@ -4691,7 +4697,7 @@ Cache possédé par l'appelant, ou NULL sur échec.
 
 Les slots commencent vides et doivent être libérés par pair_cache_destroy.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-pair_cache_destroy"></a>
 
@@ -4715,7 +4721,7 @@ Libérer un cache de paires et ses slots.
 
 Aucun ; le pointeur de l'appelant devient invalide.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-pair_cache_find"></a>
 
@@ -4803,7 +4809,7 @@ Indice du slot.
 
 Trie les deux identifiants avant hash ; aucun test de présence ni effet de bord.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-pair_order_relation"></a>
 
@@ -4891,7 +4897,7 @@ Tester un point entier par parité des traversées d'un rayon horizontal.
 
 Un sommet exactement égal rend 1, mais les autres contacts de contour ne sont pas traités uniformément comme intérieur. Produits 64 bits après différences natives int : ne pas présenter cette routine comme exacte sur tout le domaine 16 bits.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-point_in_poly_int"></a>
 
@@ -4947,7 +4953,7 @@ Aire signée en unités objet carrées, 0 pour n < 3.
 
 Ce n'est pas l'aire 3D normalisée du polygone. Aucun effet de bord.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-processModelFast"></a>
 
@@ -5277,7 +5283,7 @@ Aucun.
 
 Ajoute quotient et reste du pas, puis propage une unité au quotient si le reste atteint le diviseur positif.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-raster_edge_intersection"></a>
 
@@ -5305,7 +5311,7 @@ X doublé.
 
 Corrige le quotient euclidien négatif lorsqu'un reste subsiste, puis ajoute l'origine x1. Aucun effet de bord.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-raster_euclidean_divide"></a>
 
@@ -5337,7 +5343,7 @@ Aucun.
 
 Corrige le quotient tronqué de C quand le reste est négatif ; le quotient final doit tenir dans long.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-raster_incremental_scanline"></a>
 
@@ -5399,7 +5405,7 @@ Tester si deux intervalles ouverts contiennent un centre de pixel commun.
 
 Exclut les contacts sur les limites.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-raster_prepare_edges_incremental"></a>
 
@@ -5459,7 +5465,7 @@ Aucun ; aucune allocation.
 
 Les valeurs égales conservent leur ordre de rencontre.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ray_cast_at"></a>
 
@@ -5645,7 +5651,7 @@ out_idx à base zéro
 
 buffer de sortie assez grand pour la somme des longueurs. Déduplique par recherche linéaire en conservant l'ordre de première rencontre.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-rch_patch_pair_at_scale"></a>
 
@@ -5713,7 +5719,7 @@ minx/maxx/miny/maxy de f, sans invalidation globale des caches.
 
 Cette routine étroite doit être utilisée avec sauvegarde et restauration cohérentes.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-rch_unpatch_pair"></a>
 
@@ -5743,7 +5749,7 @@ Aucun.
 
 Restaure coordonnées écran des sommets, bornes des deux faces et projection globale. Ne restaure pas d'autres métriques car elles n'ont pas changé.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-readFaces_model"></a>
 
@@ -5779,7 +5785,7 @@ Les suffixes /vt/vn sont sautés ; les indices relatifs négatifs ne sont pas in
 
 l'écriture du buffer compact ne contrôle pas ici sa capacité totale.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ReadPalette"></a>
 
@@ -5807,7 +5813,7 @@ GS_Palette copié par valeur ; aucune écriture matérielle.
 
 Attention : PALETTE_BASE est un pointeur unsigned int ; son addition avec palette_num*32 est donc mise à l'échelle par sizeof(unsigned int). Le chemin principal appelle cette fonction avec 0, où ce décalage est nul.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-compute_auto_fit"></a>
 
@@ -5899,7 +5905,7 @@ Aucun.
 
 Parcours quadratique de la liste, sans allocation ; ne compare pas les coordonnées des sommets.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-renderModelFullscreenZBuffer"></a>
 
@@ -6367,7 +6373,7 @@ Aucun ; graph_changed n'est pas modifié.
 
 MVN du buffer vers $E1:2000, avec banques patchées à l'exécution. P et DBR sont restaurés ; A, X et Y sont utilisés. Même contrainte de code auto-modifiant et de banque unique que saveScreen.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-reverseFaceVertexOrder"></a>
 
@@ -6433,7 +6439,7 @@ Appels internes directs : [ray_cast_at](arbre_appels.html#fn-ray_cast_at), [ray_
 
 ### saveNextScreenshot
 
-Définition : [engine.c](engine.c), ligne 8462.
+Définition : [engine.c](engine.c), ligne 8463.
 
 ```c
 void saveNextScreenshot(void)
@@ -6491,13 +6497,13 @@ buffer mis à jour et graph_changed remis à zéro.
 
 patcher les octets de banque du MVN puis transférer 32768 octets. P et DBR sont restaurés ; A, X et Y sont utilisés. Code auto-modifiant, non réentrant et nécessitant un segment exécutable accessible en écriture.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-saveSHGRAsRawPic"></a>
 
 ### saveSHGRAsRawPic
 
-Définition : [engine.c](engine.c), ligne 8416.
+Définition : [engine.c](engine.c), ligne 8417.
 
 ```c
 void saveSHGRAsRawPic(const char *filename)
@@ -6551,7 +6557,7 @@ Aucun.
 
 A et X sur 16 bits. A, X et les indicateurs ne sont pas sauvegardés.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-screenClearTopLines"></a>
 
@@ -6587,7 +6593,7 @@ Borne la hauteur puis calcule l'offset du dernier mot. Le noyau 16 bits descend 
 
 Le bloc assembleur préserve P, A et X ; Y et DBR ne sont pas utilisés. Le code C de préparation reste soumis à la convention d'appel ORCA/C.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-segs_intersect_int"></a>
 
@@ -6675,13 +6681,13 @@ terminal uniquement.
 
 Vérifie les caractères résiduels après strtol et redemande après erreur.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-setProDOSFileType"></a>
 
 ### setProDOSFileType
 
-Définition : [engine.c](engine.c), ligne 8378.
+Définition : [engine.c](engine.c), ligne 8379.
 
 ```c
 void setProDOSFileType(const char* filename, int fileType, long auxType)
@@ -6703,7 +6709,7 @@ Aucun.
 
 Construit FileInfoRecGS et appelle SetFileInfoGS avec accès $C3. Ne vérifie ni la longueur maximale ni le résultat Toolbox ; aucun contenu écrit.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-shgroff"></a>
 
@@ -6731,7 +6737,7 @@ Aucun.
 
 A et les indicateurs sont modifiés ; la routine termine avec A, X et Y configurés sur 16 bits.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-show_face_normal"></a>
 
@@ -6853,7 +6859,7 @@ Sinus Fixed32.
 
 Ramène l'angle dans [0,359] ; aucune interpolation et aucun effet de bord.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-SL_ClearLine"></a>
 
@@ -6885,7 +6891,7 @@ Les accès globaux longs évitent la dépendance à DBR.
 
 Préserve P, modifie A/X.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-SL_PaintSpan"></a>
 
@@ -6945,7 +6951,7 @@ sl_zscale=cible/(max_inv_z+SL_Z_BIAS) si le dénominateur dépasse 1e-7.
 
 Sinon conserve l'échelle précédente.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-sort_by_zmax"></a>
 
@@ -7065,7 +7071,7 @@ Aucun.
 
 Invalide les caches d'ordre, parcourt les indices et écrit les bornes projetées. Ne recalcule ni plans, ni profondeur, ni display_flag.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBFS_FreeEdges"></a>
 
@@ -7093,7 +7099,7 @@ Aucun.
 
 Remet les pointeurs et leur capacité à zéro. Utilise uniquement les allocations du rendu plein écran direct.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBFS_FreeFaces"></a>
 
@@ -7205,7 +7211,7 @@ Nouvelle longueur de la liste active.
 
 Insère chaque nouvelle face par identifiant croissant, sans modifier les bornes ni les règles de fin de vie des faces. Le buffer est dimensionné au nombre total de faces.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_Clear"></a>
 
@@ -7237,7 +7243,7 @@ Aucun.
 
 Préserve P, DBR et D ; A/X/Y servent au transfert. Cadre D de six octets : offset de table à 0, pointeur de ligne à 2/4 ; D pointe S+1 après réserve. Chemin rapide par blocs de seize mots avec DBR de la ligne ; chemin [dp],Y pour une ligne traversant une banque. Largeur multiple de 16 requise. Les accès |offset,X imposent le mode absolu, pas la page directe.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_DrawEdge"></a>
 
@@ -7293,7 +7299,7 @@ Aucun.
 
 Libère débuts, ordre, liste active, couleurs et nudges, puis neutralise la réserve. Les plans du direct et les liaisons offscreen restent possédés par leurs moteurs.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_FreeVertices"></a>
 
@@ -7321,7 +7327,7 @@ Aucun.
 
 Libère les trois buffers et neutralise tous les pointeurs et la capacité. Une réserve vide peut être libérée à nouveau.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_Init"></a>
 
@@ -7381,7 +7387,7 @@ Conserve les opérations en long et la troncature de la division entière des an
 
 Aucune saturation ; les différences et produits doivent être valides dans les types intermédiaires. L'appelant choisit le domaine de x.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_PaintSpanZ"></a>
 
@@ -7441,7 +7447,7 @@ Accumulateur modulo 2^32, avec douze bits fractionnaires.
 
 Aucun effet de bord ; saturation faite séparément.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_PlaneCode"></a>
 
@@ -7469,7 +7475,7 @@ Code 16 bits ; valeur avec bit de signe après ajout du demi-pas donne 0 ; débo
 
 Aucun effet de bord.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_EdgeRun"></a>
 
@@ -7501,7 +7507,7 @@ Copie le paquet de 50 octets dans un cadre direct de 52 octets, puis avance Bres
 
 Préserve P et D ; DBR inchangé, A/X/Y volatils. Accumulateur 16 bits sauf pendant l'écriture du nibble. Offsets 0..49 : paquet ; 50 : code Z local. Pointeurs far avancés sur 32 bits pour franchir les banques du Z-buffer. Appel synchrone et non réentrant ; count positif, major/minor <= 65535.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_PrepareFaces"></a>
 
@@ -7561,7 +7567,7 @@ Maximum des profondeurs inverses, ou zéro.
 
 Calcule directement 65536/(float)zo pour les profondeurs 16.16 positives et écrit zéro sinon. La simplification par une puissance de deux garde les mêmes arrondis. La plus petite profondeur fixe positive fournit le maximum des inverses sans comparaison flottante supplémentaire.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_PrepareScanEdges"></a>
 
@@ -7589,7 +7595,7 @@ Aucun.
 
 Conserve le format 12 bits fractionnaires, les arêtes horizontales neutralisées, les divisions signées et le clipping vertical des anciens moteurs. Le rendu direct garde son calcul de plan et ses arêtes propres.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_QuantizeAtScale"></a>
 
@@ -7617,7 +7623,7 @@ Code 16 bits inversé et saturé ; 65535 représente le fond.
 
 Conserve les opérations float, l’arrondi par +0,5 puis la conversion en long des deux anciens quantificateurs. Ne modifie aucune échelle.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_QuantizeInvZ"></a>
 
@@ -7769,7 +7775,7 @@ Aucun.
 
 Zéro masque un côté, non-zéro l'autorise ; NULL rétablit tous les côtés. Le buffer doit rester vivant pendant le rendu qui l'utilise.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_SetPlane"></a>
 
@@ -7797,7 +7803,7 @@ Aucun ; écrit le plan *p, avec pan et gradients à douze bits fractionnaires.
 
 Réutilise le plan de Newell calculé par calculateFaceDepths. Pour le rayon écran (u,v,1), 1/z = -(a*u+b*v+c)/d ; cette fonction est affine avant quantification. Les coordonnées arrondies des sommets servent uniquement à choisir l'ancrage, jamais à reconstruire les gradients. Un plan nul ou passant par l'observateur conserve la profondeur constante de repli. Les quatre coefficients ont la même échelle : elle se simplifie dans leurs rapports. Évite donc les conversions intermédiaires en double et les divisions par 65536 ; l'inverse de projection est préparé par vue. Mémorise aussi les codes minimal et maximal des sommets, élargis de deux unités pour les arrondis. Le remplissage rejette les extrapolations hors de cet intervalle physique, notamment sur une face presque de profil.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_SetScaleForFrame"></a>
 
@@ -7825,7 +7831,7 @@ Aucun.
 
 zbuffer_scale, cible/max_inv_z si max_inv_z > 1e-7 ; sinon conserve l'échelle précédente.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_Shutdown"></a>
 
@@ -7881,7 +7887,7 @@ Booléen.
 
 La division du maximum size_t évite de déborder lors du produit de taille.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_SortFaceStarts"></a>
 
@@ -7913,7 +7919,7 @@ Aucun.
 
 Effectue les sommes préfixes puis distribue les faces par identifiant croissant. Préserve les égalités de profondeur et l’ordre d’activation des anciens parcours.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_SortScanHits"></a>
 
@@ -7941,7 +7947,7 @@ Aucun.
 
 Échange les deux intersections si nécessaire, sinon utilise l’insertion stable selon x. Les codes Z restent attachés à leurs abscisses.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-ZBuffer_SpanRun"></a>
 
@@ -7977,7 +7983,7 @@ Préserve P et D ; A/X/Y modifiés, DBR inchangé. Mode décimal supposé désac
 
 Quand les deux pixels intérieurs passent le test Z strict, leur octet couleur est écrit en une fois ; sinon seul le nibble visible change. Le mot 28 du cadre direct contient la couleur des deux pixels.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-evaluate_face_crossings"></a>
 
@@ -8033,7 +8039,7 @@ Handle verrouillé, ou NULL après le message d’échec historique.
 
 Réserve MAX_FACE_VERTICES points, y compris pour une première face isolée. Conserve la séquence de déverrouillage/verrouillage ; ne change ni le crayon, ni le port, ni le contenu du polygone. Appelé une seule fois par entrée de rendu, jamais dans le parcours des sommets.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 
 
@@ -8103,7 +8109,7 @@ maximum de la valeur absolue du quotient pour u*u+v*v=radial2, ou -1 si la traje
 
 les tangences du quotient au cercle donnent une équation quadratique. Avec A=depth²-radial2*g², la plus grande valeur absolue vaut (|depth*c-radial2*a*g| + sqrt(radial2*((depth*a-c*g)²+b²*A)))/A. Aucun échantillonnage angulaire ni traitement complet du modèle.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-animation_compile_transition"></a>
 
@@ -8131,7 +8137,7 @@ aucun ; renseigne blocks et bytes dans frame.
 
 émettre A9 lo hi / 8F adresse24, soit LDA #mot / STA long. Conserver aussi les mots devenus noirs pour effacer l’ancienne silhouette. Comparer les mots 16 bits en un seul parcours, avec pointeurs et adresse vidéo incrémentaux. Chaque bloc plein occupe ANIM_BLOCK_BYTES ; zéro différence ne produit aucun bloc. Les réserves ANIM_CODE_BYTES couvrent le pire cas.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-animation_execute_block"></a>
 
@@ -8159,7 +8165,7 @@ aucun ; écrit uniquement les mots vidéo encodés dans le bloc.
 
 préparer un JSL auto-modifiant, imposer A/X/Y 16 bits, exécuter au plus ANIM_WORDS_PER_BLOCK écritures, puis restaurer le contexte. P, D et DBR préservés ; A/X/Y volatils. Interruptions masquées uniquement pendant ce court bloc. Le code généré termine par RTL et ne change pas S.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-animation_fit"></a>
 
@@ -8211,7 +8217,7 @@ aucun. Retour : aucun.
 
 accepte les réserves partielles et remet chaque entrée à zéro.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-animation_handle_key"></a>
 
@@ -8239,7 +8245,7 @@ régler le délai entre vues ou reconnaître une demande d'arrêt.
 
 droite/haut diminuent le délai d'un tick, gauche/bas l'augmentent ; saturer entre ANIM_MIN_VIEW_TICKS et ANIM_MAX_VIEW_TICKS. La modification prend effet pendant l'attente courante, sans recalcul 3D.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-animation_hold_view"></a>
 
@@ -8347,7 +8353,7 @@ aucun. Retour : nombre pair de 4 à 60, ou 0 sur réserve insuffisante.
 
 conserver ANIM_MEMORY_RESERVE octets libres, prévoir le code maximal de chaque transition et réduire le nombre prévu si un handle échoue. Les réserves partielles restent possédées jusqu’à animation_free_frames.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-animation_select_frames"></a>
 
@@ -8399,7 +8405,7 @@ aucun. Retour : 1 sur frappe, 0 sinon.
 
 accès matériels en 8 bits ; P est préservé, A volatil.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : aucun dans le périmètre.
 
 <a id="fn-animation_wait_vbl"></a>
 

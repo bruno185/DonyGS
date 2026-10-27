@@ -531,7 +531,7 @@ python DEPLOY.py
 - **Inspection**: S/D, Q, V, repair, and face labels share inspection-state save/restore helpers. The old pair-debug mode has been removed; normal inspection and file exports remain.
 - **Animation**: `animation.c`, included at the end of `engine.c`, owns temporary frame handles and compiled direct-video transitions; the `ANIM` segment keeps the command separate from rendering kernels.
 - **Segments**: Named segments such as `transform`, `ordering`, `rendering`, `inspection`, and `ZBUF` organize target memory banks. `#pragma optimize 1` enables compiler optimization.
-- **Companion Documentation**: [dictionary.md](dictionary.md), [call tree](arbre_appels.html), and [foldable call tree](arbre_appels_fold.html) describe the current functions and call relationships in French.
+- **Companion Documentation**: [dictionary.md](dictionary.md), [call tree](arbre_appels.html), and [foldable call tree](arbre_appels_fold.html) describe the current functions and call relationships in French. The [call-graph audit](AUDIT_ARBRE_APPELS.md) records the full traversal from `main`, callback handling, compile-option checks, and the local verification commands.
 
 ### Coordinate Systems
 
