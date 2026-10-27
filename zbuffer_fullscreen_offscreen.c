@@ -396,18 +396,10 @@ static void Off_BridgeBorderZQ(int x0, int y0, UWORD16 zq0,
 }
 
 
-typedef struct {
-    int x;
-    UWORD16 zq;
-} OffScanIntersection;
+typedef ZBufferScanHit OffScanIntersection;
 
 
-typedef struct {
-    long x, z;
-    long sx, sz;
-    int ya, yb;
-    int xb;
-} OffEdge;
+typedef ZBufferScanEdge OffEdge;
 
 
 /*
@@ -565,26 +557,17 @@ static void Off_RenderCore(Model3D* model, int biased)
     FaceArrays3D* faces = &model->faces;
     int vcount = vtx->vertex_count;
     int fcount = faces->face_count;
-    int y, f, i, k, b, si, ai, keep, active_count;
+    int y, f, i, k, ai, keep, active_count;
     int total_edges, end;
     int clip_x_min, clip_x_max, y_lo, y_hi;
     float frame_max_inv_z;
     OffEdge* ed;
     OffScanIntersection hits[MAX_SPAN_INTERSECTIONS];
 
-    static float* inv_z = NULL;
-    static UWORD16* vzq = NULL;
-    static UWORD16* vzq_b = NULL;
-    static int vert_capacity = 0;
+    static ZBufferVertexWork vertices;
 
     static OffZBufSpanPrev* span_prev = NULL;
-    static int* face_start = NULL;
-    static int* face_sorted = NULL;
-    static int* face_active = NULL;
-    static unsigned char* face_fill = NULL;
-    static unsigned char* face_frame = NULL;
-    static unsigned char* face_nudge = NULL;
-    static int face_capacity = 0;
+    static ZBufferFaceWork face_work;
 
     static OffEdge* edge_buf = NULL;
     static int edge_capacity = 0;
@@ -598,34 +581,15 @@ static void Off_RenderCore(Model3D* model, int biased)
 
 
     /* Réserver les tables de faces, couleurs et biais. */
-    if (face_capacity < fcount) {
-        if (span_prev)    free(span_prev);
-        if (face_start)   free(face_start);
-        if (face_sorted)  free(face_sorted);
-        if (face_active)  free(face_active);
-        if (face_fill)    free(face_fill);
-        if (face_frame)   free(face_frame);
-        if (face_nudge)   free(face_nudge);
-        span_prev   = (OffZBufSpanPrev*)malloc(fcount * sizeof(OffZBufSpanPrev));
-        face_start  = (int*)malloc(fcount * sizeof(int));
-        face_sorted = (int*)malloc(fcount * sizeof(int));
-        face_active = (int*)malloc(fcount * sizeof(int));
-        face_fill   = (unsigned char*)malloc(fcount);
-        face_frame  = (unsigned char*)malloc(fcount);
-        face_nudge  = (unsigned char*)malloc(fcount);
-        face_capacity = (span_prev && face_start && face_sorted && face_active &&
-                         face_fill && face_frame && face_nudge) ? fcount : 0;
+    if (face_work.capacity < fcount) {
+        if (!ZBuffer_SizeFits(fcount, sizeof(OffZBufSpanPrev))) return;
+        free(span_prev); span_prev = NULL;
+        if (!ZBuffer_ReserveFaces(&face_work, fcount)) return;
+        span_prev = (OffZBufSpanPrev*)malloc((size_t)fcount * sizeof(OffZBufSpanPrev));
+        if (!span_prev) { ZBuffer_FreeFaces(&face_work); return; }
     }
     /* Agrandir les buffers de sommets et conserver leur capacité entre les rendus. */
-    if (vert_capacity < vcount) {
-        if (inv_z) free(inv_z);
-        if (vzq)   free(vzq);
-        if (vzq_b) free(vzq_b);
-        inv_z = (float*)malloc(vcount * sizeof(float));
-        vzq   = (UWORD16*)malloc(vcount * sizeof(UWORD16));
-        vzq_b = (UWORD16*)malloc(vcount * sizeof(UWORD16));
-        vert_capacity = (inv_z && vzq && vzq_b) ? vcount : 0;
-    }
+    if (!ZBuffer_ReserveVertices(&vertices, vcount)) return;
     total_edges = 0;
     for (f = 0; f < fcount; f++) {
         end = faces->vertex_indices_ptr[f] + faces->vertex_count[f];
@@ -636,28 +600,20 @@ static void Off_RenderCore(Model3D* model, int biased)
         edge_buf = (OffEdge*)malloc((size_t)total_edges * sizeof(OffEdge));
         edge_capacity = edge_buf ? total_edges : 0;
     }
-    if (face_capacity < fcount || vert_capacity < vcount || edge_capacity < total_edges)
+    if (face_work.capacity < fcount || vertices.capacity < vcount || edge_capacity < total_edges)
         return;
 
 
     for (f = 0; f < fcount; f++) span_prev[f].valid = 0;
 
 
-    frame_max_inv_z = 0.0f;
-    /* Calculer les profondeurs inverses et les codes selon le format de
-     * cette version.
-     */
-    for (i = 0; i < vcount; i++) {
-        float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
-        inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
-        if (inv_z[i] > frame_max_inv_z) frame_max_inv_z = inv_z[i];
-    }
+    frame_max_inv_z = ZBuffer_PrepareInvZ(vtx, vcount, vertices.inv_z);
     ZBuffer_SetScaleForFrame(frame_max_inv_z);
 
     for (i = 0; i < vcount; i++) {
 
-        vzq[i]   = ZBuffer_QuantizeInvZ(inv_z[i]);
-        vzq_b[i] = biased ? ZBuffer_QuantizeInvZ(inv_z[i] + OFF_Z_BIAS) : vzq[i];
+        vertices.vzq[i]   = ZBuffer_QuantizeInvZ(vertices.inv_z[i]);
+        vertices.vzq_b[i] = biased ? ZBuffer_QuantizeInvZ(vertices.inv_z[i] + OFF_Z_BIAS) : vertices.vzq[i];
     }
 
     SetPenMode(0);
@@ -678,83 +634,23 @@ static void Off_RenderCore(Model3D* model, int biased)
     /* Initialiser l'histogramme des premières lignes ; préparer visibilité,
      * couleurs et arêtes.
      */
-    for (b = 0; b <= OFF_ROWS; b++) bucket[b] = 0;
-
-    for (f = 0; f < fcount; f++) {
-        int n, offt, fmin, fmax, fill;
-        UWORD16* zsrc;
-
-        face_start[f] = -1;
-        if (!faces->display_flag[f]) continue;
-        n = faces->vertex_count[f];
-        if (n < 3) continue;
-        fmin = faces->miny[f];
-        fmax = faces->maxy[f];
-        if (fmax < y_lo || fmin > y_hi) continue;
-
-
-        b = ((fmin > y_lo) ? fmin : y_lo) - y_lo;
-        face_start[f] = b;
-        bucket[b + 1]++;
-
-        fill = getFaceFillColor(f);
-        face_fill[f]  = (unsigned char)fill;
-        face_frame[f] = (unsigned char)getFaceFrameColor(f, fill);
-        face_nudge[f] = (unsigned char)((biased && faces->plane_d[f] > 0) ? 2 : 0);
-
+    ZBuffer_PrepareFaces(faces, fcount, y_lo, y_hi, OFF_ROWS, biased,
+                         face_work.face_start, face_work.face_fill, face_work.face_frame,
+                         face_work.face_nudge, bucket);
+    for (f = 0; f < fcount; ++f) {
+        int offt;
+        UWORD16 *zsrc;
+        if (face_work.face_start[f] < 0) continue;
         offt = faces->vertex_indices_ptr[f];
-        zsrc = (biased && faces->plane_d[f] > 0) ? vzq_b : vzq;
+        zsrc = (biased && faces->plane_d[f] > 0) ? vertices.vzq_b : vertices.vzq;
         ed = edge_buf + offt;
 
-        for (k = 0; k < n; k++, ed++) {
-            int k2 = (k + 1 < n) ? (k + 1) : 0;
-            int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
-            int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
-            int y1 = vtx->y2d[vid1];
-            int y2 = vtx->y2d[vid2];
-            int dy = y2 - y1;
-            int ya, yb, xs;
-            long zs, ex, ez, sx, sz, skip;
-
-            if (dy == 0) {
-                ed->ya = 32767; ed->yb = 32767;
-                ed->x = 0L; ed->z = 0L; ed->sx = 0L; ed->sz = 0L;
-                continue;
-            }
-
-
-            sx = (((long)vtx->x2d[vid2] - (long)vtx->x2d[vid1]) * 4096L) / (long)dy;
-            sz = (((long)zsrc[vid2] - (long)zsrc[vid1]) * 4096L) / (long)dy;
-
-
-            if (dy > 0) { ya = y1; yb = y2; xs = 0;                                        zs = (long)zsrc[vid1]; }
-            else        { ya = y2; yb = y1; xs = vtx->x2d[vid2] - vtx->x2d[vid1];          zs = (long)zsrc[vid2]; }
-
-            ex = (long)xs * 4096L;
-            ez = zs * 4096L;
-
-
-            if (ya < y_lo && yb > y_lo) {
-                skip = (long)(y_lo - ya);
-                ex += sx * skip;
-                ez += sz * skip;
-            }
-
-            ed->ya = ya;  ed->yb = yb;
-            ed->xb = vtx->x2d[vid1];
-            ed->x  = ex + OFF_ROUND;
-            ed->z  = ez + OFF_ROUND;
-            ed->sx = sx;  ed->sz = sz;
-        }
+        ZBuffer_PrepareScanEdges(vtx, faces, f, zsrc, y_lo, OFF_ROUND, ed);
     }
 
 
-    for (b = 0; b < OFF_ROWS; b++) bucket[b + 1] += bucket[b];
-    for (b = 0; b <= OFF_ROWS; b++) bucket_cur[b] = bucket[b];
-    for (f = 0; f < fcount; f++) {
-        b = face_start[f];
-        if (b >= 0) face_sorted[bucket_cur[b]++] = f;
-    }
+    ZBuffer_SortFaceStarts(fcount, OFF_ROWS, face_work.face_start,
+                           bucket, bucket_cur, face_work.face_sorted);
 
 
     /* Démarrer la liste des faces actives, puis balayer les lignes visibles. */
@@ -767,16 +663,8 @@ static void Off_RenderCore(Model3D* model, int biased)
         /* Insérer les faces commençant sur cette ligne en gardant l'ordre
          * d'identifiants.
          */
-        for (si = bucket[row]; si < bucket[row + 1]; si++) {
-            int nf = face_sorted[si];
-            int pos = active_count;
-            while (pos > 0 && face_active[pos - 1] > nf) {
-                face_active[pos] = face_active[pos - 1];
-                pos--;
-            }
-            face_active[pos] = nf;
-            active_count++;
-        }
+        active_count = ZBuffer_ActivateFaces(row, bucket, face_work.face_sorted,
+                                             face_work.face_active, active_count);
 
         keep = 0;
         /* Écarter les faces terminées et extraire les intersections des
@@ -786,9 +674,9 @@ static void Off_RenderCore(Model3D* model, int biased)
             int n, offt, hit_count;
             int fillColor, frameColor, on_top_or_bottom, nudge;
 
-            f = face_active[ai];
+            f = face_work.face_active[ai];
             if (faces->maxy[f] < y) continue;
-            face_active[keep++] = f;
+            face_work.face_active[keep++] = f;
 
             n = faces->vertex_count[f];
             offt = faces->vertex_indices_ptr[f];
@@ -817,28 +705,11 @@ static void Off_RenderCore(Model3D* model, int biased)
             /* Ordonner les intersections : échange simple pour deux, tri par
              * insertion au-delà.
              */
-            if (hit_count == 2) {
-                if (hits[0].x > hits[1].x) {
-                    OffScanIntersection tmp = hits[0];
-                    hits[0] = hits[1];
-                    hits[1] = tmp;
-                }
-            } else {
-                int a, c;
-                for (a = 1; a < hit_count; a++) {
-                    OffScanIntersection key = hits[a];
-                    c = a - 1;
-                    while (c >= 0 && hits[c].x > key.x) {
-                        hits[c + 1] = hits[c];
-                        c--;
-                    }
-                    hits[c + 1] = key;
-                }
-            }
+            ZBuffer_SortScanHits(hits, hit_count);
 
-            fillColor  = face_fill[f];
-            frameColor = face_frame[f];
-            nudge      = face_nudge[f];
+            fillColor  = face_work.face_fill[f];
+            frameColor = face_work.face_frame[f];
+            nudge      = face_work.face_nudge[f];
             on_top_or_bottom = (y == faces->miny[f] || y == faces->maxy[f]);
 
 

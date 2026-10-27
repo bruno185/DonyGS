@@ -687,6 +687,25 @@ static int move_element_remove_and_insert(int *arr, int n, int from, int insert_
 static int move_element_remove_and_insert_pos(int *arr, int n, int from,
                                                int insert_idx, int *pos_of_face);
 
+/* Conventions distinctes : ordre de dessin, distance sur un rayon et face
+ * désignée dans un diagnostic. Les valeurs historiques sont conservées.
+ */
+enum {
+    FACE_ORDER_BEFORE = -1,
+    FACE_ORDER_UNDETERMINED = 0,
+    FACE_ORDER_AFTER = 1
+};
+enum {
+    RAY_FIRST_NEARER = -1,
+    RAY_ORDER_UNDETERMINED = 0,
+    RAY_FIRST_FARTHER = 1
+};
+enum {
+    PAIR_FRONT_NONE = 0,
+    PAIR_FRONT_FIRST = 1,
+    PAIR_FRONT_SECOND = 2
+};
+
 static int geometric_face_relation(Model3D* model, int f1, int f2);
 static int geo_face_order(Model3D* model, int f1, int f2);
 int projected_polygons_overlap(Model3D* model, int f1, int f2);

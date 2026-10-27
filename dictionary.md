@@ -8,6 +8,9 @@ Les contrats ci-dessous sont reconstruits depuis les en-têtes français des dé
 
 | Terme ou donnée | Signification dans le projet |
 | --- | --- |
+| `FACE_ORDER_*` | −1 avant, 0 indéterminé, +1 après dans l’ordre de dessin. |
+| `RAY_*` | −1 premier plus proche, 0 indéterminé, +1 premier plus loin ; convention distincte de l’ordre de dessin. |
+| `PAIR_FRONT_*` | 0 indéterminé, 1 première face devant, 2 seconde face devant. |
 | Repère objet | Coordonnées `x/y/z` importées et éventuellement centrées ou normalisées. Les axes OBJ y et z sont échangés à la lecture. |
 | Repère observateur | Coordonnées `xo/yo/zo` après rotation et translation de distance ; origine au point d’observation. |
 | Projection | `x2d/y2d`, pixels entiers autour de (160,100), avant application du pan. Le chemin subpixel conserve des coordonnées double. |
@@ -118,7 +121,7 @@ Inclus par OBJExplorer.cc après les pragmas ORCA/C. Les caches et paquets assem
 
 ### ordering_cache.c
 
-Regrouper les résultats réutilisables pendant le traitement d'une vue : relations entre faces, plans préparés, côtés des sommets et contours projetés. Ces caches évitent de répéter les calculs géométriques coûteux.
+
 
 Les entrées sont associées à un modèle et à une génération de données. Les clés complètes sont vérifiées avant réutilisation ; une collision peut remplacer une entrée, mais ne doit pas produire un faux résultat. Les allocations sont conservées entre invalidations.
 
@@ -182,19 +185,19 @@ Définitions assembleur ORCA/C destinées à l'unité de compilation du projet. 
 
 ### screen_save_restore.c
 
-Conserver une image de 32768 octets à partir de $E1:2000 pour revenir rapidement aux vues graphiques après une inspection textuelle, sans recalculer les polygones.
+Conserver une image de 32768 octets à partir de $E1:2000 pour revenir rapidement aux vues graphiques après une inspection textuelle, sans recalculer les polygones. Effacer aussi un nombre choisi de lignes depuis le haut de la zone de pixels.
 
-L'initialisation réserve un handle verrouillé et en décompose l'adresse. Les fonctions saveScreen et restoreScreen patchent les banques d'une instruction MVN, puis transfèrent la zone en un bloc. graph_changed suit l'invalidation de la sauvegarde.
+L'initialisation réserve un handle verrouillé et en décompose l'adresse. Les fonctions saveScreen et restoreScreen patchent les banques d'une instruction MVN, puis transfèrent la zone en un bloc. graph_changed suit l'invalidation de la sauvegarde. screenClearTopLines partage l'effacement du bandeau avant les rendus direct et scanline.
 
 Inclus par engine.c et dépend des outils mémoire Apple IIgs. Appeler l'initialisation une seule fois. Le transfert suppose une implantation compatible avec une banque et un offset 16 bits. Code auto-modifiant inscriptible et non réentrant ; P et DBR sont préservés, contrairement aux registres de transfert.
 
 ### zbuffer_common.c
 
-Partager les calculs de profondeur et le noyau de spans des rendus plein écran direct et offscreen.
+Fournir les réserves et préparations communes aux trois rendus Z-buffer, ainsi que leur noyau de spans 65C816.
 
-Fournit l'interpolation entière utilisée pour le clipping des spans scanline et offscreen, puis le noyau assembleur de test Z et dessin des spans plein écran. Le paquet zspan_p_* est commun aux deux rendus.
+Regroupe les buffers typés privés de chaque moteur, la profondeur inverse, la quantification, les débuts de faces, les listes actives, les arêtes scanline/offscreen, leur tri et l'interpolation des spans. Le paquet zspan_p_* et le noyau assembleur servent aux trois rendus.
 
-Inclus par engine.c avant les moteurs Z-buffer. Sur ORCA/C, UWORD16 et unsigned int sont des types non signés de 16 bits ; long est signé sur 32 bits. Les produits intermédiaires doivent rester représentables.
+Inclus par engine.c avant les moteurs Z-buffer. Sur ORCA/C, UWORD16 et unsigned int sont non signés sur 16 bits ; long est signé sur 32 bits. Les produits intermédiaires doivent rester représentables. Les moteurs conservent leurs réserves, échelles, biais et règles de contour propres. Le paquet de spans reste partagé et non réentrant.
 
 ### zbuffer_scanline.c
 
@@ -435,16 +438,14 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [segs_intersect_int_fixed64](#fn-segs_intersect_int_fixed64) — `overlap_raster.c` : Tester une intersection propre de deux segments entiers.
 - [select_overlap_method](#fn-select_overlap_method) — `overlap_raster.c` : Demander un choix runtime de méthode sans modifier directement l'état global.
 - [setProDOSFileType](#fn-setProDOSFileType) — `engine.c` : Affecter les métadonnées GS/OS d'un fichier existant.
+- [shgroff](#fn-shgroff) — `asm.h` : Désactiver l'affichage SHGR en écrivant $41 dans $00C029.
 - [show_face_normal](#fn-show_face_normal) — `engine.c` : Dessiner en jaune la normale de la face sélectionnée dans l'inspecteur.
 - [show_help_pager](#fn-show_help_pager) — `engine.c` : Afficher cycliquement les pages d'aide textuelle jusqu'à Échap.
 - [showFace](#fn-showFace) — `engine.c` : Explorer une face, sa normale et ses données détaillées dans une vue interactive.
-- [shgroff](#fn-shgroff) — `asm.h` : Désactiver l'affichage SHGR en écrivant $41 dans $00C029.
 - [sin_deg_int](#fn-sin_deg_int) — `declare.c` : Lire le sinus d'un angle entier dans la table 16.16.
 - [SL_ClearLine](#fn-SL_ClearLine) — `zbuffer_scanline.c` : Réinitialiser la ligne Z réutilisée par le rendu scanline V3.
 - [SL_PaintSpan](#fn-SL_PaintSpan) — `zbuffer_scanline.c` : Préparer un span V3 qui utilise la seule ligne de profondeur courante.
-- [SL_Quantize](#fn-SL_Quantize) — `zbuffer_scanline.c` : Quantifier une profondeur inverse en code 16 bits où petit signifie proche.
 - [SL_SetScale](#fn-SL_SetScale) — `zbuffer_scanline.c` : Adapter la quantification scanline en réservant de la marge pour le biais.
-- [SL_SpanRun](#fn-SL_SpanRun) — `zbuffer_scanline.c` : Dessiner un span préclippé avec test Z strict dans un noyau 65C816.
 - [sort_by_zmax](#fn-sort_by_zmax) — `dony.c` : Trier les indices de faces par profondeur maximale décroissante, de façon stable.
 - [split_face_by_plane](#fn-split_face_by_plane) — `engine.c` : Découper expérimentalement f1 par le plan objet de f2.
 - [strict_inside](#fn-strict_inside) — `engine.c` : Tester l'appartenance stricte d'un point à un polygone entier.
@@ -453,21 +454,32 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [ZBFS_FreeFaces](#fn-ZBFS_FreeFaces) — `zbuffer_fullscreen.c` : Libérer les tables de faces, couleurs, biais et plans.
 - [ZBFS_FreeScratch](#fn-ZBFS_FreeScratch) — `zbuffer_fullscreen.c` : Libérer les trois familles de buffers auxiliaires du plein écran direct.
 - [ZBFS_FreeVertices](#fn-ZBFS_FreeVertices) — `zbuffer_fullscreen.c` : Libérer les profondeurs inverses et codes des sommets.
-- [ZBFS_SizeFits](#fn-ZBFS_SizeFits) — `zbuffer_fullscreen.c` : Vérifier qu'un tableau de count éléments est représentable par size_t.
+- [ZBuffer_ActivateFaces](#fn-ZBuffer_ActivateFaces) — `zbuffer_common.c` : Ajouter les faces d’une ligne à la liste active ordonnée.
 - [ZBuffer_Clear](#fn-ZBuffer_Clear) — `zbuffer_fullscreen.c` : Remplir de $FFFF les 200 lignes de profondeur.
 - [ZBuffer_DrawEdge](#fn-ZBuffer_DrawEdge) — `zbuffer_fullscreen.c` : Rasteriser un côté par Bresenham et tester sa visibilité après les surfaces.
+- [ZBuffer_FreeFaces](#fn-ZBuffer_FreeFaces) — `zbuffer_common.c` : Libérer les tables communes de préparation des faces.
+- [ZBuffer_FreeVertices](#fn-ZBuffer_FreeVertices) — `zbuffer_common.c` : Libérer une réserve de profondeurs de sommets.
 - [ZBuffer_Init](#fn-ZBuffer_Init) — `zbuffer_fullscreen.c` : Réserver le Z-buffer plein écran aligné sur une frontière de banque.
 - [ZBuffer_LerpZ](#fn-ZBuffer_LerpZ) — `zbuffer_common.c` : Interpoler un code de profondeur lors du clipping horizontal d'un span.
 - [ZBuffer_PaintSpanZ](#fn-ZBuffer_PaintSpanZ) — `zbuffer_fullscreen.c` : Préparer un span de surface évalué sur le plan Z commun de la face.
 - [ZBuffer_PlaneAt](#fn-ZBuffer_PlaneAt) — `zbuffer_fullscreen.c` : Évaluer le plan Z à un pixel écran sans encore réduire ses fractions.
 - [ZBuffer_PlaneCode](#fn-ZBuffer_PlaneCode) — `zbuffer_fullscreen.c` : Arrondir et borner un accumulateur Z à douze bits fractionnaires.
 - [ZBuffer_PlotEdge](#fn-ZBuffer_PlotEdge) — `zbuffer_fullscreen.c` : Dessiner un pixel de contour si les profondeurs de plan et d'arête le permettent.
+- [ZBuffer_PrepareFaces](#fn-ZBuffer_PrepareFaces) — `zbuffer_common.c` : Filtrer les faces et préparer leurs premières lignes et couleurs.
+- [ZBuffer_PrepareInvZ](#fn-ZBuffer_PrepareInvZ) — `zbuffer_common.c` : Préparer les profondeurs inverses des sommets d’une vue.
+- [ZBuffer_PrepareScanEdges](#fn-ZBuffer_PrepareScanEdges) — `zbuffer_common.c` : Préparer les arêtes quantifiées communes à scanline et offscreen.
+- [ZBuffer_QuantizeAtScale](#fn-ZBuffer_QuantizeAtScale) — `zbuffer_common.c` : Quantifier une profondeur inverse avec une échelle explicite.
 - [ZBuffer_QuantizeInvZ](#fn-ZBuffer_QuantizeInvZ) — `zbuffer_fullscreen.c` : Quantifier une profondeur inverse en code 16 bits où petit signifie proche.
 - [ZBuffer_RenderCore](#fn-ZBuffer_RenderCore) — `zbuffer_fullscreen.c` : Rendre les surfaces par balayage plein écran direct.
+- [ZBuffer_ReserveFaces](#fn-ZBuffer_ReserveFaces) — `zbuffer_common.c` : Garantir les six tables communes de faces.
+- [ZBuffer_ReserveVertices](#fn-ZBuffer_ReserveVertices) — `zbuffer_common.c` : Garantir la capacité des trois buffers de profondeur.
 - [ZBuffer_SetEdgeFlags](#fn-ZBuffer_SetEdgeFlags) — `zbuffer_fullscreen.c` : Installer un masque facultatif des côtés de faces, sans prendre sa propriété.
 - [ZBuffer_SetPlane](#fn-ZBuffer_SetPlane) — `zbuffer_fullscreen.c` : Préparer un plan affine de codes Z dans le repère écran.
 - [ZBuffer_SetScaleForFrame](#fn-ZBuffer_SetScaleForFrame) — `zbuffer_fullscreen.c` : Adapter l'échelle de quantification à la profondeur inverse maximale.
 - [ZBuffer_Shutdown](#fn-ZBuffer_Shutdown) — `zbuffer_fullscreen.c` : Libérer les ressources du rendu plein écran direct.
+- [ZBuffer_SizeFits](#fn-ZBuffer_SizeFits) — `zbuffer_common.c` : Vérifier qu'un tableau de count éléments est représentable par size_t.
+- [ZBuffer_SortFaceStarts](#fn-ZBuffer_SortFaceStarts) — `zbuffer_common.c` : Transformer l’histogramme en liste stable des départs de faces.
+- [ZBuffer_SortScanHits](#fn-ZBuffer_SortScanHits) — `zbuffer_common.c` : Ordonner les intersections quantifiées d’un span.
 - [ZBuffer_SpanRun](#fn-ZBuffer_SpanRun) — `zbuffer_common.c` : Dessiner un span préclippé avec test Z strict dans un noyau 65C816.
 
 ## Contrats des fonctions
@@ -508,7 +520,7 @@ Appels internes directs : [fractional_projection_cache_invalidate](arbre_appels.
 
 ### applyPalette
 
-Définition : [engine.c](engine.c), ligne 6278.
+Définition : [engine.c](engine.c), ligne 6263.
 
 ```c
 void applyPalette(int palette_num)
@@ -568,7 +580,7 @@ Appels internes directs : [calculateFaceDepths](arbre_appels.html#fn-calculateFa
 
 ### calculateFaceDepths
 
-Définition : [engine.c](engine.c), ligne 4944.
+Définition : [engine.c](engine.c), ligne 4929.
 
 ```c
 void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count)
@@ -724,7 +736,7 @@ Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [dr
 
 ### compare_faces_diagnostic
 
-Définition : [engine.c](engine.c), ligne 8104.
+Définition : [engine.c](engine.c), ligne 8089.
 
 ```c
 static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out)
@@ -760,7 +772,7 @@ Appels internes directs : [compute_bbox_intersection](arbre_appels.html#fn-compu
 
 ### compute2DFromObserver
 
-Définition : [engine.c](engine.c), ligne 5137.
+Définition : [engine.c](engine.c), ligne 5122.
 
 ```c
 void compute2DFromObserver(Model3D* model, int angle_w)
@@ -1112,7 +1124,7 @@ Appels internes directs : aucun repéré.
 
 ### computeOrientationShading
 
-Définition : [engine.c](engine.c), ligne 6444.
+Définition : [engine.c](engine.c), ligne 6429.
 
 ```c
 static void computeOrientationShading(Model3D* model)
@@ -1264,7 +1276,7 @@ Appels internes directs : [fractional_projection_cache_release](arbre_appels.htm
 
 ### display_model_face_ids
 
-Définition : [engine.c](engine.c), ligne 6150.
+Définition : [engine.c](engine.c), ligne 6135.
 
 ```c
 void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename)
@@ -1298,7 +1310,7 @@ Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbr
 
 ### DoColor
 
-Définition : [engine.c](engine.c), ligne 6352.
+Définition : [engine.c](engine.c), ligne 6337.
 
 ```c
 void DoColor()
@@ -1422,7 +1434,7 @@ Appels internes directs : aucun repéré.
 
 ### DoText
 
-Définition : [engine.c](engine.c), ligne 8634.
+Définition : [engine.c](engine.c), ligne 8619.
 
 ```c
 void DoText()
@@ -1478,7 +1490,7 @@ Appels internes directs : [getSquareRect](arbre_appels.html#fn-getSquareRect).
 
 ### drawFace
 
-Définition : [engine.c](engine.c), ligne 5688.
+Définition : [engine.c](engine.c), ligne 5673.
 
 ```c
 void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index)
@@ -1518,7 +1530,7 @@ Appels internes directs : aucun repéré.
 
 ### drawFaceIndex
 
-Définition : [engine.c](engine.c), ligne 5825.
+Définition : [engine.c](engine.c), ligne 5810.
 
 ```c
 void drawFaceIndex(Model3D* model, int face_id)
@@ -1634,7 +1646,7 @@ Appels internes directs : aucun repéré.
 
 ### drawPolygons
 
-Définition : [engine.c](engine.c), ligne 5432.
+Définition : [engine.c](engine.c), ligne 5417.
 
 ```c
 void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)
@@ -1670,7 +1682,7 @@ Appels internes directs : aucun repéré.
 
 ### drawPolygons_jitter
 
-Définition : [engine.c](engine.c), ligne 5619.
+Définition : [engine.c](engine.c), ligne 5604.
 
 ```c
 void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)
@@ -1794,7 +1806,7 @@ Appels internes directs : [getSquareRect](arbre_appels.html#fn-getSquareRect).
 
 ### dump_compare_results_to_file
 
-Définition : [engine.c](engine.c), ligne 8061.
+Définition : [engine.c](engine.c), ligne 8046.
 
 ```c
 static void dump_compare_results_to_file(const CompareFacesResult *out, int f1, int f2)
@@ -1822,7 +1834,7 @@ Appels internes directs : aucun repéré.
 
 ### dumpFace2DCoordinates
 
-Définition : [engine.c](engine.c), ligne 8442.
+Définition : [engine.c](engine.c), ligne 8427.
 
 ```c
 static void dumpFace2DCoordinates(Model3D* model, const char* txt_filename)
@@ -1850,7 +1862,7 @@ Appels internes directs : aucun repéré.
 
 ### dumpFaceEquationsCSV
 
-Définition : [engine.c](engine.c), ligne 8318.
+Définition : [engine.c](engine.c), ligne 8303.
 
 ```c
 void dumpFaceEquationsCSV(Model3D* model, const char* csv_filename, int alt_format)
@@ -1878,7 +1890,7 @@ Appels internes directs : aucun repéré.
 
 ### dumpSortedFaceIndices
 
-Définition : [engine.c](engine.c), ligne 8488.
+Définition : [engine.c](engine.c), ligne 8473.
 
 ```c
 static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename)
@@ -1966,7 +1978,7 @@ Appels internes directs : aucun repéré.
 
 ### evaluate_pair_tests
 
-Définition : [engine.c](engine.c), ligne 4386.
+Définition : [engine.c](engine.c), ligne 4371.
 
 ```c
 static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7])
@@ -2422,7 +2434,7 @@ Appels internes directs : [fractional_projection_cache_invalidate](arbre_appels.
 
 ### frameInconclusivePairs
 
-Définition : [engine.c](engine.c), ligne 5895.
+Définition : [engine.c](engine.c), ligne 5880.
 
 ```c
 void frameInconclusivePairs(Model3D* model)
@@ -2456,7 +2468,7 @@ Appels internes directs : aucun repéré.
 
 ### generate_random_colors
 
-Définition : [engine.c](engine.c), ligne 6006.
+Définition : [engine.c](engine.c), ligne 5991.
 
 ```c
 void generate_random_colors(int face_count)
@@ -2492,7 +2504,7 @@ Appels internes directs : aucun repéré.
 
 ### geo_face_order
 
-Définition : [engine.c](engine.c), ligne 7381.
+Définition : [engine.c](engine.c), ligne 7366.
 
 ```c
 static int geo_face_order(Model3D* model, int f1, int f2)
@@ -3034,7 +3046,7 @@ Appels internes directs : aucun repéré.
 
 ### getObserverParams
 
-Définition : [engine.c](engine.c), ligne 5317.
+Définition : [engine.c](engine.c), ligne 5302.
 
 ```c
 void getObserverParams(ObserverParams* params, Model3D* model)
@@ -3100,7 +3112,7 @@ Appels internes directs : aucun repéré.
 
 ### hideFace
 
-Définition : [engine.c](engine.c), ligne 7214.
+Définition : [engine.c](engine.c), ligne 7199.
 
 ```c
 void hideFace(Model3D* model, int face_idx)
@@ -3132,7 +3144,7 @@ Appels internes directs : [ordering_cache_invalidate](arbre_appels.html#fn-order
 
 ### initPalettes
 
-Définition : [engine.c](engine.c), ligne 6315.
+Définition : [engine.c](engine.c), ligne 6300.
 
 ```c
 void initPalettes(void)
@@ -3196,7 +3208,7 @@ Appels internes directs : aucun repéré.
 
 ### inspect_face_pair_ui
 
-Définition : [engine.c](engine.c), ligne 7605.
+Définition : [engine.c](engine.c), ligne 7590.
 
 ```c
 static void inspect_face_pair_ui(Model3D* model)
@@ -3226,7 +3238,7 @@ Appels internes directs : [compare_faces_diagnostic](arbre_appels.html#fn-compar
 
 ### inspect_faces_order
 
-Définition : [engine.c](engine.c), ligne 6503.
+Définition : [engine.c](engine.c), ligne 6488.
 
 ```c
 static void inspect_faces_order(Model3D* model, ObserverParams* params, int inspect_after)
@@ -3260,7 +3272,7 @@ Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbr
 
 ### inspection_view_begin
 
-Définition : [engine.c](engine.c), ligne 6054.
+Définition : [engine.c](engine.c), ligne 6039.
 
 ```c
 static int inspection_view_begin(Model3D *model, InspectionViewState *state)
@@ -3288,7 +3300,7 @@ Appels internes directs : aucun repéré.
 
 ### inspection_view_end
 
-Définition : [engine.c](engine.c), ligne 6117.
+Définition : [engine.c](engine.c), ligne 6102.
 
 ```c
 static void inspection_view_end(Model3D *model, InspectionViewState *state)
@@ -3316,7 +3328,7 @@ Appels internes directs : [inspection_view_restore](arbre_appels.html#fn-inspect
 
 ### inspection_view_restore
 
-Définition : [engine.c](engine.c), ligne 6088.
+Définition : [engine.c](engine.c), ligne 6073.
 
 ```c
 static void inspection_view_restore(Model3D *model, const InspectionViewState *state)
@@ -3432,7 +3444,7 @@ Aucun paramètre explicite.
 
 Possède le modèle et coordonne QuickDraw, palettes, sauvegarde SHGR et Z-buffers. Les labels séparent chargement (newmodel), retraitement géométrique (bigloop), redessin (loopReDraw/draw), attente clavier (getakey) et libération (end). Les données numériques restent dans le moteur ; les chaînes visibles de l'interface ne sont pas traduites dans cette révision des commentaires.
 
-Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [benchmark_projected_overlap_all](arbre_appels.html#fn-benchmark_projected_overlap_all), [check_intersect](arbre_appels.html#fn-check_intersect), [colorChooser](arbre_appels.html#fn-colorChooser), [compute2DFromObserver](arbre_appels.html#fn-compute2DFromObserver), [computeOrientationShading](arbre_appels.html#fn-computeOrientationShading), [createModel3D](arbre_appels.html#fn-createModel3D), [destroyModel3D](arbre_appels.html#fn-destroyModel3D), [display_model_face_ids](arbre_appels.html#fn-display_model_face_ids), [DoColor](arbre_appels.html#fn-DoColor), [DoText](arbre_appels.html#fn-DoText), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [dumpFace2DCoordinates](arbre_appels.html#fn-dumpFace2DCoordinates), [dumpFaceEquationsCSV](arbre_appels.html#fn-dumpFaceEquationsCSV), [dumpSortedFaceIndices](arbre_appels.html#fn-dumpSortedFaceIndices), [frameInconclusivePairs](arbre_appels.html#fn-frameInconclusivePairs), [generate_random_colors](arbre_appels.html#fn-generate_random_colors), [getkeypress_openA](arbre_appels.html#fn-getkeypress_openA), [getObserverParams](arbre_appels.html#fn-getObserverParams), [initPalettes](arbre_appels.html#fn-initPalettes), [initScreenSaveBuffer](arbre_appels.html#fn-initScreenSaveBuffer), [inspect_face_pair_ui](arbre_appels.html#fn-inspect_face_pair_ui), [inspect_faces_order](arbre_appels.html#fn-inspect_faces_order), [keypress](arbre_appels.html#fn-keypress), [loadModel3D](arbre_appels.html#fn-loadModel3D), [normalize_deg](arbre_appels.html#fn-normalize_deg), [normalizeAutoFitDistanceTo150](arbre_appels.html#fn-normalizeAutoFitDistanceTo150), [Offscreen_Clear](arbre_appels.html#fn-Offscreen_Clear), [Offscreen_FlushToScreen](arbre_appels.html#fn-Offscreen_FlushToScreen), [Offscreen_Init](arbre_appels.html#fn-Offscreen_Init), [Offscreen_Shutdown](arbre_appels.html#fn-Offscreen_Shutdown), [processModelFast](arbre_appels.html#fn-processModelFast), [ReadPalette](arbre_appels.html#fn-ReadPalette), [renderModelFullscreenZBuffer](arbre_appels.html#fn-renderModelFullscreenZBuffer), [renderModelFullscreenZBuffer_offscreen](arbre_appels.html#fn-renderModelFullscreenZBuffer_offscreen), [renderModelScanlineZBuffer](arbre_appels.html#fn-renderModelScanlineZBuffer), [repair_geov3](arbre_appels.html#fn-repair_geov3), [restoreScreen](arbre_appels.html#fn-restoreScreen), [saveNextScreenshot](arbre_appels.html#fn-saveNextScreenshot), [saveScreen](arbre_appels.html#fn-saveScreen), [screen2Black](arbre_appels.html#fn-screen2Black), [select_overlap_method](arbre_appels.html#fn-select_overlap_method), [show_help_pager](arbre_appels.html#fn-show_help_pager), [showFace](arbre_appels.html#fn-showFace), [shgroff](arbre_appels.html#fn-shgroff), [ZBuffer_Init](arbre_appels.html#fn-ZBuffer_Init), [ZBuffer_Shutdown](arbre_appels.html#fn-ZBuffer_Shutdown).
+Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [benchmark_projected_overlap_all](arbre_appels.html#fn-benchmark_projected_overlap_all), [check_intersect](arbre_appels.html#fn-check_intersect), [colorChooser](arbre_appels.html#fn-colorChooser), [compute2DFromObserver](arbre_appels.html#fn-compute2DFromObserver), [computeOrientationShading](arbre_appels.html#fn-computeOrientationShading), [createModel3D](arbre_appels.html#fn-createModel3D), [destroyModel3D](arbre_appels.html#fn-destroyModel3D), [display_model_face_ids](arbre_appels.html#fn-display_model_face_ids), [DoColor](arbre_appels.html#fn-DoColor), [DoText](arbre_appels.html#fn-DoText), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [dumpFace2DCoordinates](arbre_appels.html#fn-dumpFace2DCoordinates), [dumpFaceEquationsCSV](arbre_appels.html#fn-dumpFaceEquationsCSV), [dumpSortedFaceIndices](arbre_appels.html#fn-dumpSortedFaceIndices), [frameInconclusivePairs](arbre_appels.html#fn-frameInconclusivePairs), [generate_random_colors](arbre_appels.html#fn-generate_random_colors), [getkeypress_openA](arbre_appels.html#fn-getkeypress_openA), [getObserverParams](arbre_appels.html#fn-getObserverParams), [initPalettes](arbre_appels.html#fn-initPalettes), [initScreenSaveBuffer](arbre_appels.html#fn-initScreenSaveBuffer), [inspect_face_pair_ui](arbre_appels.html#fn-inspect_face_pair_ui), [inspect_faces_order](arbre_appels.html#fn-inspect_faces_order), [keypress](arbre_appels.html#fn-keypress), [loadModel3D](arbre_appels.html#fn-loadModel3D), [normalize_deg](arbre_appels.html#fn-normalize_deg), [normalizeAutoFitDistanceTo150](arbre_appels.html#fn-normalizeAutoFitDistanceTo150), [Offscreen_Clear](arbre_appels.html#fn-Offscreen_Clear), [Offscreen_FlushToScreen](arbre_appels.html#fn-Offscreen_FlushToScreen), [Offscreen_Init](arbre_appels.html#fn-Offscreen_Init), [Offscreen_Shutdown](arbre_appels.html#fn-Offscreen_Shutdown), [processModelFast](arbre_appels.html#fn-processModelFast), [ReadPalette](arbre_appels.html#fn-ReadPalette), [renderModelFullscreenZBuffer](arbre_appels.html#fn-renderModelFullscreenZBuffer), [renderModelFullscreenZBuffer_offscreen](arbre_appels.html#fn-renderModelFullscreenZBuffer_offscreen), [renderModelScanlineZBuffer](arbre_appels.html#fn-renderModelScanlineZBuffer), [repair_geov3](arbre_appels.html#fn-repair_geov3), [restoreScreen](arbre_appels.html#fn-restoreScreen), [saveNextScreenshot](arbre_appels.html#fn-saveNextScreenshot), [saveScreen](arbre_appels.html#fn-saveScreen), [screen2Black](arbre_appels.html#fn-screen2Black), [select_overlap_method](arbre_appels.html#fn-select_overlap_method), [shgroff](arbre_appels.html#fn-shgroff), [show_help_pager](arbre_appels.html#fn-show_help_pager), [showFace](arbre_appels.html#fn-showFace), [ZBuffer_Init](arbre_appels.html#fn-ZBuffer_Init), [ZBuffer_Shutdown](arbre_appels.html#fn-ZBuffer_Shutdown).
 
 <a id="fn-move_element_remove_and_insert"></a>
 
@@ -3492,7 +3504,9 @@ Déplacer un identifiant et maintenir la table inverse des positions.
 
 Les valeurs d'arr doivent indexer pos_of_face lorsqu'il est fourni.
 
-Appels internes directs : aucun repéré.
+Délègue le déplacement et la validation à move_element_remove_and_insert, puis met à jour la table inverse uniquement sur le segment affecté. Une table NULL conserve le chemin simple.
+
+Appels internes directs : [move_element_remove_and_insert](arbre_appels.html#fn-move_element_remove_and_insert).
 
 <a id="fn-normalize_deg"></a>
 
@@ -3526,7 +3540,7 @@ Appels internes directs : aucun repéré.
 
 ### normalizeAutoFitDistanceTo150
 
-Définition : [engine.c](engine.c), ligne 5254.
+Définition : [engine.c](engine.c), ligne 5239.
 
 ```c
 void normalizeAutoFitDistanceTo150(Model3D* model)
@@ -3586,7 +3600,7 @@ Appels internes directs : [Off_PlotBridge](arbre_appels.html#fn-Off_PlotBridge).
 
 ### Off_PaintSpanZ
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 439.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 431.
 
 ```c
 static void Off_PaintSpanZ(int x0, int x1, int y, int screenY, UWORD16 zq0, UWORD16 zq_end, int fillColor, int frameColor, int whole_span_is_border, OffZBufSpanPrev *prev, int z_nudge_lsbs)
@@ -3644,7 +3658,7 @@ Appels internes directs : [Offscreen_DrawPixel](arbre_appels.html#fn-Offscreen_D
 
 ### Off_RenderCore
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 562.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 554.
 
 ```c
 static void Off_RenderCore(Model3D* model, int biased)
@@ -3672,7 +3686,9 @@ N’effectue ni transformation ni classement des faces ; les faces actives sont 
 
 Le clipping du viewport est appliqué aux spans ; pas de clipping 3D général. Les réserves et le comportement d'échec restent propres à cette version.
 
-Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [getFaceFillColor](arbre_appels.html#fn-getFaceFillColor), [getFaceFrameColor](arbre_appels.html#fn-getFaceFrameColor), [Off_PaintSpanZ](arbre_appels.html#fn-Off_PaintSpanZ), [ZBuffer_Clear](arbre_appels.html#fn-ZBuffer_Clear), [ZBuffer_LerpZ](arbre_appels.html#fn-ZBuffer_LerpZ), [ZBuffer_QuantizeInvZ](arbre_appels.html#fn-ZBuffer_QuantizeInvZ), [ZBuffer_SetScaleForFrame](arbre_appels.html#fn-ZBuffer_SetScaleForFrame).
+Les préparations numériques, types d’arêtes, tri des intersections, listes actives et noyau de spans sont communs aux moteurs compatibles. Les liaisons de contours et le framebuffer restent propres à offscreen.
+
+Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [Off_PaintSpanZ](arbre_appels.html#fn-Off_PaintSpanZ), [ZBuffer_ActivateFaces](arbre_appels.html#fn-ZBuffer_ActivateFaces), [ZBuffer_Clear](arbre_appels.html#fn-ZBuffer_Clear), [ZBuffer_FreeFaces](arbre_appels.html#fn-ZBuffer_FreeFaces), [ZBuffer_LerpZ](arbre_appels.html#fn-ZBuffer_LerpZ), [ZBuffer_PrepareFaces](arbre_appels.html#fn-ZBuffer_PrepareFaces), [ZBuffer_PrepareInvZ](arbre_appels.html#fn-ZBuffer_PrepareInvZ), [ZBuffer_PrepareScanEdges](arbre_appels.html#fn-ZBuffer_PrepareScanEdges), [ZBuffer_QuantizeInvZ](arbre_appels.html#fn-ZBuffer_QuantizeInvZ), [ZBuffer_ReserveFaces](arbre_appels.html#fn-ZBuffer_ReserveFaces), [ZBuffer_ReserveVertices](arbre_appels.html#fn-ZBuffer_ReserveVertices), [ZBuffer_SetScaleForFrame](arbre_appels.html#fn-ZBuffer_SetScaleForFrame), [ZBuffer_SizeFits](arbre_appels.html#fn-ZBuffer_SizeFits), [ZBuffer_SortFaceStarts](arbre_appels.html#fn-ZBuffer_SortFaceStarts), [ZBuffer_SortScanHits](arbre_appels.html#fn-ZBuffer_SortScanHits).
 
 <a id="fn-Offscreen_Clear"></a>
 
@@ -4920,7 +4936,7 @@ Appels internes directs : aucun repéré.
 
 ### pair_order_relation
 
-Définition : [engine.c](engine.c), ligne 7316.
+Définition : [engine.c](engine.c), ligne 7301.
 
 ```c
 static int pair_order_relation(Model3D* model, int f1, int f2)
@@ -5576,7 +5592,7 @@ Appels internes directs : aucun repéré.
 
 ### ray_cast_at
 
-Définition : [engine.c](engine.c), ligne 4512.
+Définition : [engine.c](engine.c), ligne 4497.
 
 ```c
 static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy)
@@ -5604,7 +5620,7 @@ Appels internes directs : [ray_cast_distances](arbre_appels.html#fn-ray_cast_dis
 
 ### ray_cast_at_fractional
 
-Définition : [engine.c](engine.c), ligne 4546.
+Définition : [engine.c](engine.c), ligne 4531.
 
 ```c
 static int ray_cast_at_fractional(Model3D *model, int f1, int f2, double cx, double cy)
@@ -5636,7 +5652,7 @@ Appels internes directs : [ordering_plane](arbre_appels.html#fn-ordering_plane).
 
 ### ray_cast_distances
 
-Définition : [engine.c](engine.c), ligne 4452.
+Définition : [engine.c](engine.c), ligne 4437.
 
 ```c
 static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2)
@@ -5670,7 +5686,7 @@ Appels internes directs : [ordering_plane](arbre_appels.html#fn-ordering_plane).
 
 ### ray_cast_hierarchical
 
-Définition : [engine.c](engine.c), ligne 4856.
+Définition : [engine.c](engine.c), ligne 4841.
 
 ```c
 static int ray_cast_hierarchical(Model3D* model, int f1, int f2)
@@ -5698,7 +5714,7 @@ Appels internes directs : [compute_intersection_centroid_fractional_tryboth](arb
 
 ### ray_cast_hierarchical_impl
 
-Définition : [engine.c](engine.c), ligne 4800.
+Définition : [engine.c](engine.c), ligne 4785.
 
 ```c
 static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)
@@ -5730,7 +5746,7 @@ Appels internes directs : [compute_bbox_intersection_center](arbre_appels.html#f
 
 ### rch_gather_pair_vertex_indices
 
-Définition : [engine.c](engine.c), ligne 4610.
+Définition : [engine.c](engine.c), ligne 4595.
 
 ```c
 static int rch_gather_pair_vertex_indices(FaceArrays3D* faces, int f1, int f2, int* out_idx)
@@ -5762,7 +5778,7 @@ Appels internes directs : aucun repéré.
 
 ### rch_patch_pair_at_scale
 
-Définition : [engine.c](engine.c), ligne 4700.
+Définition : [engine.c](engine.c), ligne 4685.
 
 ```c
 static void rch_patch_pair_at_scale(Model3D* model, int f1, int f2, Fixed32 test_scale, RCHZoomPatch* p)
@@ -5798,7 +5814,7 @@ Appels internes directs : [FIXED_ROUND_TO_INT](arbre_appels.html#fn-FIXED_ROUND_
 
 ### rch_recompute_face_bbox_cache
 
-Définition : [engine.c](engine.c), ligne 4656.
+Définition : [engine.c](engine.c), ligne 4641.
 
 ```c
 static void rch_recompute_face_bbox_cache(Model3D* model, int f)
@@ -5830,7 +5846,7 @@ Appels internes directs : aucun repéré.
 
 ### rch_unpatch_pair
 
-Définition : [engine.c](engine.c), ligne 4761.
+Définition : [engine.c](engine.c), ligne 4746.
 
 ```c
 static void rch_unpatch_pair(Model3D* model, RCHZoomPatch* p, int f1, int f2)
@@ -5896,7 +5912,7 @@ Appels internes directs : aucun repéré.
 
 ### ReadPalette
 
-Définition : [engine.c](engine.c), ligne 6239.
+Définition : [engine.c](engine.c), ligne 6224.
 
 ```c
 GS_Palette ReadPalette(int palette_num)
@@ -5984,7 +6000,7 @@ Appels internes directs : aucun repéré.
 
 ### renderModelFullscreenZBuffer
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1334.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1222.
 
 ```c
 void renderModelFullscreenZBuffer(Model3D* model)
@@ -6012,7 +6028,7 @@ Appels internes directs : [renderModelFullscreenZBuffer_biasedV2](arbre_appels.h
 
 ### renderModelFullscreenZBuffer_biasedV2
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1307.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1195.
 
 ```c
 void renderModelFullscreenZBuffer_biasedV2(Model3D* model)
@@ -6040,7 +6056,7 @@ Appels internes directs : [ZBuffer_RenderCore](arbre_appels.html#fn-ZBuffer_Rend
 
 ### renderModelFullscreenZBuffer_fastV2
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1281.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1169.
 
 ```c
 void renderModelFullscreenZBuffer_fastV2(Model3D* model)
@@ -6068,7 +6084,7 @@ Appels internes directs : [ZBuffer_RenderCore](arbre_appels.html#fn-ZBuffer_Rend
 
 ### renderModelFullscreenZBuffer_offscreen
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 952.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 823.
 
 ```c
 void renderModelFullscreenZBuffer_offscreen(Model3D* model)
@@ -6096,7 +6112,7 @@ Appels internes directs : [renderModelFullscreenZBuffer_offscreen_biasedV2](arbr
 
 ### renderModelFullscreenZBuffer_offscreen_biasedV2
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 925.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 796.
 
 ```c
 void renderModelFullscreenZBuffer_offscreen_biasedV2(Model3D* model)
@@ -6124,7 +6140,7 @@ Appels internes directs : [Off_RenderCore](arbre_appels.html#fn-Off_RenderCore).
 
 ### renderModelFullscreenZBuffer_offscreen_fastV2
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 899.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 770.
 
 ```c
 void renderModelFullscreenZBuffer_offscreen_fastV2(Model3D* model)
@@ -6152,7 +6168,7 @@ Appels internes directs : [Off_RenderCore](arbre_appels.html#fn-Off_RenderCore).
 
 ### renderModelScanlineZBuffer
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 1057.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 609.
 
 ```c
 void renderModelScanlineZBuffer(Model3D* model)
@@ -6180,7 +6196,7 @@ Appels internes directs : [renderModelScanlineZBuffer_biasedV3](arbre_appels.htm
 
 ### renderModelScanlineZBuffer_biasedV3
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 1031.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 583.
 
 ```c
 void renderModelScanlineZBuffer_biasedV3(Model3D* model)
@@ -6208,7 +6224,7 @@ Appels internes directs : [renderModelScanlineZBuffer_coreV3](arbre_appels.html#
 
 ### renderModelScanlineZBuffer_coreV3
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 693.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 366.
 
 ```c
 static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
@@ -6236,13 +6252,15 @@ N’effectue ni transformation ni classement des faces ; les faces actives sont 
 
 Le clipping du viewport est appliqué aux spans ; pas de clipping 3D général. Les réserves et le comportement d'échec restent propres à cette version.
 
-Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [getFaceFillColor](arbre_appels.html#fn-getFaceFillColor), [getFaceFrameColor](arbre_appels.html#fn-getFaceFrameColor), [screenClearTopLines](arbre_appels.html#fn-screenClearTopLines), [SL_ClearLine](arbre_appels.html#fn-SL_ClearLine), [SL_PaintSpan](arbre_appels.html#fn-SL_PaintSpan), [SL_Quantize](arbre_appels.html#fn-SL_Quantize), [SL_SetScale](arbre_appels.html#fn-SL_SetScale), [ZBuffer_LerpZ](arbre_appels.html#fn-ZBuffer_LerpZ).
+Réutilise les réserves typées, les préparations de faces et d’arêtes et le noyau de spans commun. Conserve sa ligne Z, son échelle avec biais inclus et ses règles de contour.
+
+Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [screenClearTopLines](arbre_appels.html#fn-screenClearTopLines), [SL_ClearLine](arbre_appels.html#fn-SL_ClearLine), [SL_PaintSpan](arbre_appels.html#fn-SL_PaintSpan), [SL_SetScale](arbre_appels.html#fn-SL_SetScale), [ZBuffer_ActivateFaces](arbre_appels.html#fn-ZBuffer_ActivateFaces), [ZBuffer_LerpZ](arbre_appels.html#fn-ZBuffer_LerpZ), [ZBuffer_PrepareFaces](arbre_appels.html#fn-ZBuffer_PrepareFaces), [ZBuffer_PrepareInvZ](arbre_appels.html#fn-ZBuffer_PrepareInvZ), [ZBuffer_PrepareScanEdges](arbre_appels.html#fn-ZBuffer_PrepareScanEdges), [ZBuffer_QuantizeAtScale](arbre_appels.html#fn-ZBuffer_QuantizeAtScale), [ZBuffer_ReserveFaces](arbre_appels.html#fn-ZBuffer_ReserveFaces), [ZBuffer_ReserveVertices](arbre_appels.html#fn-ZBuffer_ReserveVertices), [ZBuffer_SortFaceStarts](arbre_appels.html#fn-ZBuffer_SortFaceStarts), [ZBuffer_SortScanHits](arbre_appels.html#fn-ZBuffer_SortScanHits).
 
 <a id="fn-renderModelScanlineZBuffer_fastV3"></a>
 
 ### renderModelScanlineZBuffer_fastV3
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 1004.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 556.
 
 ```c
 void renderModelScanlineZBuffer_fastV3(Model3D* model)
@@ -6304,7 +6322,7 @@ Appels internes directs : [compute_face_plane](arbre_appels.html#fn-compute_face
 
 ### repair_geov3
 
-Définition : [engine.c](engine.c), ligne 7497.
+Définition : [engine.c](engine.c), ligne 7482.
 
 ```c
 static void repair_geov3(Model3D* model)
@@ -6334,7 +6352,7 @@ Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [geov3_run](arb
 
 ### repair_geov3_confirm
 
-Définition : [engine.c](engine.c), ligne 7425.
+Définition : [engine.c](engine.c), ligne 7410.
 
 ```c
 static int repair_geov3_confirm(Model3D *model, int p, int q, int pos_p, int pos_q, int reason, void *context)
@@ -6364,7 +6382,7 @@ Appels internes directs : [drawFace](arbre_appels.html#fn-drawFace), [drawPolygo
 
 ### restoreAllFaces
 
-Définition : [engine.c](engine.c), ligne 7279.
+Définition : [engine.c](engine.c), ligne 7264.
 
 ```c
 void restoreAllFaces(Model3D* model)
@@ -6392,7 +6410,7 @@ Appels internes directs : [ordering_cache_invalidate](arbre_appels.html#fn-order
 
 ### restoreFace
 
-Définition : [engine.c](engine.c), ligne 7248.
+Définition : [engine.c](engine.c), ligne 7233.
 
 ```c
 void restoreFace(Model3D* model, int face_idx)
@@ -6452,7 +6470,7 @@ Appels internes directs : aucun repéré.
 
 ### reverseFaceVertexOrder
 
-Définition : [engine.c](engine.c), ligne 7157.
+Définition : [engine.c](engine.c), ligne 7142.
 
 ```c
 static void reverseFaceVertexOrder(Model3D* model, int face_idx)
@@ -6484,7 +6502,7 @@ Appels internes directs : [ordering_cache_invalidate](arbre_appels.html#fn-order
 
 ### run_raycast_test
 
-Définition : [engine.c](engine.c), ligne 7571.
+Définition : [engine.c](engine.c), ligne 7556.
 
 ```c
 static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py)
@@ -6512,7 +6530,7 @@ Appels internes directs : [ray_cast_at](arbre_appels.html#fn-ray_cast_at), [ray_
 
 ### saveNextScreenshot
 
-Définition : [engine.c](engine.c), ligne 8744.
+Définition : [engine.c](engine.c), ligne 8729.
 
 ```c
 void saveNextScreenshot(void)
@@ -6576,7 +6594,7 @@ Appels internes directs : aucun repéré.
 
 ### saveSHGRAsRawPic
 
-Définition : [engine.c](engine.c), ligne 8698.
+Définition : [engine.c](engine.c), ligne 8683.
 
 ```c
 void saveSHGRAsRawPic(const char *filename)
@@ -6604,7 +6622,7 @@ Appels internes directs : [setProDOSFileType](arbre_appels.html#fn-setProDOSFile
 
 ### screen2Black
 
-Définition : [engine.c](engine.c), ligne 6404.
+Définition : [engine.c](engine.c), ligne 6389.
 
 ```c
 void screen2Black()
@@ -6760,7 +6778,7 @@ Appels internes directs : aucun repéré.
 
 ### setProDOSFileType
 
-Définition : [engine.c](engine.c), ligne 8660.
+Définition : [engine.c](engine.c), ligne 8645.
 
 ```c
 void setProDOSFileType(const char* filename, int fileType, long auxType)
@@ -6784,11 +6802,39 @@ Construit FileInfoRecGS et appelle SetFileInfoGS avec accès $C3. Ne vérifie ni
 
 Appels internes directs : aucun repéré.
 
+<a id="fn-shgroff"></a>
+
+### shgroff
+
+Définition : [asm.h](asm.h), ligne 171.
+
+```c
+asm shgroff ()
+```
+
+**Rôle :**
+
+Désactiver l'affichage SHGR en écrivant $41 dans $00C029.
+
+**Paramètres :**
+
+Aucun paramètre explicite.
+
+**Retour :**
+
+Aucun.
+
+**Sorties et effets de bord :**
+
+A et les indicateurs sont modifiés ; la routine termine avec A, X et Y configurés sur 16 bits.
+
+Appels internes directs : aucun repéré.
+
 <a id="fn-show_face_normal"></a>
 
 ### show_face_normal
 
-Définition : [engine.c](engine.c), ligne 6780.
+Définition : [engine.c](engine.c), ligne 6765.
 
 ```c
 static void show_face_normal(Model3D* model, int target_face)
@@ -6820,7 +6866,7 @@ Appels internes directs : [FIXED_ROUND_TO_INT](arbre_appels.html#fn-FIXED_ROUND_
 
 ### show_help_pager
 
-Définition : [engine.c](engine.c), ligne 8534.
+Définition : [engine.c](engine.c), ligne 8519.
 
 ```c
 static void show_help_pager(void)
@@ -6852,7 +6898,7 @@ Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [getkeypress](a
 
 ### showFace
 
-Définition : [engine.c](engine.c), ligne 6865.
+Définition : [engine.c](engine.c), ligne 6850.
 
 ```c
 void showFace(Model3D* model, ObserverParams* params, const char* filename)
@@ -6877,34 +6923,6 @@ Les flèches naviguent par identifiant ou position triée ; N bascule la normale
 Utilise InspectionViewState pour la sauvegarde et la restauration communes des drapeaux et options ; le cycle de vie graphique reste géré par cet outil.
 
 Appels internes directs : [calculateFaceDepths](arbre_appels.html#fn-calculateFaceDepths), [DoText](arbre_appels.html#fn-DoText), [drawFace](arbre_appels.html#fn-drawFace), [drawFaceIndex](arbre_appels.html#fn-drawFaceIndex), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [getkeypress](arbre_appels.html#fn-getkeypress), [hideFace](arbre_appels.html#fn-hideFace), [inspection_view_begin](arbre_appels.html#fn-inspection_view_begin), [inspection_view_end](arbre_appels.html#fn-inspection_view_end), [keypress](arbre_appels.html#fn-keypress), [restoreAllFaces](arbre_appels.html#fn-restoreAllFaces), [restoreFace](arbre_appels.html#fn-restoreFace), [reverseFaceVertexOrder](arbre_appels.html#fn-reverseFaceVertexOrder), [show_face_normal](arbre_appels.html#fn-show_face_normal).
-
-<a id="fn-shgroff"></a>
-
-### shgroff
-
-Définition : [asm.h](asm.h), ligne 171.
-
-```c
-asm shgroff ()
-```
-
-**Rôle :**
-
-Désactiver l'affichage SHGR en écrivant $41 dans $00C029.
-
-**Paramètres :**
-
-Aucun paramètre explicite.
-
-**Retour :**
-
-Aucun.
-
-**Sorties et effets de bord :**
-
-A et les indicateurs sont modifiés ; la routine termine avec A, X et Y configurés sur 16 bits.
-
-Appels internes directs : aucun repéré.
 
 <a id="fn-sin_deg_int"></a>
 
@@ -6970,7 +6988,7 @@ Appels internes directs : aucun repéré.
 
 ### SL_PaintSpan
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 619.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 292.
 
 ```c
 static void SL_PaintSpan(int x0, int x1, int screenY, SLZWord z0, SLZWord z1, int fillColor, int frameColor, int nudge)
@@ -6992,35 +7010,7 @@ Aucun.
 
 Span déjà clippé requis. Soustrait nudge avec borne zéro, prépare adresses et parité puis interpole Z en 16.16. Les deux extrémités utilisent la couleur de contour.
 
-Appels internes directs : [SL_SpanRun](arbre_appels.html#fn-SL_SpanRun).
-
-<a id="fn-SL_Quantize"></a>
-
-### SL_Quantize
-
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 286.
-
-```c
-static SLZWord SL_Quantize(float inv_z)
-```
-
-**Rôle :**
-
-Quantifier une profondeur inverse en code 16 bits où petit signifie proche.
-
-**Paramètres :**
-
-[entrée] inv_z, profondeur inverse flottante ; valeurs négatives ramenées à zéro.
-
-**Retour :**
-
-65535 - round(inv_z*échelle), après saturation de la valeur quantifiée dans [0,65535]. $FFFF est la valeur vide/lointaine.
-
-**Fonctionnement :**
-
-Aucun changement d'échelle.
-
-Appels internes directs : aucun repéré.
+Appels internes directs : [ZBuffer_SpanRun](arbre_appels.html#fn-ZBuffer_SpanRun).
 
 <a id="fn-SL_SetScale"></a>
 
@@ -7051,38 +7041,6 @@ sl_zscale=cible/(max_inv_z+SL_Z_BIAS) si le dénominateur dépasse 1e-7.
 **Fonctionnement :**
 
 Sinon conserve l'échelle précédente.
-
-Appels internes directs : aucun repéré.
-
-<a id="fn-SL_SpanRun"></a>
-
-### SL_SpanRun
-
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 336.
-
-```c
-static void SL_SpanRun(void)
-```
-
-**Rôle :**
-
-Dessiner un span préclippé avec test Z strict dans un noyau 65C816.
-
-**Paramètres :**
-
-Aucun paramètre explicite.
-
-**Entrées et sorties implicites :**
-
-Entrée : paquet partagé sl_p_* : pointeurs Z et pixels far, parité gauche, codes gauche/droite, couleurs gauche/intérieur/droite, accumulateur et pas 16.16, nombre de pixels intérieurs et mode 0 (gauche seul) ou 1 (span complet).
-
-**Retour :**
-
-Aucun ; écrit Z et les nibbles de couleur.
-
-**Registres et indicateurs :**
-
-Préserve P et D ; A/X/Y modifiés, DBR inchangé. Mode décimal supposé désactivé. Cadre D de 32 octets : zacc à 0/2, zstep à 4/6, zptr à 8/10, pptr à 12/14, compte à 16, couleur basse/haute à 18/20, parité à 22, masque/valeur à 24/26. Les profondeurs [8],Y peuvent franchir une banque ; le pointeur de pixels n'est incrémenté que sur 16 bits et doit rester dans sa banque. Traite les extrémités exactement et l'intérieur par paires pair/impair. Les pixels de même code Z ne sont pas remplacés. Non réentrant.
 
 Appels internes directs : aucun repéré.
 
@@ -7182,7 +7140,7 @@ Appels internes directs : [point_in_poly_arrays_int](arbre_appels.html#fn-point_
 
 ### updateFace2DBounds
 
-Définition : [engine.c](engine.c), ligne 5190.
+Définition : [engine.c](engine.c), ligne 5175.
 
 ```c
 static void updateFace2DBounds(Model3D* model)
@@ -7210,7 +7168,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBFS_FreeEdges
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 502.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 468.
 
 ```c
 static void ZBFS_FreeEdges(void)
@@ -7238,7 +7196,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBFS_FreeFaces
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 435.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 414.
 
 ```c
 static void ZBFS_FreeFaces(void)
@@ -7260,13 +7218,13 @@ Aucun.
 
 Remet les pointeurs et leur capacité à zéro. Utilise uniquement les allocations du rendu plein écran direct.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : [ZBuffer_FreeFaces](arbre_appels.html#fn-ZBuffer_FreeFaces).
 
 <a id="fn-ZBFS_FreeScratch"></a>
 
 ### ZBFS_FreeScratch
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 531.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 497.
 
 ```c
 static void ZBFS_FreeScratch(void)
@@ -7294,7 +7252,7 @@ Appels internes directs : [ZBFS_FreeEdges](arbre_appels.html#fn-ZBFS_FreeEdges),
 
 ### ZBFS_FreeVertices
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 471.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 442.
 
 ```c
 static void ZBFS_FreeVertices(void)
@@ -7316,33 +7274,33 @@ Aucun.
 
 Remet les pointeurs et leur capacité à zéro. Utilise uniquement les allocations du rendu plein écran direct.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : [ZBuffer_FreeVertices](arbre_appels.html#fn-ZBuffer_FreeVertices).
 
-<a id="fn-ZBFS_SizeFits"></a>
+<a id="fn-ZBuffer_ActivateFaces"></a>
 
-### ZBFS_SizeFits
+### ZBuffer_ActivateFaces
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 561.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 422.
 
 ```c
-static int ZBFS_SizeFits(int count, size_t element_size)
+static int ZBuffer_ActivateFaces(int row, const int *bucket, const int *sorted, int *active, int count)
 ```
 
 **Rôle :**
 
-Vérifier qu'un tableau de count éléments est représentable par size_t.
+Ajouter les faces d’une ligne à la liste active ordonnée.
 
 **Paramètres :**
 
-[entrée] count positif attendu et element_size non nul.
+[entrée] row, bucket et sorted : ligne et départs préparés. [entrée-sortie] active : buffer de faces actives ; count : longueur actuelle.
 
 **Retour :**
 
-Booléen.
+Nouvelle longueur de la liste active.
 
 **Fonctionnement :**
 
-La division du maximum size_t évite de déborder lors du produit de taille.
+Insère chaque nouvelle face par identifiant croissant, sans modifier les bornes ni les règles de fin de vie des faces. Le buffer est dimensionné au nombre total de faces.
 
 Appels internes directs : aucun repéré.
 
@@ -7382,7 +7340,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_DrawEdge
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 847.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 788.
 
 ```c
 static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0, int x1, int y1, UWORD16 edge_z1, int color, ZbPlane *plane)
@@ -7405,6 +7363,62 @@ Aucun.
 Trie les extrémités selon l'axe majeur, clippe son parcours et avance à la fois le plan Z et la profondeur d'arête. Dessine via ZBuffer_PlotEdge ; pas d'allocation. Les règles de tie de Bresenham peuvent différer de FramePoly et du remplissage demi-ouvert.
 
 Appels internes directs : [ZBuffer_PlaneAt](arbre_appels.html#fn-ZBuffer_PlaneAt), [ZBuffer_PlaneCode](arbre_appels.html#fn-ZBuffer_PlaneCode), [ZBuffer_PlotEdge](arbre_appels.html#fn-ZBuffer_PlotEdge).
+
+<a id="fn-ZBuffer_FreeFaces"></a>
+
+### ZBuffer_FreeFaces
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 190.
+
+```c
+static void ZBuffer_FreeFaces(ZBufferFaceWork *work)
+```
+
+**Rôle :**
+
+Libérer les tables communes de préparation des faces.
+
+**Paramètres :**
+
+[entrée-sortie] work : réserve privée du moteur.
+
+**Retour :**
+
+Aucun.
+
+**Fonctionnement :**
+
+Libère débuts, ordre, liste active, couleurs et nudges, puis neutralise la réserve. Les plans du direct et les liaisons offscreen restent possédés par leurs moteurs.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-ZBuffer_FreeVertices"></a>
+
+### ZBuffer_FreeVertices
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 123.
+
+```c
+static void ZBuffer_FreeVertices(ZBufferVertexWork *work)
+```
+
+**Rôle :**
+
+Libérer une réserve de profondeurs de sommets.
+
+**Paramètres :**
+
+[entrée-sortie] work : réserve possédée par un moteur.
+
+**Retour :**
+
+Aucun.
+
+**Fonctionnement :**
+
+Libère les trois buffers et neutralise tous les pointeurs et la capacité. Une réserve vide peut être libérée à nouveau.
+
+Appels internes directs : aucun repéré.
 
 <a id="fn-ZBuffer_Init"></a>
 
@@ -7438,7 +7452,7 @@ Appels internes directs : [ZBuffer_Clear](arbre_appels.html#fn-ZBuffer_Clear).
 
 ### ZBuffer_LerpZ
 
-Définition : [zbuffer_common.c](zbuffer_common.c), ligne 49.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 52.
 
 ```c
 static UWORD16 ZBuffer_LerpZ(UWORD16 za, UWORD16 zb, int xa, int xb, int x)
@@ -7470,7 +7484,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PaintSpanZ
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 715.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 656.
 
 ```c
 static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY, int fillColor, ZbPlane *plane)
@@ -7498,7 +7512,7 @@ Appels internes directs : [ZBuffer_PlaneAt](arbre_appels.html#fn-ZBuffer_PlaneAt
 
 ### ZBuffer_PlaneAt
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 654.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 595.
 
 ```c
 static unsigned long ZBuffer_PlaneAt(ZbPlane *p, long x, long y)
@@ -7526,7 +7540,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PlaneCode
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 684.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 625.
 
 ```c
 static UWORD16 ZBuffer_PlaneCode(unsigned long z)
@@ -7554,7 +7568,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PlotEdge
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 802.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 743.
 
 ```c
 static void ZBuffer_PlotEdge(int x, int y, UWORD16 zq, UWORD16 edge_zq, int color)
@@ -7577,6 +7591,122 @@ Aucun.
 Rejette hors écran et code vide ; permet l'égalité avec le Z stocké. Si le plan est plus proche qu'une surface existante, exige aussi que l'arête géométrique ne soit pas derrière cette surface. Met Z à jour seulement pour un code strictement plus petit, puis écrit le pixel.
 
 Appels internes directs : [drawPixel](arbre_appels.html#fn-drawPixel).
+
+<a id="fn-ZBuffer_PrepareFaces"></a>
+
+### ZBuffer_PrepareFaces
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 339.
+
+```c
+static void ZBuffer_PrepareFaces(FaceArrays3D *faces, int count, int y_lo, int y_hi, int height, int biased, int *start, unsigned char *fill, unsigned char *frame, unsigned char *nudge, int *bucket)
+```
+
+**Rôle :**
+
+Filtrer les faces et préparer leurs premières lignes et couleurs.
+
+**Paramètres :**
+
+[entrée] faces/count : faces de la vue ; y_lo/y_hi : bornes verticales ; height : hauteur écran ; biased : biais actif.
+
+**[sortie] start, fill, frame, nudge : buffers par face ; bucket :**
+
+histogramme de height+1 entiers.
+
+**Retour :**
+
+Aucun.
+
+**Fonctionnement :**
+
+Initialise l’histogramme, ignore les faces masquées, courtes ou hors écran, puis conserve les règles de couleurs et le nudge de deux unités pour les faces avant biaisées. Les arêtes restent préparées par les moteurs ou le helper dédié.
+
+Appels internes directs : [getFaceFillColor](arbre_appels.html#fn-getFaceFillColor), [getFaceFrameColor](arbre_appels.html#fn-getFaceFrameColor).
+
+<a id="fn-ZBuffer_PrepareInvZ"></a>
+
+### ZBuffer_PrepareInvZ
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 302.
+
+```c
+static float ZBuffer_PrepareInvZ(VertexArrays3D *vtx, int count, float *inv_z)
+```
+
+**Rôle :**
+
+Préparer les profondeurs inverses des sommets d’une vue.
+
+**Paramètres :**
+
+[entrée] vtx : tableaux de sommets ; count : nombre de sommets. [sortie] inv_z : buffer de count flottants déjà alloué.
+
+**Retour :**
+
+Maximum des profondeurs inverses, ou zéro.
+
+**Fonctionnement :**
+
+Convertit zo par FIXED_TO_FLOAT, calcule 1/z pour les profondeurs positives et écrit zéro sinon. Le maximum sert à la politique d’échelle propre à chaque moteur.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-ZBuffer_PrepareScanEdges"></a>
+
+### ZBuffer_PrepareScanEdges
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 461.
+
+```c
+static void ZBuffer_PrepareScanEdges(VertexArrays3D *vtx, FaceArrays3D *faces, int face, const UWORD16 *zsrc, int y_lo, long rounding, ZBufferScanEdge *ed)
+```
+
+**Rôle :**
+
+Préparer les arêtes quantifiées communes à scanline et offscreen.
+
+**Paramètres :**
+
+[entrée] vtx, faces et face : contour projeté ; zsrc : codes Z par sommet ; y_lo : première ligne ; rounding : biais d’arrondi. [sortie] ed : buffer de vertex_count[face] arêtes.
+
+**Retour :**
+
+Aucun.
+
+**Fonctionnement :**
+
+Conserve le format 12 bits fractionnaires, les arêtes horizontales neutralisées, les divisions signées et le clipping vertical des anciens moteurs. Le rendu direct garde son calcul de plan et ses arêtes propres.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-ZBuffer_QuantizeAtScale"></a>
+
+### ZBuffer_QuantizeAtScale
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 267.
+
+```c
+static UWORD16 ZBuffer_QuantizeAtScale(float inv_z, float scale)
+```
+
+**Rôle :**
+
+Quantifier une profondeur inverse avec une échelle explicite.
+
+**Paramètres :**
+
+[entrée] inv_z : profondeur inverse ; scale : échelle du moteur appelant.
+
+**Retour :**
+
+Code 16 bits inversé et saturé ; 65535 représente le fond.
+
+**Fonctionnement :**
+
+Conserve les opérations float, l’arrondi par +0,5 puis la conversion en long des deux anciens quantificateurs. Ne modifie aucune échelle.
+
+Appels internes directs : aucun repéré.
 
 <a id="fn-ZBuffer_QuantizeInvZ"></a>
 
@@ -7604,13 +7734,13 @@ Quantifier une profondeur inverse en code 16 bits où petit signifie proche.
 
 Aucun changement d'échelle.
 
-Appels internes directs : aucun repéré.
+Appels internes directs : [ZBuffer_QuantizeAtScale](arbre_appels.html#fn-ZBuffer_QuantizeAtScale).
 
 <a id="fn-ZBuffer_RenderCore"></a>
 
 ### ZBuffer_RenderCore
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 956.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 897.
 
 ```c
 static void ZBuffer_RenderCore(Model3D* model, int biased)
@@ -7638,13 +7768,71 @@ N’effectue ni transformation ni classement des faces ; les faces actives sont 
 
 Le clipping du viewport est appliqué aux spans ; pas de clipping 3D général. Les réserves et le comportement d'échec restent propres à cette version.
 
-Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [getFaceFillColor](arbre_appels.html#fn-getFaceFillColor), [getFaceFrameColor](arbre_appels.html#fn-getFaceFrameColor), [screenClearTopLines](arbre_appels.html#fn-screenClearTopLines), [ZBFS_FreeEdges](arbre_appels.html#fn-ZBFS_FreeEdges), [ZBFS_FreeFaces](arbre_appels.html#fn-ZBFS_FreeFaces), [ZBFS_FreeVertices](arbre_appels.html#fn-ZBFS_FreeVertices), [ZBFS_SizeFits](arbre_appels.html#fn-ZBFS_SizeFits), [ZBuffer_Clear](arbre_appels.html#fn-ZBuffer_Clear), [ZBuffer_DrawEdge](arbre_appels.html#fn-ZBuffer_DrawEdge), [ZBuffer_PaintSpanZ](arbre_appels.html#fn-ZBuffer_PaintSpanZ), [ZBuffer_QuantizeInvZ](arbre_appels.html#fn-ZBuffer_QuantizeInvZ), [ZBuffer_SetPlane](arbre_appels.html#fn-ZBuffer_SetPlane), [ZBuffer_SetScaleForFrame](arbre_appels.html#fn-ZBuffer_SetScaleForFrame).
+Les réserves, inverses de profondeur, filtres de faces, histogrammes et listes actives passent par les primitives communes. Le plan de profondeur et les contours du rendu direct restent distincts.
+
+Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [screenClearTopLines](arbre_appels.html#fn-screenClearTopLines), [ZBFS_FreeEdges](arbre_appels.html#fn-ZBFS_FreeEdges), [ZBFS_FreeFaces](arbre_appels.html#fn-ZBFS_FreeFaces), [ZBuffer_ActivateFaces](arbre_appels.html#fn-ZBuffer_ActivateFaces), [ZBuffer_Clear](arbre_appels.html#fn-ZBuffer_Clear), [ZBuffer_DrawEdge](arbre_appels.html#fn-ZBuffer_DrawEdge), [ZBuffer_PaintSpanZ](arbre_appels.html#fn-ZBuffer_PaintSpanZ), [ZBuffer_PrepareFaces](arbre_appels.html#fn-ZBuffer_PrepareFaces), [ZBuffer_PrepareInvZ](arbre_appels.html#fn-ZBuffer_PrepareInvZ), [ZBuffer_QuantizeInvZ](arbre_appels.html#fn-ZBuffer_QuantizeInvZ), [ZBuffer_ReserveFaces](arbre_appels.html#fn-ZBuffer_ReserveFaces), [ZBuffer_ReserveVertices](arbre_appels.html#fn-ZBuffer_ReserveVertices), [ZBuffer_SetPlane](arbre_appels.html#fn-ZBuffer_SetPlane), [ZBuffer_SetScaleForFrame](arbre_appels.html#fn-ZBuffer_SetScaleForFrame), [ZBuffer_SizeFits](arbre_appels.html#fn-ZBuffer_SizeFits), [ZBuffer_SortFaceStarts](arbre_appels.html#fn-ZBuffer_SortFaceStarts).
+
+<a id="fn-ZBuffer_ReserveFaces"></a>
+
+### ZBuffer_ReserveFaces
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 219.
+
+```c
+static int ZBuffer_ReserveFaces(ZBufferFaceWork *work, int count)
+```
+
+**Rôle :**
+
+Garantir les six tables communes de faces.
+
+**Paramètres :**
+
+[entrée-sortie] work : réserve privée ; count : nombre de faces.
+
+**Retour :**
+
+1 si les tables sont disponibles, 0 sinon.
+
+**Fonctionnement :**
+
+Réutilise la capacité suffisante, vérifie les tailles puis alloue les six tables. Sur échec, libère le jeu incomplet et laisse une réserve vide pour le prochain essai.
+
+Appels internes directs : [ZBuffer_FreeFaces](arbre_appels.html#fn-ZBuffer_FreeFaces), [ZBuffer_SizeFits](arbre_appels.html#fn-ZBuffer_SizeFits).
+
+<a id="fn-ZBuffer_ReserveVertices"></a>
+
+### ZBuffer_ReserveVertices
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 152.
+
+```c
+static int ZBuffer_ReserveVertices(ZBufferVertexWork *work, int count)
+```
+
+**Rôle :**
+
+Garantir la capacité des trois buffers de profondeur.
+
+**Paramètres :**
+
+[entrée-sortie] work : réserve privée du moteur ; count : capacité requise.
+
+**Retour :**
+
+1 si disponible, 0 si taille invalide ou échec d’allocation.
+
+**Fonctionnement :**
+
+Réutilise la réserve suffisante. Sinon libère l’ancienne, vérifie les tailles puis alloue les trois buffers ; un échec laisse une réserve entièrement vide.
+
+Appels internes directs : [ZBuffer_FreeVertices](arbre_appels.html#fn-ZBuffer_FreeVertices), [ZBuffer_SizeFits](arbre_appels.html#fn-ZBuffer_SizeFits).
 
 <a id="fn-ZBuffer_SetEdgeFlags"></a>
 
 ### ZBuffer_SetEdgeFlags
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 772.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 713.
 
 ```c
 void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count)
@@ -7672,7 +7860,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_SetPlane
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 594.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 535.
 
 ```c
 static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge)
@@ -7696,7 +7884,11 @@ Aucun.
 
 **Fonctionnement :**
 
-Coordonnées avec pan et gradients à douze bits fractionnaires. Cherche un triangle projeté non dégénéré pour calculer gx/gy. Si aucun ne convient, garde la profondeur constante du premier sommet. Hypothèse : face plane ; les codes quantifiés des autres sommets peuvent ne pas appartenir exactement au même plan après arrondi.
+Coordonnées avec pan et gradients à douze bits fractionnaires. Cherche un triangle projeté non dégénéré pour calculer gx/gy. Si aucun ne
+
+**convient, garde la profondeur constante du premier sommet. Hypothèse :**
+
+face plane ; les codes quantifiés des autres sommets peuvent ne pas appartenir exactement au même plan après arrondi.
 
 Appels internes directs : aucun repéré.
 
@@ -7756,11 +7948,99 @@ Libère scratch et handle Z, annule lignes et banques. Oublie le masque d'arête
 
 Appels internes directs : [ZBFS_FreeScratch](arbre_appels.html#fn-ZBFS_FreeScratch), [ZBuffer_SetEdgeFlags](arbre_appels.html#fn-ZBuffer_SetEdgeFlags).
 
+<a id="fn-ZBuffer_SizeFits"></a>
+
+### ZBuffer_SizeFits
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 96.
+
+```c
+static int ZBuffer_SizeFits(int count, size_t element_size)
+```
+
+**Rôle :**
+
+Vérifier qu'un tableau de count éléments est représentable par size_t.
+
+**Paramètres :**
+
+[entrée] count positif attendu et element_size non nul.
+
+**Retour :**
+
+Booléen.
+
+**Fonctionnement :**
+
+La division du maximum size_t évite de déborder lors du produit de taille.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-ZBuffer_SortFaceStarts"></a>
+
+### ZBuffer_SortFaceStarts
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 387.
+
+```c
+static void ZBuffer_SortFaceStarts(int count, int height, const int *start, int *bucket, int *cursor, int *sorted)
+```
+
+**Rôle :**
+
+Transformer l’histogramme en liste stable des départs de faces.
+
+**Paramètres :**
+
+[entrée] count, height et start : dimensions et première ligne par face.
+
+**[entrée-sortie] bucket : histogramme devenant offsets ; cursor :**
+
+workspace ; sorted : liste de sortie.
+
+**Retour :**
+
+Aucun.
+
+**Fonctionnement :**
+
+Effectue les sommes préfixes puis distribue les faces par identifiant croissant. Préserve les égalités de profondeur et l’ordre d’activation des anciens parcours.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-ZBuffer_SortScanHits"></a>
+
+### ZBuffer_SortScanHits
+
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 528.
+
+```c
+static void ZBuffer_SortScanHits(ZBufferScanHit *hits, int hit_count)
+```
+
+**Rôle :**
+
+Ordonner les intersections quantifiées d’un span.
+
+**Paramètres :**
+
+[entrée-sortie] hits : tableau de count intersections ; count : longueur valide.
+
+**Retour :**
+
+Aucun.
+
+**Fonctionnement :**
+
+Échange les deux intersections si nécessaire, sinon utilise l’insertion stable selon x. Les codes Z restent attachés à leurs abscisses.
+
+Appels internes directs : aucun repéré.
+
 <a id="fn-ZBuffer_SpanRun"></a>
 
 ### ZBuffer_SpanRun
 
-Définition : [zbuffer_common.c](zbuffer_common.c), ligne 103.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 595.
 
 ```c
 static void ZBuffer_SpanRun(void)

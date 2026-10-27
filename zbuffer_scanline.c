@@ -225,8 +225,8 @@ slcl_loop:
     }
 }
 
-typedef struct { int x; SLZWord zq; } SLZHit;
-typedef struct { long x,z,sx,sz; int ya,yb,xb; } SLZEdge;
+typedef ZBufferScanHit SLZHit;
+typedef ZBufferScanEdge SLZEdge;
 
 /*
  * ----------------------------------------------------------------------------
@@ -261,338 +261,11 @@ static void SL_SetScale(float max_inv_z)
         sl_zscale = SL_TARGET_MAX_CODE / max_biased_inv_z;
 }
 
-/*
- * ----------------------------------------------------------------------------
- *  SL_Quantize
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Quantifier une profondeur inverse en code 16 bits où petit signifie
- *    proche.
- *
- *  Paramètres :
- *    [entrée] inv_z, profondeur inverse flottante ; valeurs négatives
- *    ramenées à zéro.
- *
- *  Retour :
- *    65535 - round(inv_z*échelle), après saturation de la valeur quantifiée
- *    dans [0,65535]. $FFFF est la valeur vide/lointaine.
- *
- *  Fonctionnement :
- *    Aucun changement d'échelle.
- *
- * ----------------------------------------------------------------------------
- */
-static SLZWord SL_Quantize(float inv_z)
-{
-    float scaled;
-    long q;
-    /* Appliquer l'échelle scanline, arrondir, saturer puis inverser le code. */
-    if (inv_z < 0.0f) inv_z = 0.0f;
-    scaled = inv_z * sl_zscale;
-    q = (long)(scaled + 0.5f);
-    if (q < 0) q = 0;
-    if (q > 0xFFFFL) q = 0xFFFFL;
-    return (SLZWord)(0xFFFFUL - (unsigned long)q);
-}
 
-long sl_p_zacc, sl_p_zstep;
-unsigned long sl_p_zptr, sl_p_pptr;
-int sl_p_n, sl_p_odd, sl_p_mode, sl_p_cl, sl_p_ci, sl_p_cr;
-unsigned int sl_p_zl, sl_p_zr;
 
-/*
- * ----------------------------------------------------------------------------
- *  SL_SpanRun
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Dessiner un span préclippé avec test Z strict dans un noyau 65C816.
- *
- *  Paramètres :
- *    Aucun paramètre explicite.
- *
- *  Entrées et sorties implicites :
- *    Entrée : paquet partagé sl_p_* : pointeurs Z et pixels far, parité
- *    gauche, codes gauche/droite, couleurs gauche/intérieur/droite,
- *    accumulateur et pas 16.16, nombre de pixels intérieurs et mode 0
- *    (gauche seul) ou 1 (span complet).
- *
- *  Retour :
- *    Aucun ; écrit Z et les nibbles de couleur.
- *
- *  Registres et indicateurs :
- *    Préserve P et D ; A/X/Y modifiés, DBR inchangé. Mode décimal supposé
- *    désactivé. Cadre D de 32 octets : zacc à 0/2, zstep à 4/6, zptr à 8/10,
- *    pptr à 12/14, compte à 16, couleur basse/haute à 18/20, parité à 22,
- *    masque/valeur à 24/26. Les profondeurs [8],Y peuvent franchir une
- *    banque ; le pointeur de pixels n'est incrémenté que sur 16 bits et doit
- *    rester dans sa banque. Traite les extrémités exactement et l'intérieur
- *    par paires pair/impair. Les pixels de même code Z ne sont pas
- *    remplacés. Non réentrant.
- *
- * ----------------------------------------------------------------------------
- */
-static void SL_SpanRun(void)
-{
-    asm {
 
-        /* Sauvegarder le contexte et réserver 32 octets ; D est positionné
-         * sur le premier octet utile.
-         */
-        php
-        phd
-        rep #0x30
-        tsc
-        sec
-        sbc #32
-        tcs
-        inc a
-        tcd
 
-        /* Copier le paquet dans le cadre direct et préparer les deux nibbles
-         * de couleur.
-         */
-        lda >sl_p_zacc
-        sta 0
-        lda >sl_p_zacc+2
-        sta 2
-        lda >sl_p_zstep
-        sta 4
-        lda >sl_p_zstep+2
-        sta 6
-        lda >sl_p_zptr
-        sta 8
-        lda >sl_p_zptr+2
-        sta 10
-        lda >sl_p_pptr
-        sta 12
-        lda >sl_p_pptr+2
-        sta 14
-        lda >sl_p_n
-        sta 16
 
-        lda >sl_p_ci
-        and #0x000F
-        sta 18
-        asl a
-        asl a
-        asl a
-        asl a
-        sta 20
-
-        lda >sl_p_odd
-        eor #1
-        sta 22
-
-        ldy #0
-
-        lda >sl_p_odd
-        beq zbr_l_ev
-        lda #0x00F0
-        sta 24
-        lda >sl_p_cl
-        and #0x000F
-        sta 26
-        bra zbr_l_go
-    zbr_l_ev:
-        lda #0x000F
-        sta 24
-        lda >sl_p_cl
-        and #0x000F
-        asl a
-        asl a
-        asl a
-        asl a
-        sta 26
-    /* Tester la profondeur exacte du pixel gauche avant toute écriture du nibble. */
-    zbr_l_go:
-
-        lda >sl_p_zl
-        cmp [8],y
-        bcs zbr_lsk
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and 24
-        ora 26
-        sta [12]
-        rep #0x20
-    zbr_lsk:
-
-        lda >sl_p_mode
-        bne zbr_full
-        brl zbr_done
-
-    /* Avancer après le pixel gauche ; l'adresse couleur progresse seulement
-     * après un pixel impair.
-     */
-    zbr_full:
-        iny
-        iny
-        lda >sl_p_odd
-        beq zbr_lev
-        inc 12
-    zbr_lev:
-
-        lda 16
-        bne zbr_int
-        brl zbr_right
-
-    /* Traiter seul un premier pixel impair pour aligner le reste sur des paires. */
-    zbr_int:
-        lda 22
-        beq zbp_even
-
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs zbp_o1
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0xF0
-        ora 18
-        sta [12]
-        rep #0x20
-    zbp_o1:
-        iny
-        iny
-        inc 12
-        dec 16
-
-    zbp_even:
-        lda 16
-        lsr a
-        tax
-        beq zbp_tail
-
-    /* Avancer zacc en 32 bits pour chaque pixel ; propager C du mot bas au
-     * mot haut, puis tester Z.
-     */
-    zbp_pair:
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs zbp_e1
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0x0F
-        ora 20
-        sta [12]
-        rep #0x20
-    zbp_e1:
-        iny
-        iny
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs zbp_o2
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0xF0
-        ora 18
-        sta [12]
-        rep #0x20
-    zbp_o2:
-        iny
-        iny
-        inc 12
-        dex
-        bne zbp_pair
-
-    /* Traiter l'éventuel pixel pair résiduel après les paires. */
-    zbp_tail:
-        lda 16
-        and #1
-        bne zbp_t1
-        brl zbr_right
-    zbp_t1:
-
-        clc
-        lda 0
-        adc 4
-        sta 0
-        lda 2
-        adc 6
-        sta 2
-        cmp [8],y
-        bcs zbp_e2
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and #0x0F
-        ora 20
-        sta [12]
-        rep #0x20
-    zbp_e2:
-        iny
-        iny
-
-    /* Recalculer la parité et employer le code exact de l'extrémité droite. */
-    zbr_right:
-        lda >sl_p_n
-        clc
-        adc 22
-        and #1
-        beq zbr_r_ev
-        lda #0x00F0
-        sta 24
-        lda >sl_p_cr
-        and #0x000F
-        sta 26
-        bra zbr_r_go
-    zbr_r_ev:
-        lda #0x000F
-        sta 24
-        lda >sl_p_cr
-        and #0x000F
-        asl a
-        asl a
-        asl a
-        asl a
-        sta 26
-    zbr_r_go:
-        lda >sl_p_zr
-        cmp [8],y
-        bcs zbr_rsk
-        sta [8],y
-        sep #0x20
-        lda [12]
-        and 24
-        ora 26
-        sta [12]
-        rep #0x20
-    zbr_rsk:
-
-    /* Libérer exactement le cadre avant de restaurer D et P. */
-    zbr_done:
-        rep #0x30
-        tsc
-        clc
-        adc #32
-        tcs
-        pld
-        plp
-    }
-}
 
 /*
  * ----------------------------------------------------------------------------
@@ -630,30 +303,30 @@ static void SL_PaintSpan(int x0, int x1, int screenY,
     }
     /* Préparer les pointeurs de la ligne Z et de l'écran au premier pixel. */
     sx0 = x0 + pan_dx;
-    sl_p_zptr = (unsigned long)(sl_zline + sx0);
-    sl_p_pptr = SL_SHGR_BASE + (unsigned long)screenY * 160UL + (unsigned long)(sx0 >> 1);
-    sl_p_odd = sx0 & 1;
-    sl_p_zl = z0;
-    sl_p_cl = frameColor;
+    zspan_p_zptr = (unsigned long)(sl_zline + sx0);
+    zspan_p_pptr = SL_SHGR_BASE + (unsigned long)screenY * 160UL + (unsigned long)(sx0 >> 1);
+    zspan_p_odd = sx0 & 1;
+    zspan_p_zl = z0;
+    zspan_p_cl = frameColor;
     /* Le span ponctuel se limite au pixel gauche ; sinon préparer intérieur
      * et bord droit.
      */
     if (x0 == x1) {
-        sl_p_mode = 0;
-        SL_SpanRun();
+        zspan_p_mode = 0;
+        ZBuffer_SpanRun();
         return;
     }
     nsteps = x1-x0;
     zstep = (((long)z1-(long)z0) << 16) / nsteps;
     zacc = ((long)z0 << 16) + 0x8000L;
-    sl_p_zr = z1;
-    sl_p_zacc = zacc;
-    sl_p_zstep = zstep;
-    sl_p_n = nsteps-1;
-    sl_p_ci = fillColor;
-    sl_p_cr = frameColor;
-    sl_p_mode = 1;
-    SL_SpanRun();
+    zspan_p_zr = z1;
+    zspan_p_zacc = zacc;
+    zspan_p_zstep = zstep;
+    zspan_p_n = nsteps-1;
+    zspan_p_ci = fillColor;
+    zspan_p_cr = frameColor;
+    zspan_p_mode = 1;
+    ZBuffer_SpanRun();
 }
 
 /*
@@ -696,25 +369,16 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
     FaceArrays3D* faces = &model->faces;
     int vcount = vtx->vertex_count;
     int fcount = faces->face_count;
-    int y, f, i, k, b, si, ai, keep, active_count;
+    int y, f, i, k, ai, keep, active_count;
     int total_edges, end;
     int clip_x_min, clip_x_max, y_lo, y_hi;
     float frame_max_inv_z;
     SLZEdge* ed;
     SLZHit hits[MAX_SPAN_INTERSECTIONS];
 
-    static float* inv_z = NULL;
-    static SLZWord* vzq = NULL;
-    static SLZWord* vzq_b = NULL;
-    static int vert_capacity = 0;
+    static ZBufferVertexWork vertices;
 
-    static int* face_start = NULL;
-    static int* face_sorted = NULL;
-    static int* face_active = NULL;
-    static unsigned char* face_fill = NULL;
-    static unsigned char* face_frame = NULL;
-    static unsigned char* face_nudge = NULL;
-    static int face_capacity = 0;
+    static ZBufferFaceWork face_work;
 
     static SLZEdge* edge_buf = NULL;
     static int edge_capacity = 0;
@@ -723,32 +387,9 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
     static int bucket_cur[SCREEN_HEIGHT + 1];
 
     /* Réserver les tables de faces, couleurs et biais. */
-    if (face_capacity < fcount) {
-        if (face_start)   free(face_start);
-        if (face_sorted)  free(face_sorted);
-        if (face_active)  free(face_active);
-        if (face_fill)    free(face_fill);
-        if (face_frame)   free(face_frame);
-        if (face_nudge)   free(face_nudge);
-        face_start  = (int*)malloc(fcount * sizeof(int));
-        face_sorted = (int*)malloc(fcount * sizeof(int));
-        face_active = (int*)malloc(fcount * sizeof(int));
-        face_fill   = (unsigned char*)malloc(fcount);
-        face_frame  = (unsigned char*)malloc(fcount);
-        face_nudge  = (unsigned char*)malloc(fcount);
-        face_capacity = (face_start && face_sorted && face_active &&
-                         face_fill && face_frame && face_nudge) ? fcount : 0;
-    }
+    if (!ZBuffer_ReserveFaces(&face_work, fcount)) return;
     /* Agrandir les buffers de sommets et conserver leur capacité entre les rendus. */
-    if (vert_capacity < vcount) {
-        if (inv_z) free(inv_z);
-        if (vzq)   free(vzq);
-        if (vzq_b) free(vzq_b);
-        inv_z = (float*)malloc(vcount * sizeof(float));
-        vzq   = (SLZWord*)malloc(vcount * sizeof(SLZWord));
-        vzq_b = (SLZWord*)malloc(vcount * sizeof(SLZWord));
-        vert_capacity = (inv_z && vzq && vzq_b) ? vcount : 0;
-    }
+    if (!ZBuffer_ReserveVertices(&vertices, vcount)) return;
     total_edges = 0;
     for (f = 0; f < fcount; f++) {
         end = faces->vertex_indices_ptr[f] + faces->vertex_count[f];
@@ -759,24 +400,16 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
         edge_buf = (SLZEdge*)malloc((size_t)total_edges * sizeof(SLZEdge));
         edge_capacity = edge_buf ? total_edges : 0;
     }
-    if (face_capacity < fcount || vert_capacity < vcount || edge_capacity < total_edges)
+    if (face_work.capacity < fcount || vertices.capacity < vcount || edge_capacity < total_edges)
         return;
 
-    frame_max_inv_z = 0.0f;
-    /* Calculer les profondeurs inverses et les codes selon le format de
-     * cette version.
-     */
-    for (i = 0; i < vcount; i++) {
-        float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
-        inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
-        if (inv_z[i] > frame_max_inv_z) frame_max_inv_z = inv_z[i];
-    }
+    frame_max_inv_z = ZBuffer_PrepareInvZ(vtx, vcount, vertices.inv_z);
     SL_SetScale(frame_max_inv_z);
 
     for (i = 0; i < vcount; i++) {
 
-        vzq[i]   = SL_Quantize(inv_z[i]);
-        vzq_b[i] = biased ? SL_Quantize(inv_z[i] + SL_Z_BIAS) : vzq[i];
+        vertices.vzq[i]   = ZBuffer_QuantizeAtScale(vertices.inv_z[i], sl_zscale);
+        vertices.vzq_b[i] = biased ? ZBuffer_QuantizeAtScale(vertices.inv_z[i] + SL_Z_BIAS, sl_zscale) : vertices.vzq[i];
     }
 
     SetPenMode(0);
@@ -793,78 +426,22 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
     /* Initialiser l'histogramme des premières lignes ; préparer visibilité,
      * couleurs et arêtes.
      */
-    for (b = 0; b <= SCREEN_HEIGHT; b++) bucket[b] = 0;
-
-    for (f = 0; f < fcount; f++) {
-        int n, offt, fmin, fmax, fill;
-        SLZWord* zsrc;
-
-        face_start[f] = -1;
-        if (!faces->display_flag[f]) continue;
-        n = faces->vertex_count[f];
-        if (n < 3) continue;
-        fmin = faces->miny[f];
-        fmax = faces->maxy[f];
-        if (fmax < y_lo || fmin > y_hi) continue;
-
-        b = ((fmin > y_lo) ? fmin : y_lo) - y_lo;
-        face_start[f] = b;
-        bucket[b + 1]++;
-
-        fill = getFaceFillColor(f);
-        face_fill[f]  = (unsigned char)fill;
-        face_frame[f] = (unsigned char)getFaceFrameColor(f, fill);
-        face_nudge[f] = (unsigned char)((biased && faces->plane_d[f] > 0) ? 2 : 0);
-
+    ZBuffer_PrepareFaces(faces, fcount, y_lo, y_hi, SCREEN_HEIGHT, biased,
+                         face_work.face_start, face_work.face_fill, face_work.face_frame,
+                         face_work.face_nudge, bucket);
+    for (f = 0; f < fcount; ++f) {
+        int offt;
+        UWORD16 *zsrc;
+        if (face_work.face_start[f] < 0) continue;
         offt = faces->vertex_indices_ptr[f];
-        zsrc = (biased && faces->plane_d[f] > 0) ? vzq_b : vzq;
+        zsrc = (biased && faces->plane_d[f] > 0) ? vertices.vzq_b : vertices.vzq;
         ed = edge_buf + offt;
 
-        for (k = 0; k < n; k++, ed++) {
-            int k2 = (k + 1 < n) ? (k + 1) : 0;
-            int vid1 = faces->vertex_indices_buffer[offt + k] - 1;
-            int vid2 = faces->vertex_indices_buffer[offt + k2] - 1;
-            int y1 = vtx->y2d[vid1];
-            int y2 = vtx->y2d[vid2];
-            int dy = y2 - y1;
-            int ya, yb, xs;
-            long zs, ex, ez, sx, sz, skip;
-
-            if (dy == 0) {
-                ed->ya = 32767; ed->yb = 32767;
-                ed->x = 0L; ed->z = 0L; ed->sx = 0L; ed->sz = 0L;
-                continue;
-            }
-
-            sx = (((long)vtx->x2d[vid2] - (long)vtx->x2d[vid1]) * 4096L) / (long)dy;
-            sz = (((long)zsrc[vid2] - (long)zsrc[vid1]) * 4096L) / (long)dy;
-
-            if (dy > 0) { ya = y1; yb = y2; xs = 0;                                        zs = (long)zsrc[vid1]; }
-            else        { ya = y2; yb = y1; xs = vtx->x2d[vid2] - vtx->x2d[vid1];          zs = (long)zsrc[vid2]; }
-
-            ex = (long)xs * 4096L;
-            ez = zs * 4096L;
-
-            if (ya < y_lo && yb > y_lo) {
-                skip = (long)(y_lo - ya);
-                ex += sx * skip;
-                ez += sz * skip;
-            }
-
-            ed->ya = ya;  ed->yb = yb;
-            ed->xb = vtx->x2d[vid1];
-            ed->x  = ex + SL_Z_ROUND;
-            ed->z  = ez + SL_Z_ROUND;
-            ed->sx = sx;  ed->sz = sz;
-        }
+        ZBuffer_PrepareScanEdges(vtx, faces, f, zsrc, y_lo, SL_Z_ROUND, ed);
     }
 
-    for (b = 0; b < SCREEN_HEIGHT; b++) bucket[b + 1] += bucket[b];
-    for (b = 0; b <= SCREEN_HEIGHT; b++) bucket_cur[b] = bucket[b];
-    for (f = 0; f < fcount; f++) {
-        b = face_start[f];
-        if (b >= 0) face_sorted[bucket_cur[b]++] = f;
-    }
+    ZBuffer_SortFaceStarts(fcount, SCREEN_HEIGHT, face_work.face_start,
+                           bucket, bucket_cur, face_work.face_sorted);
 
     /* Démarrer la liste des faces actives, puis balayer les lignes visibles. */
     active_count = 0;
@@ -878,16 +455,8 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
         /* Insérer les faces commençant sur cette ligne en gardant l'ordre
          * d'identifiants.
          */
-        for (si = bucket[row]; si < bucket[row + 1]; si++) {
-            int nf = face_sorted[si];
-            int pos = active_count;
-            while (pos > 0 && face_active[pos - 1] > nf) {
-                face_active[pos] = face_active[pos - 1];
-                pos--;
-            }
-            face_active[pos] = nf;
-            active_count++;
-        }
+        active_count = ZBuffer_ActivateFaces(row, bucket, face_work.face_sorted,
+                                             face_work.face_active, active_count);
 
         keep = 0;
         /* Écarter les faces terminées et extraire les intersections des
@@ -897,9 +466,9 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
             int n, offt, hit_count;
             int fillColor, frameColor, nudge;
 
-            f = face_active[ai];
+            f = face_work.face_active[ai];
             if (faces->maxy[f] < y) continue;
-            face_active[keep++] = f;
+            face_work.face_active[keep++] = f;
 
             n = faces->vertex_count[f];
             offt = faces->vertex_indices_ptr[f];
@@ -925,28 +494,11 @@ static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
             /* Ordonner les intersections : échange simple pour deux, tri par
              * insertion au-delà.
              */
-            if (hit_count == 2) {
-                if (hits[0].x > hits[1].x) {
-                    SLZHit tmp = hits[0];
-                    hits[0] = hits[1];
-                    hits[1] = tmp;
-                }
-            } else {
-                int a, c;
-                for (a = 1; a < hit_count; a++) {
-                    SLZHit key = hits[a];
-                    c = a - 1;
-                    while (c >= 0 && hits[c].x > key.x) {
-                        hits[c + 1] = hits[c];
-                        c--;
-                    }
-                    hits[c + 1] = key;
-                }
-            }
+            ZBuffer_SortScanHits(hits, hit_count);
 
-            fillColor  = face_fill[f];
-            frameColor = face_frame[f];
-            nudge      = face_nudge[f];
+            fillColor  = face_work.face_fill[f];
+            frameColor = face_work.face_frame[f];
+            nudge      = face_work.face_nudge[f];
 
             {
                 int p;

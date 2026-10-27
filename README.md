@@ -1,180 +1,574 @@
-# Explorateur OBJ 3D pour Apple IIgs
+# 3D OBJ Explorer for Apple IIGS
 
-Ce projet charge, oriente et examine des modèles Wavefront OBJ sur Apple IIgs en affichage SHGR 320 × 200 à seize couleurs. Il compare sept variantes de l’algorithme du peintre et plusieurs rendus par Z-buffer. Ses inspecteurs permettent d’étudier les ambiguïtés de visibilité, les plans des faces et les différences entre méthodes.
+**A Tribute to Robert DONY**  
+*Author of "Calcul des parties cachées", Masson, 1986*
 
-Il rend hommage à **Robert Dony**, auteur de *Calcul des parties cachées*, Masson, 1986.
+A 3D model viewer and explorer implementing multiple painter's algorithms, specifically designed for the Apple IIGS computer using ORCA/C and the QuickDraw graphics API.
 
-![Interface principale](Screenshots/main_interface.png)
-![Surfaces ombrées](Screenshots/crossSub_shaded.png)
-![Recouvrement cyclique](Screenshots/cyclic_overlap.png)
+![Main Interface](Screenshots/main_interface.png)
+![crossSub_shaded](Screenshots/crossSub_shaded.png)
+![charpente_shaded](Screenshots/charpente_shaded.png)
+![monkey_shaded](Screenshots/monkey.png)
+![bigsphere_jitter](Screenshots/bigsphere_jitter.png)
 
-## Documentation
+## Overview
 
-- [Dictionnaire technique](dictionary.md) : formats, structures, conventions, caches et contrats des fonctions des sources actives.
-- [Graphe des appels](arbre_appels.html) et [version repliable](arbre_appels_fold.html) : recherche, navigation entre appelants et appelés, fonctions non sélectionnées par l’interface incluses.
-- [Bilan de révision](REVISION_DOCUMENTATION.md) : contrôles, limites et candidats à une rationalisation.
+3D Explorer is an interactive 3D rendering application that reads simplified Wavefront OBJ files and displays them with manipulation capabilities. The project demonstrates advanced rendering techniques on resource-constrained hardware (Apple IIGS with 2.8 MHz 65C816 CPU and 1 Mb) through careful optimization and multiple algorithm implementations. It performs satisfactorily on a modern computer and in emulation mode, due to the large number of calculations it requires.
 
-Les commentaires et documents sont en français, avec les identifiants et termes informatiques usuels conservés. Ils décrivent le code actuel ; les noms historiques et les chaînes de l’interface ne suffisent pas à déduire son comportement. Les fragments de `old/` et les diagnostics de `tools/` sont hors du périmètre de cette révision.
+It is built around the painter's algorithm: faces are sorted and drawn back-to-front so that nearer polygons naturally occlude farther ones. The application includes several painter variants, from fast z-mean ordering to more robust geometric correction passes for overlapping and intersecting faces. Visibility can also be resolved per pixel with a scanline Z-buffer, a full-screen offscreen Z-buffer, or a full-screen renderer writing directly to the display. The three paths share their depth-test and pixel-output assembly kernel.
 
-## Démarrage
+## Getting Started
 
-1. Exécuter `OBJExplorer` dans l’environnement Apple IIgs préparé pour le programme.
-2. Saisir le chemin OBJ. Après un échec, le programme essaie aussi le suffixe `.obj` s’il manque. Une ligne vide quitte le programme.
-3. Répondre à la proposition de vérification des intersections. **Cette commande peut modifier la géométrie par découpage** ; elle ne fait pas qu’afficher un diagnostic.
-4. Saisir les trois angles puis la distance, ou accepter les valeurs proposées avec Entrée. La vue initiale propose 30° horizontalement, 20° verticalement et 0° de rotation écran.
-5. Utiliser les commandes ci-dessous ; Échap quitte la vue principale.
+1. **Load a model**: Run the program and enter the path to a simplified OBJ file when prompted. You can omit '.obj' at the end of the filename; the program will add it for you. Answer the optional intersection-check prompt, then press `Enter` at each camera prompt to accept the horizontal angle, vertical angle, screen rotation, and suggested auto-fit distance. Those defaults can still be changed later through the application controls.
+2. **Now you see the 3D object centred on the screen**
+3. **Use the controls**: Navigate the scene with the keyboard and switch rendering modes using keys `1` through `7`.
+4. **Change the color palette**: Press `G` to cycle through the available color palettes.
+5. **Choose colors**: Press `>` to choose the fill color and `<` to choose the frame color, from an on-screen color chooser.
+6. **Enable orientation shading**: Press `!` to toggle orientation-based shading on and off.
+7. **Inspect faces**: Press `V` to inspect a single face, then press `Space` to view detailed face information. Use `V` (in that detail screen) to reverse the vertex winding of the selected face and update its front/back classification, `H`/`R`/`A` to hide, restore, or restore all faces, and `N` (in the main face viewer) to toggle display of the face's normal.
+8. **Inspect face pairs**: Press `Q` to inspect a pair of faces, navigate between pairs, diagnose ordering anomalies, and use `R` to move the currently earlier face later in the draw order or `E` to move the currently later face earlier. These are manual ordering changes, not guaranteed geometric corrections.
+9. **Get full help**: Press `H` to display the complete keyboard help screen and command summary.
+10. **Repair ordering**: Press `;` to review overlapping face pairs and accept or skip each correction proposed by the same core used by GEO V3.
+11. **Use Z-buffer rendering**: Press `O` for scanline rendering, `U` for full-screen offscreen rendering, or `Open-Apple + U` for direct full-screen rendering.
 
-Le chargement centre les sommets à partir de leur boîte objet, propose une distance de trois fois la dimension maximale et ajuste l’échelle à une marge écran de 90 % dans la vue initiale. Une normalisation applique ensuite la formule existante vers une distance suggérée de 150. Elle modifie coordonnées et échelle ; elle ne garantit pas une invariance exacte de perspective pour toutes les profondeurs.
+### Why use this explorer/viewer?
 
-## Commandes principales
+- It is optimized for the Apple IIGS hardware and demonstrates fixed-point 3D rendering techniques.
+- It includes advanced painter algorithms for difficult overlapping geometry.
+- It provides a scanline Z-buffer rendering
+- It provides a full-screen 16-bit Z-buffer rendering, with offscreen and direct-screen output paths
+- It provides interactive inspection and debugging tools for face order, overlap, and visibility issues.
 
-Les lettres acceptent majuscules et minuscules. Les commandes des inspecteurs peuvent avoir un autre sens.
+## Limitations 
+However, it has many limitations, including: speed (requires an accelerator or emulator), the number of vertices and faces, the number of vertices per face, very limited handling of intersecting faces, and handling of the case of cyclic overlap by the Z-buffer renderers only (scanline or full-screen), not by any painter mode.
+Example : ![cycle](Screenshots/cyclic_overlap.png)
+This image couldn't have been generated with painters as they are implemented here. But either Z-buffer renderer (scanline, triggered by 'O' key, or full-screen triggered by 'U' key) resolves it correctly.
 
-| Commande | Action |
-| --- | --- |
-| Gauche / droite | Angle horizontal −10° / +10° ; pas de 1° avec Open-Apple. |
-| Bas / haut | Angle vertical −10° / +10° ; pas de 1° avec Open-Apple. |
-| `W` / `X` | Rotation écran +10° / −10° ; pas de 1° avec Open-Apple. |
-| `A` / `Z` | Distance −10 % / +10 % ; −50 % / +50 % avec Open-Apple. |
-| `+` / `-` | Projection ×1,1 / ×0,9, bornée entre 1 et 10000 ; reprojection et bornes mises à jour, sans nouveau tri. |
-| `E` / `R` | Déplacement gauche / droite de dix pixels, ou un avec Open-Apple. |
-| `T` / `Y` | Déplacement haut / bas de dix pixels, ou un avec Open-Apple. |
-| `0` | Annulation du déplacement écran. |
-| `K` | Nouvelle saisie de la vue sans rechargement. |
-| `N` | Nouveau chargement et réinitialisation des options explicitement prévues dans `main`. |
-| `1` à `7` | Choix de la méthode de classement, selon la table suivante. |
-| `O` | Z-buffer scanline V3. |
-| `U` | Z-buffer plein écran dans un framebuffer RAM, puis transfert SHGR. |
-| Open-Apple + `U` | Z-buffer plein écran directement vers SHGR. |
-| `P` | Filaire / surfaces ; le retour aux surfaces refait le traitement et le tri. |
-| `B` | Back-face culling, puis retraitement. |
-| `G` / `C` | Palette suivante / affichage des échantillons de couleurs. |
-| `>` / `<` | Choix du remplissage / contour ; le contour peut reprendre le remplissage. |
-| `8` | Nouveau remplissage aléatoire ; le choix du contour reste inchangé. |
-| `9` | Couleurs par défaut, palette zéro et shading désactivé. |
-| `!` | Shading par orientation des normales. |
-| `J` | Jitter temporaire des sommets pendant le dessin. |
-| `I` | Surlignage des paires inconclusives disponibles. |
-| Espace | Modèle, paramètres, options et derniers temps mesurés. |
-| `V` / `Q` | Inspecteur de face / inspecteur de paire. |
-| `D` / `S` | Inspection des faces placées avant / après une cible. |
-| `;` | Repair GEO V3 interactif : filaire et surlignage des deux faces avant chaque échange proposé. |
-| `(` | Choix de la méthode de chevauchement projeté. |
-| `/` | Benchmark des six méthodes comparées, export dans `overlap.all.txt`. |
-| `F` | Export de `Faces3D.csv`, `Faces2D.txt` et `FacesOrder.txt`. |
-| `*` | Capture brute SHGR, premier nom disponible de `screen000.PIC` à `screen999.PIC`. |
-| `H` | Aide paginée ; Échap sort de l’aide. |
-| Échap | Sortie du programme. |
+### Quick start keys
 
-Dans l’inspecteur `V`, gauche/droite parcourent les identifiants et haut/bas la liste triée. `N` bascule la normale. Espace ouvre les détails et les commandes permettant notamment d’inverser le winding, de masquer et de restaurer des faces. Ces actions modifient le modèle en mémoire, sans réécrire le fichier OBJ.
+- `H`: show full help screens
+- `1`: FAST mode
+- `2`: BUBBLE SORT mode
+- `3`: NEWELL SANCHA mode
+- `4`: GEO mode
+- `5`: GEO V3 mode
+- `6`: CORRECT mode
+- `7`: CORRECT V2 mode
+- `O`: optimized scanline Z-buffer mode
+- `U`: optimized full-screen Z-buffer mode using the offscreen framebuffer
+- `Open-Apple + U`: optimized full-screen Z-buffer mode rendered directly onscreen
+- `8`: enable random fill colors and regenerate random color arrays; preserve the frame-color selection
+- `>`: choose fill color (interactive color chooser)
+- `<`: choose frame color, including "same as fill color" = no separate border (interactive color chooser)
+- `9`: reset colors to defaults, restore palette 0, and disable orientation shading
+- `B`: toggle back-face culling
+- `P`: toggle wireframe (frame-only) rendering
+- `C`: toggle palette display overlay
+- `G`: cycle through available color palettes
+- `!`: toggle orientation-based shading
+- `V`: inspect a face, arrow to navigate, 'space' for options (record face data in a file, revert vertex order)
+- `Q`: inspect a face pair and navigate between pairs
+- `;`: repair face order
 
-Les temps sont mesurés en ticks de 1/60 seconde. Ils dépendent du modèle, de la vue, des options et de la machine ; cette documentation ne déduit pas un classement universel des performances.
+### Key Features
 
-## Méthodes de classement des faces
+- **Seven Painter Modes**: FAST, BUBBLE SORT, NEWELL SANCHA, GEO, GEO V3, CORRECT, and CORRECT V2 offer different ordering strategies. None splits faces during sorting, so intersecting polygons and cyclic visibility can remain unresolved.
+- **Three Z-Buffer Paths**: Scanline, full-screen offscreen, and full-screen direct output share a 65C816 span kernel and resolve visibility per pixel.
+- **3D Manipulation**: Camera distance, three rotation angles, perspective scale, and screen panning.
+- **Inspection and Repair**: Single-face viewer, directional S/D inspection, pair diagnostics, and an interactive repair based on GEO V3.
+- **Fixed-Point Arithmetic**: Signed 16.16 coordinates with 64-bit intermediate calculations where required.
+- **Shared Infrastructure**: Ordering caches, geometric relations, inspection-state preservation, screen clearing, and Z-buffer preparation reduce duplicated code.
 
-Les méthodes de classement produisent `faces.sorted_face_indices`, permutation d’identifiants à base zéro. Le dessin QuickDraw suit cette liste de l’arrière vers l’avant. Les métriques sont calculées avant le tri.
+## Technical Architecture
 
-| Touche | Mode | Implémentation actuelle |
-| --- | --- | --- |
-| `1` | FAST | `painter_newell_sancha_fast` : `z_mean` décroissant, égalités par identifiant ; aucun test de chevauchement. |
-| `2` | BUBBLE SORT | `painter_bubble_sort` : échanges de voisins après profondeur, boîtes, chevauchement et plans, avec garde des paires traitées. |
-| `3` | NEWELL SANCHA | `painter_newell_sancha` : balayage des intervalles Z, liste de candidats et insertions avec table inverse des positions. |
-| `4` | GEO | `painter_geoV2` : correction de voisins par plans puis chevauchement et ray casting ; cache et nombre de passes borné. |
-| `5` | GEO V3 | `painter_geoV3` : tri stable par `z_max`, sélection et reprise après permutation ; filtrage assembleur et replis de ray casting. |
-| `6` | CORRECT | `painter_correct`, variante 0 : partition selon `plane_d`, puis insertions locales sur le groupe avant. |
-| `7` | CORRECT V2 | `painter_correct`, variante 1 : passe arrière et vérifications croisées supplémentaires sans culling initial. |
+### Graphics Pipeline
 
-Aucun de ces sept chemins ne découpe automatiquement les faces pendant le tri. Le découpage appartient à la préparation expérimentale des intersections.
+1. **Model Loading**: Parse simplified OBJ vertices and faces, swap the imported Y/Z axes, center the bounding box, and prepare auto-fit suggestions. An optional experimental intersection/splitting pass runs at load time.
+2. **3D Transformation**: Apply camera rotations and distance to obtain observer-space coordinates.
+3. **Projection and Metrics**: Project vertices; compute face depths, observer-space planes, projected bounds, and visibility flags.
+4. **Face Sorting**: Run the selected painter mode and store its draw-order permutation.
+5. **Rasterization**: Draw polygons through QuickDraw, or invoke a Z-buffer renderer on the prepared view. Z-buffer visibility does not depend on the painter permutation.
 
-Un ordre global ne peut pas représenter tous les recouvrements cycliques et toutes les interpénétrations. Les gardes de permutations limitent les reprises ; elles ne prouvent pas la correction visuelle du résultat.
+### Rendering Modes
 
-## Chevauchement et ray casting
+#### FAST Mode (Key: `1`)
 
-Le menu `(` configure `overlap_method`, initialisé à **V1**, parmi sept méthodes :
+- `painter_newell_sancha_fast` sorts faces by decreasing mean depth using `qsort`.
+- Face ID provides a deterministic tie-break; no polygon-overlap or plane-side correction is performed.
+- Useful as a simple baseline, but average depth alone cannot resolve many overlapping faces.
 
-- **Simple** : croisements propres et sommets strictement intérieurs ; certains contours coïncidents peuvent être manqués.
-- **V1** : filtres, échantillons, seuils et clipping ; zéro peut aussi résulter d’une garde ou d’un échec de ressource.
-- **V2 original, Max et Fixed64** : croisements, inclusions et sondes près des milieux d’arêtes ; limites numériques différentes.
-- **Raster** : recherche d’un centre de pixel strictement commun aux spans. Une intersection continue peut n’en contenir aucun. **Raster x10** rééchantillonne après reprojection temporaire.
+#### BUBBLE SORT Mode (Key: `2`)
 
-Le wrapper historique `projected_polygons_overlap_v2` possède un choix à la compilation distinct du menu runtime. Le benchmark `/` compare six méthodes, sans Simple ; un désaccord ne désigne pas à lui seul la bonne méthode.
+- `painter_bubble_sort` corrects adjacent face pairs through bubble-sort passes.
+- Cheap depth/bounding-box checks precede geometric face-relation tests in both directions.
+- Inconclusive cases can use projected polygon overlap and hierarchical ray casting.
+- It remains a face-order heuristic, with bounded processing rather than a guarantee for arbitrary geometry.
 
-Le clipping Sutherland-Hodgman exige un clip convexe pour l’intersection générale correcte par demi-plans. Essayer les deux sens ne résout pas tous les cas concaves. Malgré le suffixe `fixed`, ses calculs intermédiaires sont en double avant l’éventuel arrondi entier.
+#### NEWELL SANCHA Mode (Key: `3`)
 
-**`compute_intersection_centroid_ordered_qd_fixed` renvoie le centre de la bbox de région, pas son centroïde.** Son `out_area2` contient l’aire de cette boîte, et non le double de l’aire exacte de l’intersection. Les conventions des autres interfaces d’aire et de signe sont détaillées dans le dictionnaire.
+- `painter_newell_sancha` combines candidate filtering and stable insertion of faces in the draw order.
+- Its shared geometric machinery includes:
+  1. Depth and projected bounding-box rejection.
+  2. Sweep-based candidate preparation to avoid unrelated pairs.
+  3. Cached geometric relations evaluated in both directions.
+  4. Projected polygon-overlap checks when geometry is inconclusive.
+  5. Hierarchical ray casting for remaining ordering decisions.
+  6. Stable moves with inverse-position updates and bounded correction work.
+- Fixed-point coordinates and wider intermediates are used where needed. Intersections and cyclic overlaps may still prevent a valid whole-face order.
 
-## Z-buffers
+#### GEO Mode (Key: `4`) — ⚠️ CAN BE VERY SLOW ON LARGE MODELS
 
-Ils utilisent les coordonnées de vue déjà préparées et décident la visibilité par pixel, sans exiger un classement préalable correct des faces.
+- `painter_geoV2` uses neighboring-pair correction passes, a pair cache, and bounded iteration.
+- Geometric tests are supplemented by overlap checks and hierarchical ray casting when necessary.
+- Runtime depends on geometry, overlap density, and correction count; compare it with the other modes on your own models.
 
-| Chemin | Profondeur | Contours |
-| --- | --- | --- |
-| Scanline V3 actif | Ligne réutilisée de 320 codes 16 bits ; préparation flottante de `1/z`. | Extrémités des spans et interpolation des codes. |
-| Plein écran direct | 320 × 200 mots, plan affine de codes Z partagé avec le remplissage. | Passe distincte par Bresenham sur les côtés originaux, masque facultatif et garde de profondeur supplémentaire. |
-| Plein écran offscreen | Même table Z et framebuffer RAM de 32000 octets copié par MVN. | Extrémités de spans et liaisons entre lignes ; algorithme différent du rendu direct. |
+#### GEO V3 Mode (Key: `5`) — ⚠️ CAN BE VERY SLOW ON LARGE MODELS
 
-Les codes sont inversés : plus petit signifie plus proche, `$FFFF` signifie vide. Le plein écran réserve 192 Kio pour garantir deux banques de 64 Kio après alignement ; les 64000 profondeurs logiques occupent 128000 octets. La ligne Z de V3 occupe 640 octets, auxquels s’ajoutent les buffers par sommet, face et arête.
+- `painter_geoV3` delegates to the shared `geov3_run` core.
+- Normal sorting starts from canonical face IDs and a stable maximum-depth ordering, then filters candidate pairs with C/assembly helpers.
+- Geometric relations, cached polygon overlap, and hierarchical ray casting guide exchanges. Stamps and iteration limits bound repeated work.
+- The interactive repair reuses this core, but starts from the current order and asks before applying exchanges.
+- This mode does not split faces; cyclic visibility and intersecting polygons can remain unresolved. Runtime is model-dependent.
 
-Sans culling, les chemins publics emploient un biais de rapprochement pour les faces de `plane_d > 0`. Ce biais modifie les décisions numériques entre surfaces proches. Les versions scanline flottantes et V2 restent présentes pour comparaison, hors du dispatch public actuel.
+#### CORRECT Mode (Key: `6`)
 
-## Organisation et données
+- `painter_correct(model, face_count, 0)` starts with FAST mean-depth ordering.
+- A stable partition separates BACK (`plane_d <= 0`) and FRONT (`plane_d > 0`) faces.
+- Local insertions correct the FRONT group using shared geometric relations.
+- This is a correction heuristic, not a full Newell-Sancha pass or a general intersection solver.
 
-Le programme forme une unité de compilation par inclusions de fichiers C ; ses modules ne sont pas compilés indépendamment.
+#### CORRECT V2 Mode (Key: `7`)
 
-| Source | Rôle |
-| --- | --- |
-| `OBJExplorer.cc` | Commandes, cycles QuickDraw, chargement et choix des traitements. |
-| `declare.c` | Formats fixes, trigonométrie, types, limites, états et prototypes. |
-| `engine.c` | Chargement, préparation objet, transformation, métriques, classement des faces, dessin et inspection. |
-| `ordering_cache.c` | Paires orientées, plans, côtés de sommets, contours et workspace. |
-| `dony.c`, `dony_scan_asm.c` | GEO V3 et rejet rapide des candidats. |
-| `geo_relation_asm.c`, `face_depth_asm.c` | Classification par plan ; métriques et Newell. |
-| `overlap_raster.c` | Chevauchement, clipping, régions, projection subpixel et benchmark. |
-| `zbuffer_scanline.c` | Rendu scanline V3, avec ou sans biais, et écriture d’un pixel SHGR. |
-| `zbuffer_common.c` | Interpolation entière des codes de profondeur et noyau assembleur commun aux spans direct/offscreen. |
-| `zbuffer_fullscreen.c`, `.h` | Z-buffer et rendu direct avec contours sur plan. |
-| `zbuffer_fullscreen_offscreen.c` | Rendu en RAM et transfert vers SHGR. |
-| `screen_save_restore.c` | Copie de 32768 octets SHGR pour les vues temporaires et effacement paramétrable des lignes du haut. |
-| `color.c`, `asm.h` | Sélecteur de couleurs ; clavier et soft switches SHGR. |
-| `DEPLOY.py` | Compilation Golden Gate, lien et déploiement dans les images disque. |
+- `painter_correct(model, face_count, 1)` uses the same implementation as CORRECT, with additional correction stages.
+- When back-face culling is off, it also corrects the BACK group and checks ordering across the BACK/FRONT partition.
+- Cross-group decisions use geometric tests and a mean-depth fallback where required.
+- The two modes share code while preserving their different correction policies; neither guarantees a valid order for every model.
 
-Les tableaux de coordonnées sont parallèles : objet `x/y/z`, observateur `xo/yo/zo` en 16.16, puis `x2d/y2d` en pixels. Les faces sont à base zéro ; les indices de sommets dans leur buffer restent à base un. `vertex_indices_ptr` contient des offsets dans ce buffer. Le pan s’applique au dessin et ne modifie pas les coordonnées de projection.
+#### Scanline Z-Buffer Mode (Key: `O`)
+- Alternative renderer, entirely separate from the painter's-algorithm pipeline: visibility is resolved per pixel rather than by sorting complete faces
+- Rasterizes polygons scanline by scanline and uses even-odd span pairing, so concave faces are handled without special-casing
+- Uses a **single 320-entry 16-bit depth buffer**, reused for every scanline (about 640 bytes of depth-buffer storage)
+- Reciprocal depth (`1/z`) is prepared and quantized to a 16-bit depth representation; the hot span loop avoids per-pixel floating-point operations
+- Edge/span interpolation and the Z-test are optimized for the 65C816; span rendering performs depth testing, Z-buffer updates and direct SHGR pixel writes without calling `drawPixel()` once per visible pixel
+- Prepared vertices/faces, reciprocal-depth quantization, and scanline/offscreen edge helpers are shared where their contracts match
+- Face fill and border colors follow the same user settings as the painter renderer (default/manual colors, orientation shading and random colors)
+- Back-face culling is honored; when culling is disabled, the renderer uses the corresponding biased path to reduce coplanar Z-fighting
+- **Memory**: 640 bytes describes only the depth line; prepared faces, vertices, edges, and other scratch buffers require additional storage. Performance depends on the model and target machine
 
-Les paquets assembleur et plusieurs buffers C sont partagés : le moteur suppose un fonctionnement synchrone, non réentrant. Les conventions de registres, de banques et de page directe sont documentées dans les noyaux.
+#### Full-Screen Z-Buffer Mode (Key: `U`, or `Open-Apple + U`)
+- Alternative renderer, also independent of painter face ordering, using a persistent **320x200 16-bit depth buffer** for the complete frame
+- Depth uses the optimized 16-bit reciprocal-depth encoding (smaller stored value = closer, `0xFFFF` = empty/infinitely far), with the quantization scale adapted to the current frame
+- The full-screen depth buffer is cleared once per frame and retained for all scanlines
+- Span rendering is optimized for the 65C816 and performs the per-pixel depth test/update together with direct pixel output
+- Back-face culling selects the fast or biased rendering path as appropriate
+- **`U`**: clears the offscreen framebuffer, calls `renderModelFullscreenZBuffer_offscreen(model)`, then copies the completed image to SHGR with `Offscreen_FlushToScreen()`
+- **`Open-Apple + U`**: calls `renderModelFullscreenZBuffer(model)` and renders directly to the SHGR screen instead of using the offscreen framebuffer
+- **Memory**: the full depth buffer requires 128,000 bytes; offscreen output adds a 32,000-byte pixel buffer, in addition to preparation and scratch storage. Rendering speed must be measured on the target machine
+- All three renderers use `ZBuffer_SpanRun` in `zbuffer_common.c` for the depth test and packed-pixel output. Preparation, storage, edge handling, and output destination still differ; equal-depth fragments do not replace the existing pixel
 
-## OBJ et limites
+### Mathematical Implementation
 
-Le lecteur traite les lignes commençant par `v ` et `f `. Il échange y et z à l’import. Il retient les indices positifs des faces et saute les suffixes `/vt/vn`, sans interpréter textures, matériaux, normales ou indices relatifs négatifs.
+**Fixed-Point Arithmetic:**
+```c
+#define FIXED_SHIFT 16
+#define FIXED_SCALE (1L << FIXED_SHIFT)  // 65536
+typedef long Fixed32;    // 16.16 format
+typedef int64_t Fixed64; // wider intermediate; scaling depends on the operation
+```
 
-Les maxima déclarés sont 6000 sommets, 6000 faces, seize indices par face et des lignes de 256 octets. Ils ne constituent pas une garantie conjointe : le buffer initial d’indices est réservé pour `MAX_FACES*5` éléments, et sa capacité n’est pas contrôlée à chaque écriture. La borne `readVertices_last_count` provient du compteur antérieur à l’import, pas toujours du nombre effectivement lu.
+**3D Transformations:**
+- Rotation matrices use 360-entry sine/cosine tables with 1° precision
+- Imported coordinates are centered before rendering; camera rotations and distance produce observer coordinates `(xo, yo, zo)`. Screen rotation provides the third view angle
+- Perspective projection: `x2d = 160 + (xo * scale / zo)`, `y2d = 100 - (yo * scale / zo)`
 
-Il n’existe pas de clipping 3D général au plan proche. Les règles à profondeur nulle diffèrent entre transformation, métriques et zoom. Les formats fixes et différences 16 bits imposent aussi des bornes numériques.
+**Plane Equations:**
+For each face, compute plane coefficients (a, b, c, d) where:
+- `ax + by + cz + d = 0`
+- `calculateFaceDepths` computes observer-space normals using **Newell's method** over the complete contour. This supports concave planar faces better than a cross product of the first three vertices; degenerate or non-planar contours still require care.
+- `compute_face_plane` separately computes an object-space plane from the first three vertices, with explicit raw-fixed or object-unit coordinate modes. These coefficients do not have interchangeable scales.
+- `geometric_face_relation` uses a distance-adapted tolerance; other overlap and ray tests retain their own numeric contracts.
+- Used for sidedness tests in painter algorithm
 
-Certains chemins conservent des réserves non contrôlées, des états statiques à cycles de vie distincts. La révision documentaire les décrit sans les corriger ; voir le bilan avant rationalisation.
+### Front Faces and Back Faces
 
-## Compilation et déploiement
+Face orientation is determined in observer space, after the model has been transformed relative to the camera.
+- A face is considered **front-facing** when its plane equation constant `d` is positive in observer space.
+- A face is considered **back-facing** when `d <= 0`.
+- The sign of `d` depends on the face normal direction relative to the camera, not just the original OBJ winding order.
+- Reversing the vertex order of a face flips its normal and therefore changes whether it is classified as front or back.
 
-La chaîne locale est **ORCA/C via Golden Gate (`iix`)**, avec les bibliothèques Apple IIgs nécessaires à QuickDraw et GS/OS. Golden Gate doit être installé conformément à la licence détenue ; le dépôt ne fournit pas de remplacement de cette chaîne.
+In the application, the `showFace` inspector (command `V`) reports this directly using `faces->plane_d[target_face]`:
+- `plane_d > 0` => `FRONT`
+- `plane_d <= 0` => `BACK`
 
-```text
-iix compile OBJExplorer.cc
+### Back-Face Culling
+
+Observer-space culling eliminates faces oriented away from the viewer:
+- Test: `d <= 0` (where d is the plane equation constant in observer space)
+- Visibility flags suppress back faces during rendering; participation in sorting depends on the selected algorithm
+- Toggle at runtime with `B` key
+
+### Performance Optimizations
+
+1. **Preprocessor Directives**: #pragma optimize 1
+
+2. **Precomputed Tables**: Sine/cosine tables avoid runtime trigonometric calculations
+
+3. **Buffer Reuse**: Persistent polygon handles and memory buffers reduce allocations
+
+4. **Shared Kernels and Caches**: Candidate filtering, cached pair/overlap results, fixed-point assembly helpers, and a common Z-buffer span kernel avoid repeated work
+
+## User Guide
+
+### Getting Started
+
+1. **Launch Application**: Run `3D Explorer` from your Apple IIGS
+2. **Enter Filename**: Type the OBJ filename when prompted (or press ENTER to exit)
+3. **Model Loads**: The application parses vertices and faces, applies auto-fit if available
+4. **Intersection Check**: Asks whether to perform an intersection check. Answering yes runs a validation pass that check 3D intersections and attempt limited in-memory splitting before rendering. This experimental pass does not solve every intersection and is separate from projected-overlap tests used by sorting and inspection.
+5. **Set Camera Parameters**: Confirm or modify observer settings:
+   - **Horizontal Angle**: Rotation around vertical axis in degrees (ENTER for default 30°)
+   - **Vertical Angle**: Rotation around horizontal axis in degrees (ENTER for default 20°)
+   - **Screen Rotation**: Rotation around screen Z-axis in degrees (ENTER for default 0°)
+   - **Distance**: Camera distance from model origin (ENTER accepts default/auto-fit value)
+6. **View Model**: The 3D model renders with your camera configuration
+
+![Model Selection](Screenshots/model_loading.png)
+![Model Selection](Screenshots/model_loading2.png)
+
+### Keyboard Controls Reference
+
+#### Camera Movement
+| Key | Action | Description |
+|-----|--------|-------------|
+| `A` / `Z` | Distance | Move camera closer/farther by 10%; with Open-Apple, change distance by 50% |
+| `Left` / `Right` | Horizontal Rotation | Rotate camera 10 degrees around vertical axis (1 degree with Open-Apple key) |
+| `Up` / `Down` | Vertical Rotation | Rotate camera 10 degrees around horizontal axis (1 degree with Open-Apple key) |
+| `W` / `X` | Screen Rotation | Rotate view 10 degrees around screen Z-axis (1 degree with Open-Apple key) |
+| `+` / `-` | Projection Scale | Increase/decrease perspective scaling (±10%) |
+| `K` | Edit Parameters | Manually enter camera distance and angles |
+
+#### View Controls
+| Key | Action | Description |
+|-----|--------|-------------|
+| `E` / `R` | Pan Left/Right | 2D screen offset by 10 pixels; 1 pixel with Open-Apple |
+| `T` / `Y` | Pan Up/Down | 2D screen offset by 10 pixels; 1 pixel with Open-Apple |
+| `0` | Reset Pan | Return to center position (0, 0) |
+| `C` | Toggle Colors | Show/hide color palette |
+| `J` | Toggle Jitter | Toggle stylized rendering that applies a random per-vertex 2D offset (0..10 px) |
+| `P` | Wireframe Mode | Toggle between filled and frame-only polygons |
+| `B` | Back-Face Culling | Enable/disable observer-space culling |
+| `G` | Cycle Palette | Cycle through the 16 available SHGR color palettes |
+| `!` | Orientation Shading | Toggle orientation-based flat shading on/off |
+
+
+#### Rendering Modes
+| Key | Mode          | Algorithm/Description |
+|-----|---------------|----------------------|
+| `1` | FAST          | Simple Z-mean sorting without geometric correction |
+| `2` | BUBBLE SORT   | Adjacent-pair correction through bubble-sort passes |
+| `3` | NEWELL SANCHA | Candidate-filtered geometric ordering with stable insertions |
+| `4` | GEO           | Cached geometric neighbor corrections with overlap/ray fallback |
+| `5` | GEO V3        | Shared geometric exchange engine, without face splitting |
+| `6` | CORRECT       | Advanced ordering correction (homebrew implementation) |
+| `7` | CORRECT V2    | Shared CORRECT engine with additional BACK/cross-group correction |
+| `O` | SCANLINE Z-BUFFER | Optimized 16-bit Z-buffer renderer using a single 320-pixel depth line |
+| `U` | FULLSCREEN Z-BUFFER | Optimized full-screen Z-buffer rendered through the offscreen framebuffer, then copied to SHGR |
+| `Open-Apple + U` | FULLSCREEN Z-BUFFER (ONSCREEN) | Optimized full-screen Z-buffer rendered directly to SHGR |
+
+#### Color Management
+| Key | Action | Description |
+|-----|--------|-------------|
+| `8` | Random Colors (quick) | Enable random fill and regenerate random color arrays; preserve the frame-color selection |
+| `>` | Choose Fill Color | Opens the interactive color chooser to select the interior color (0-15) or random mode |
+| `<` | Choose Frame Color | Opens the interactive color chooser to select the outline color (0-15), random mode, or "same as fill" (no separate border) |
+| `9` | Reset Colors | Restore default colors (fill=light gray/14, frame=red/7), reset palette to 0, and disable orientation shading |
+
+**Interactive Color Chooser (`>` / `<` keys):**
+
+Pressing `>` or `<` opens an on-screen color picker over a black background:
+- Displays the 16 colors of the current SHGR palette as numbered squares (0-15), plus a "Random" square and, for the frame chooser only, a "Same as fill" square.
+- `Up` / `Down` arrows cycle through the 16 available color palettes; the picker updates instantly to show the new palette's colors.
+- `Left` / `Right` arrows move the selection between color squares (highlighted with a white border).
+- Any other key confirms the current selection and closes the picker.
+
+
+![Color Selection](Screenshots/fill.png)
+![Color Selection](Screenshots/frame.png)
+![Random Colors](Screenshots/random_colors.png)
+
+#### Diagnostic Tools
+| Key | Action | Description |
+|-----|--------|-------------|
+| `V` | Show Face | Display single face (arrows to navigate); `N` toggles normal display; `Space` shows detailed textual info (ID, sorted position, orientation, hidden status, vertices, transformed 3D and 2D coords, plane equation), from which `F` saves to `Face<ID>.txt`, `V` reverses vertex order, `H`/`R`/`A` hide/restore/restore-all faces; any other key exits |
+| `D` | Inspect Before | Analyze faces before selected face in sorted order (can apply moves with `A`/`O` during preview) |
+| `S` | Inspect After | Analyze faces after selected face in sorted order (can apply moves with `A`/`O` during preview) |
+| `Q` | Inspect Face Pair | Interactive face-pair inspector for ordering anomalies |
+| `;` | Repair Face Order | Review and accept/skip exchanges proposed by the GEO V3 core |
+| `(` | Select Overlap Method | Choose Simple, V1, V2 original, V2Max, Fixed64, Raster, or Raster ×10 |
+| `/` | Benchmark Overlap | Compare the six non-Simple overlap methods |
+| `I` | Toggle Inconclusive | Show/hide inconclusive face pairs with frames |
+| `L` | Face ID Labels | Display face numbers centered on each polygon |
+| `F` | Export Debug Data | Dump `Faces3D.csv`, `Faces2D.txt`, and `FacesOrder.txt` |
+
+![Random Colors](Screenshots/model_faceID.png)
+
+
+### Face Pair Inspector (`Q` key)
+
+The `Q` key launches a dedicated interactive face-pair inspector for exploring ordering diagnostics.
+
+- Prompts separately for two face IDs; displays the model in wireframe with the first face in green and the second in orange.
+- Compares bounds, shared geometric face relations, and the selected projected-overlap method. Ray diagnostics use bounding-box, Sutherland-Hodgman (SH), and QuickDraw overlap sample points, including a ×10 diagnostic pass. SH denotes polygon clipping, not the SHGR screen mode.
+- Arrow keys navigate between pairs; `Space` opens the detailed textual results and `ESC` returns from the graphical inspector.
+- In the detailed screen, `R` moves the currently earlier face later in the draw order; `E` moves the currently later face earlier. These are stable moves, not an automatic proof of geometric correctness. `F` exports comparison results.
+- Temporary display and culling settings are restored when leaving the inspector.
+
+### Face Order Repair (`;` key)
+
+The `;` key runs `repair_geov3`. It shares the GEO V3 ordering engine and standard geometric helpers, while preserving the current face order as its starting point: it does not reset to canonical IDs or rerun the initial maximum-depth sort.
+
+- Only pairs accepted by the configured projected polygon-overlap test are proposed, including in automatic mode. Overlapping bounding boxes alone are insufficient.
+- Each proposal clears the screen and redraws the complete wireframe model, highlighting the affected faces in green and orange.
+- The prompt states the intended draw-order change: **`Draw face 13 in front of face 18?`** The operation exchanges the two positions; it does not reverse vertex winding or modify geometry.
+- `N` skips the current proposal. `ESC` stops and retains previously accepted changes. `Return` accepts the current proposal and continues automatically. Any other key accepts only the current proposal.
+- The final summary reports proposed, applied, and skipped exchanges. View state is restored on exit.
+- Like GEO V3, this is a bounded correction heuristic; intersecting faces and cyclic visibility may remain unresolved. The old centroid-based repairs are archived in disabled code in `old/chutier.c` and are no longer active commands.
+
+![Inspection Mode](Screenshots/inspection_mode.png)
+![Inspection Mode](Screenshots/inspection_mode2.png)
+![Inspection Mode](Screenshots/inspection_mode3.png)
+
+#### Navigation
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Space` | Model Info | Display vertices, faces, camera params, performance |
+| `N` | New Model | Load different OBJ file (resets to FAST mode) |
+| `H` | Help | Show paginated keyboard reference |
+| `*` | Save Screenshot | Save the current SHGR screen to disk as a native Apple IIGS Super Hi-Res picture (see "Screenshot Export" below) |
+| `ESC` | Quit | Exit application |
+
+### Screenshot Export (`*` key)
+
+Saves the current SHGR display to disk as an uncompressed native picture file, readable by GS/OS paint/viewer software (verified with CiderPress II):
+
+- **Filename**: auto-incrementing `screenNNN.PIC` (e.g. `screen000.PIC`, `screen001.PIC`, ...) — the program scans the current directory and picks the first unused index, up to `screen999.PIC`. Existing readable files are skipped; no screenshot is saved if all 1,000 names are occupied.
+- **Format**: raw (uncompressed) Super Hi-Res picture — 32000 bytes of pixel data, 256 bytes of Scan Control Bytes (200 real entries + 56 reserved padding bytes), and 512 bytes of color table data (16 palettes × 16 colors), matching the documented Apple IIGS SHGR memory layout exactly.
+- **ProDOS file type**: `$C1`, auxtype `$0000` ("Apple IIGS Super Hi-Res Graphic Screen Image" — the plain format matching this project's 16-shared-palettes-plus-per-scanline-SCB architecture, not the different $0002 "3200 colors" per-scanline-palette format).
+- `saveSHGRAsRawPic` copies the 32,768-byte screen region byte by byte through the target memory-model pointer and writes it with `fputc`, then assigns the ProDOS file metadata.
+- Works after any renderer — painter, scanline Z-buffer, full-screen offscreen Z-buffer after its flush, or direct onscreen full-screen Z-buffer — since it simply captures whatever is currently in SHGR video memory.
+
+### Workflow Example
+
+**Typical Debugging Session:**
+
+1. **Load Model** with `N` key
+2. **Position Camera** using arrow keys and `A`/`Z`
+3. **Customize Colors** (optional):
+   - Press `8` for random colors (quick)
+   - Press `>` to choose a specific fill color
+   - Press `<` to choose a specific frame color
+   - Press `9` to reset to defaults
+4. **Select Rendering Mode** (`1`-`7`) based on geometry complexity.
+5. **Enable Inspection** with `I` to see inconclusive pairs
+6. **Investigate Artifacts**:
+   - Press `V` to view individual faces
+   - Use `D` to inspect faces before problematic face (in preview press `A` to consider all candidates or `O` to keep overlapping candidates)
+   - Use `S` to inspect faces after (in preview press `A` to consider all candidates or `O` to keep overlapping candidates)
+7. **Adjust View** with `E`/`R`/`T`/`Y`/`+`/`-` for precise framing
+8. **Export Data** with `F` for external analysis
+
+### Face Inspection Mode
+
+When using `D` (Inspect Before) or `S` (Inspect After):
+
+1. **Enter Face ID**: Type the face number to inspect
+2. **Orange/Pink Faces**: System highlights potentially misplaced faces
+3. **Interactive Moves**:
+   - Press `A`: Use all highlighted candidate faces to choose the selected face's new position
+   - Press `O`: Restrict candidates to faces with **projected overlaps**
+   - Press any other key at the move prompt: Cancel without changes
+
+![Face Navigation](Screenshots/face_navigation.png)
+
+Both directions share `inspect_faces_order`: `D` moves the selected face before the earliest retained candidate; `S` moves it after the latest retained candidate. The highlighted faces are not individually relocated. Geometric explanations use the same adaptive face-relation tests as the decisions.
+
+### Single Face Viewer (`V` key)
+
+- **Left/Right Arrows**: Navigate by face ID (decrement/increment)
+- **Up/Down Arrows**: Navigate through sorted face array
+- **N**: Toggle display of the selected face's normal (drawn as a fixed-length screen-space segment from the face centroid; works even when the face is hidden, using its saved vertex count)
+- **Space**: Show detailed textual info about the current face:
+  - ID and position in the sorted list
+  - Orientation (`FRONT`/`BACK`) and hidden status (`HIDDEN`/`NOT HIDDEN`)
+  - Vertex count and per-vertex data: index, model-space coordinates (x,y,z), observer-space coordinates (xo,yo,zo), and projected 2D coordinates (x2d,y2d) — shown even when the face is hidden, using its saved vertex count
+  - Plane equation coefficients `(a, b, c, d)`
+  - From this screen: `F` saves the details to `Face<ID>.txt`, `V` reverses the face's vertex order, `H` hides the face, `R` restores it, `A` restores every hidden face in the model, any other key returns to the graphical overlay
+- **Any Other Key**: Exit viewer and return to full model
+
+**Hide/Restore:** hiding a face (`H`) sets its vertex count to zero without discarding its geometry (the original count is saved internally), so the face stops being rendered and is treated as hidden by geometry-dependent operations, while remaining selectable and shown in gray in the viewer. `R` restores the currently selected face and recomputes its plane/visibility (the model may have rotated while hidden). `A` restores every hidden face in the model in one pass.
+
+Useful for examining individual face geometry and understanding the sorting order.
+
+---
+
+### Summary: Keys → C Functions Called 🔧
+
+Below is a summary table of the most useful keys and the **C functions** they invoke (directly or via flags/modes). This helps map interactive behavior to code entry points when debugging:
+
+| Key | Action (short) | C functions involved (entry point) |
+|-----|-----------------|-----------------------------------------|
+| `1`..`7` | Change painter mode | `painter_newell_sancha_fast`, `painter_bubble_sort`, `painter_newell_sancha`, `painter_geoV2`, `painter_geoV3`, or shared `painter_correct` (variant flag 0/1) |
+| `O` | Optimized scanline Z-buffer render | `renderModelScanlineZBuffer` |
+| `U` | Full-screen Z-buffer via offscreen buffer | `Offscreen_Clear` → `renderModelFullscreenZBuffer_offscreen` → `Offscreen_FlushToScreen` |
+| `Open-Apple + U` | Full-screen Z-buffer directly onscreen | `renderModelFullscreenZBuffer` |
+| `>` | Choose fill color | `colorChooser(0, &palette, ...)` — sets `user_fill_color`; also triggers `generate_random_colors` if random is chosen |
+| `<` | Choose frame color | `colorChooser(1, &palette, ...)` — sets `user_frame_color`; also triggers `generate_random_colors` if random is chosen |
+| `8` | Random fill colors | sets `user_fill_color` to random mode + `generate_random_colors`; keeps frame selection |
+| `9` | Reset colors, palette, shading | resets `user_fill_color`/`user_frame_color`, `palette`, `shaded_by_orientation` |
+| `G` | Cycle color palette | increments `palette` (mod 16) + `applyPalette` |
+| `!` | Toggle orientation shading | `shaded_by_orientation` toggle + `computeOrientationShading` |
+| `V` | Inspect a face | `showFace` — submenu `Space`: `V` (reverse vertex order), `H`/`R`/`A` (hide/restore/restoreAll), `F` (export) |
+| `*` | Save screen | `saveNextScreenshot` → `saveSHGRAsRawPic` ($C1/$0000 format, auto-incremented name `screenNNN.PIC`) |
+| `A` / `Z` | Adjust camera distance | modifies `params.distance` and reloads the render |
+| `E` / `R` / `T` / `Y` | 2D panning | modifies `pan_dx` / `pan_dy` and redraws |
+| `B` | Toggle back-face culling | `cull_back_faces` + reprocess model |
+| `P` | Wireframe mode | `framePolyOnly` + redraw / reprocess |
+| `C` | Color palette overlay | `colorpalette` toggle |
+| `J` | Render jitter | `jitter` toggle |
+| `K` | Edit angles/distance | `getObserverParams` |
+| `D` / `S` | Inspect faces before / after | `inspect_faces_order(model, &params, 0)` / `inspect_faces_order(model, &params, 1)` |
+| `Q` | Inspect face pair | `inspect_face_pair_ui` |
+| `;` | Interactive repair | `repair_geov3` → `geov3_run` with confirmation callback |
+| `(` / `/` | Select / benchmark overlap | Runtime overlap-method selection / benchmark |
+| `F` | Debug CSV export | `dumpFaceEquationsCSV` + `dumpFace2DCoordinates` + `dumpSortedFaceIndices` |
+| `N` | Load new model | `destroyModel3D` + model creation/loading; resets FAST mode and initial view settings |
+| `H` | Paged help | `show_help_pager` |
+| `ESC` | Exit | cleanup + exit |
+
+> Note: Some commands invoke multiple utilities (e.g., `F` writes `Faces3D.csv`, `Faces2D.txt`, and `FacesOrder.txt`). To investigate specific behavior, start by using the corresponding key in the interface, then consult the output files (`Faces3D.csv`, `Faces2D.txt`, `FacesOrder.txt`, `Face<ID>.txt`) to reproduce/automate tests.
+
+---
+
+## File Format
+
+3D Explorer reads simplified Wavefront OBJ files. This minimal example contains four vertices and two faces:
+
+```obj
+# Vertex definitions (x y z)
+v 0.0 0.0 0.0
+v 1.0 0.0 0.0
+v 1.0 1.0 0.0
+v 0.0 1.0 0.0
+
+# Face definitions (vertex indices, 1-based)
+f 1 2 3 4
+f 1 3 4
+```
+
+**Requirements:**
+- Only `v` (vertex) and `f` (face) lines are parsed
+- Vertex indices in faces are 1-based (OBJ standard)
+- Faces can be triangles, quads, or polygons up to `MAX_FACE_VERTICES` (currently 16); input and storage limits still apply
+- Comments (`#`) are ignored
+
+**Unsupported OBJ features:**
+- Texture coordinates (`vt`)
+- Normals (`vn`)
+- Materials (`mtllib`, `usemtl`)
+- Groups (`g`)
+
+
+
+## Building from Source
+
+**Requirements:**
+- Apple IIGS with ORCA/C 2.2.1 or later
+- Golden Gate development environment
+
+**Compilation:**
+```bash
+iix compile ObjExplorer.cc
 iix -DKeepType=S16 link OBJExplorer keep=OBJExplorer
 ```
 
-Ces commandes reprennent la compilation et le lien de `DEPLOY.py`. Le script gère aussi des ressources `.rez` facultatives, copie le programme avec Cadius dans deux images disque, nettoie les intermédiaires puis tente un transfert ADB vers Android. Ses chemins et répertoires ProDOS sont propres à la machine de développement et doivent être configurés avant déploiement.
+**Deployment:**
+`DEPLOY.py` automates compilation, linking, updating configured disk images, and optional Android transfer for KEGS. Its local paths, Cadius setup, image destinations, and ADB configuration must match your machine. Unlike the compile/link commands above, it modifies disk images and may deploy to a connected device:
+```bash
+python DEPLOY.py
+```
 
-Les voies de comparaison C/assembleur sont sélectionnables par `GEOV3_DISABLE_ASM_MUL`, `GEOV3_DISABLE_ASM_RELATION`, `GEOV3_DISABLE_ASM_SCAN` et `FACE_DEPTH_DISABLE_ASM`. `GEO_ORDER_PROFILE` active des compteurs. Définir ces options avant les inclusions concernées ; la présente révision n’en change aucune.
+## Implementation Notes
 
-## Avant de rationaliser
+### Memory Management
 
-Comparer les appelants, formats, signes, tolérances, règles de bord et cycles de vie des ressources avant de fusionner des fonctions. En particulier, les plans objet et observateur, les différents résultats « avant », les champs d’aire et les deux rendus plein écran ne sont pas interchangeables.
+- **Model Storage**: Current constants allow 6,000 vertices, 6,000 faces, and 16 vertices per face. Allocation and index-buffer limits also apply; these constants do not guarantee that every combination fits.
+- **Handle-Based Graphics**: QuickDraw polygons and inspection tools reuse handles and saved screen/view state.
+- **Z-Buffer Scratch Storage**: Common reservation/free helpers manage prepared vertices and faces; renderer-specific buffers retain their own storage requirements and allocation checks.
+- **Memory Model**: `#pragma memorymodel 1` selects the target's large memory model with far pointers. Available RAM remains a practical limit.
 
-Les graphes décrivent les appels syntaxiques présents, sans évaluer les branches conditionnelles comme ORCA/C. Ils distinguent appels C directs, appels assembleur et références indirectes connues du comparateur `qsort` et de la confirmation des échanges du repair GEO V3.
+### Code Organization
 
-Les anciennes réparations complète et rapide sont archivées à la fin de `old/chutier.c`. La commande `.` reste retirée. La commande `;` lance désormais le repair GEO V3 : il part de la permutation courante, sans réinitialisation ni tri préalable. Les tests et échanges proviennent du même moteur que le classement GEO V3 accessible par `5`.
+- **Entry Point**: `ObjExplorer.cc` owns startup, keyboard dispatch, mode selection, and the main render loop. It includes `engine.c`, which includes the supporting modules; they are built as one translation unit.
+- **Geometry and Ordering**: `engine.c`, `declare.c`, `ordering_cache.c`, `dony.c`, and `overlap_raster.c` hold structures, transforms, sorting, relation tests, and overlap implementations. `geo_relation_asm.c`, `face_depth_asm.c`, and `dony_scan_asm.c` supply specialized 65C816 kernels.
+- **Rendering**: `color.c` manages palettes and color selection. `zbuffer_common.c` shares preparation and span rendering across `zbuffer_scanline.c`, `zbuffer_fullscreen.c`, and `zbuffer_fullscreen_offscreen.c`. `screen_save_restore.c` shares screen/view support.
+- **Inspection**: S/D, Q, V, repair, and face labels share inspection-state save/restore helpers. The old pair-debug mode has been removed; normal inspection and file exports remain.
+- **Segments**: Named segments such as `transform`, `ordering`, `rendering`, `inspection`, and `ZBUF` organize target memory banks. `#pragma optimize 1` enables compiler optimization.
+- **Companion Documentation**: [dictionary.md](dictionary.md), [call tree](arbre_appels.html), and [foldable call tree](arbre_appels_fold.html) describe the current functions and call relationships in French.
 
-Avant chaque échange, les 200 lignes de pixels sont effacées, puis le modèle est redessiné en fil de fer, avec la face P en vert clair et Q en orange. Deux lignes courtes proposent d’afficher P devant Q (« Draw face P in front of face Q »), puis les commandes. Cela correspond à dessiner Q avant P dans la permutation arrière-vers-avant. Les paires sans chevauchement selon la méthode configurée sont ignorées avant toute proposition, y compris en mode automatique. `N` ignore la proposition, Échap arrête en conservant les échanges déjà acceptés, Retour active l’application automatique des suivantes ; une autre touche applique l’échange courant. Le bilan compte propositions, échanges appliqués et refus. Les limites anti-cycle de GEO V3 restent actives : une proposition n’est pas une preuve exhaustive de correction géométrique. Les commandes S/D et Q restent disponibles pour l’examen manuel.
+### Coordinate Systems
 
-Les vues S/D, Q, V, le repair et l’affichage des identifiants partagent la sauvegarde de visibilité, du mode filaire et du culling. Chaque outil conserve son cycle QuickDraw. Les actions volontaires de V sur les faces sont intégrées à la sauvegarde pour rester effectives à la fermeture. Un échec de sauvegarde annule la vue proprement.
+1. **Model Space**: Imported OBJ coordinates with Y/Z exchanged and bounding-box centering applied
+2. **Observer Space**: After camera transformation (xo, yo, zo)
+3. **Screen Space**: 2D projected coordinates (x2d, y2d) + pan offsets
 
-Les déplacements stables d’une face réutilisent les primitives communes : insertion par zmax, insertion Newell-Sancha et corrections du snapshot CORRECT V2. La variante avec positions inverses maintient aussi cette table. Les échanges de deux faces de GEO V3 et les échanges de voisins restent distincts des insertions stables.
+**Screen Origin**: (160, 100) represents center of 320×200 display
+
+## Known Limitations and requirements 
+
+- **Polygon Splitting**: Basic in‑memory splitting on load (faces cut by intersecting planes) now implemented to eliminate simple interpenetrations
+- **Transparency**: Not supported; all polygons are opaque
+- **Lighting**: Minimal shading model (use ! key to activate shading, in conjonction with palette # > 0)
+- **Large Models**: Runtime depends on overlap density, face complexity, correction count, and hardware; there is no universal face-count threshold for acceptable speed.
+- **Memory Constraints**: Model arrays, caches, and renderer scratch buffers must fit available Apple IIGS RAM. Full-screen depth alone consumes 128,000 bytes; offscreen pixels add 32,000 bytes. An accelerator or emulator is useful for demanding models.
+- **Clipping and Geometry**: General near-plane clipping is not implemented. Degenerate/non-planar faces and intersections can defeat whole-face ordering; Z-buffer rendering resolves depth per pixel but still depends on valid projected geometry.
+
+## Future Enhancements
+
+- Improve and validate experimental polygon splitting, including degenerate geometry
+- Profile shared ordering and rendering kernels on real Apple IIGS hardware
+- Support textured polygons
+- Extend the lighting model
+- Optimize screenshot copying while preserving far-address correctness and the native file layout
+- Improve clipping and robustness around the observer/near plane
+- Expand regression models for cyclic overlaps, coplanar faces, concave polygons, and inspector/automatic-sort consistency
+
+## Credits
+
+**Author**: Bruno  
+**Platform**: Apple IIGS  
+**Development Tools**: ORCA/C 2.2.1, Golden Gate, iix
+
+**Algorithm References**:
+- "Calcul des parties cachées", Robert DONY, Masson, 1986*
+- Newell, M.E., Newell, R.G., and Sancha, T.L. (1972). "A solution to the hidden surface problem"
+- Painter's algorithm theory and implementation techniques
+
+## License
+
+This project is licensed under the **Creative Commons Attribution 4.0 International License (CC BY 4.0)**.
+
+You are free to:
+- **Share**: Copy and redistribute the material in any medium or format
+- **Adapt**: Remix, transform, and build upon the material for any purpose, even commercially
+
+Under the following terms:
+- **Attribution**: You must give appropriate credit to the original author and a link to this repository.
+
+### Disclaimer
+
+This software is provided "as is", without warranty of any kind, express or implied. The author assumes no responsibility for any damages or issues arising from the use of this software. Use at your own risk.
+
+---
+
+For questions, bug reports, or contributions, please visit the project repository.

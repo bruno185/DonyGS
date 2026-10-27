@@ -358,20 +358,8 @@ void ZBuffer_SetScaleForFrame(float max_inv_z)
  */
 UWORD16 ZBuffer_QuantizeInvZ(float inv_z)
 {
-    float   scaled;
-    long    q;
-
-    /* Borner, appliquer l'échelle courante puis inverser le code pour le
-     * test Z strict.
-     */
-    if (inv_z < 0.0f) inv_z = 0.0f;
-
-    scaled = inv_z * zbuffer_scale;
-    q = (long)(scaled + 0.5f);
-    if (q < 0)      q = 0;
-    if (q > 0xFFFF) q = 0xFFFF;
-
-    return (UWORD16)(0xFFFFUL - (ULONG32)q);
+    /* Conserver l’échelle publique du plein écran ; partager les arrondis. */
+    return ZBuffer_QuantizeAtScale(inv_z, zbuffer_scale);
 }
 
 #define ZB_Z_BIAS    0.0005f
@@ -395,19 +383,10 @@ typedef struct {
     UWORD16 z;
 } ZbPlane;
 
-static float* zbfs_inv_z = NULL;
-static UWORD16* zbfs_vzq = NULL;
-static UWORD16* zbfs_vzq_b = NULL;
-static int zbfs_vert_capacity = 0;
+static ZBufferVertexWork zbfs_vertices;
 
-static int* zbfs_face_start = NULL;
-static int* zbfs_face_sorted = NULL;
-static int* zbfs_face_active = NULL;
-static unsigned char* zbfs_face_fill = NULL;
-static unsigned char* zbfs_face_frame = NULL;
-static unsigned char* zbfs_face_nudge = NULL;
+static ZBufferFaceWork zbfs_faces;
 static ZbPlane *zbfs_face_plane = NULL;
-static int zbfs_face_capacity = 0;
 
 static ZbEdge* zbfs_edge_buf = NULL;
 static int zbfs_edge_capacity = 0;
@@ -434,18 +413,10 @@ static int zbfs_edge_capacity = 0;
  */
 static void ZBFS_FreeFaces(void)
 {
-    /* Libérer chaque buffer détenu puis invalider les pointeurs et la capacité. */
-    if (zbfs_face_start) free(zbfs_face_start);
-    if (zbfs_face_sorted) free(zbfs_face_sorted);
-    if (zbfs_face_active) free(zbfs_face_active);
-    if (zbfs_face_fill) free(zbfs_face_fill);
-    if (zbfs_face_frame) free(zbfs_face_frame);
-    if (zbfs_face_nudge) free(zbfs_face_nudge);
-    if (zbfs_face_plane) free(zbfs_face_plane);
-    zbfs_face_start = zbfs_face_sorted = zbfs_face_active = NULL;
-    zbfs_face_fill = zbfs_face_frame = zbfs_face_nudge = NULL;
+    /* Libérer les tables communes, puis les plans propres au rendu direct. */
+    ZBuffer_FreeFaces(&zbfs_faces);
+    free(zbfs_face_plane);
     zbfs_face_plane = NULL;
-    zbfs_face_capacity = 0;
 }
 
 /*
@@ -470,13 +441,8 @@ static void ZBFS_FreeFaces(void)
  */
 static void ZBFS_FreeVertices(void)
 {
-    /* Libérer chaque buffer détenu puis invalider les pointeurs et la capacité. */
-    if (zbfs_inv_z) free(zbfs_inv_z);
-    if (zbfs_vzq) free(zbfs_vzq);
-    if (zbfs_vzq_b) free(zbfs_vzq_b);
-    zbfs_inv_z = NULL;
-    zbfs_vzq = zbfs_vzq_b = NULL;
-    zbfs_vert_capacity = 0;
+    /* La réserve commune neutralise pointeurs et capacité après libération. */
+    ZBuffer_FreeVertices(&zbfs_vertices);
 }
 
 /*
@@ -538,32 +504,7 @@ static void ZBFS_FreeScratch(void)
     ZBFS_FreeEdges();
 }
 
-/*
- * ----------------------------------------------------------------------------
- *  ZBFS_SizeFits
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Vérifier qu'un tableau de count éléments est représentable par size_t.
- *
- *  Paramètres :
- *    [entrée] count positif attendu et element_size non nul.
- *
- *  Retour :
- *    Booléen.
- *
- *  Fonctionnement :
- *    La division du maximum size_t évite de déborder lors du produit de
- *    taille.
- *
- * ----------------------------------------------------------------------------
- */
-static int ZBFS_SizeFits(int count, size_t element_size)
-{
-    /* Vérifier la borne avant toute multiplication destinée à malloc. */
-    return count > 0 && (unsigned long)count <=
-           (unsigned long)((size_t)-1) / (unsigned long)element_size;
-}
+
 
 /*
  * ----------------------------------------------------------------------------
@@ -959,7 +900,7 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
     FaceArrays3D* faces = &model->faces;
     int vcount = vtx->vertex_count;
     int fcount = faces->face_count;
-    int y, f, i, k, b, si, ai, keep, active_count;
+    int y, f, i, k, ai, keep, active_count;
     int total_edges, end;
     int clip_x_min, clip_x_max, y_lo, y_hi;
     float frame_max_inv_z;
@@ -969,10 +910,10 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
     static int bucket[ZBUF_HEIGHT + 1];
     static int bucket_cur[ZBUF_HEIGHT + 1];
 
-    if (!ZBFS_SizeFits(vcount, sizeof(float)) ||
-        !ZBFS_SizeFits(vcount, sizeof(UWORD16)) ||
-        !ZBFS_SizeFits(fcount, sizeof(int)) ||
-        !ZBFS_SizeFits(fcount, sizeof(ZbPlane))) return;
+    if (!ZBuffer_SizeFits(vcount, sizeof(float)) ||
+        !ZBuffer_SizeFits(vcount, sizeof(UWORD16)) ||
+        !ZBuffer_SizeFits(fcount, sizeof(int)) ||
+        !ZBuffer_SizeFits(fcount, sizeof(ZbPlane))) return;
     total_edges = 0;
     for (f = 0; f < fcount; f++) {
         long edge_end = (long)faces->vertex_indices_ptr[f] +
@@ -982,34 +923,16 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         end = (int)edge_end;
         if (end > total_edges) total_edges = end;
     }
-    if (!ZBFS_SizeFits(total_edges, sizeof(ZbEdge))) return;
+    if (!ZBuffer_SizeFits(total_edges, sizeof(ZbEdge))) return;
     /* Réserver les tables de faces et les plans Z du rendu direct. */
-    if (zbfs_face_capacity < fcount) {
+    if (zbfs_faces.capacity < fcount) {
         ZBFS_FreeFaces();
-        zbfs_face_start = (int*)malloc((size_t)fcount * sizeof(int));
-        zbfs_face_sorted = (int*)malloc((size_t)fcount * sizeof(int));
-        zbfs_face_active = (int*)malloc((size_t)fcount * sizeof(int));
-        zbfs_face_fill = (unsigned char*)malloc((size_t)fcount);
-        zbfs_face_frame = (unsigned char*)malloc((size_t)fcount);
-        zbfs_face_nudge = (unsigned char*)malloc((size_t)fcount);
+        if (!ZBuffer_ReserveFaces(&zbfs_faces, fcount)) return;
         zbfs_face_plane = (ZbPlane*)malloc((size_t)fcount * sizeof(ZbPlane));
-        if (!zbfs_face_start || !zbfs_face_sorted || !zbfs_face_active ||
-            !zbfs_face_fill || !zbfs_face_frame || !zbfs_face_nudge || !zbfs_face_plane) {
-            ZBFS_FreeFaces(); return;
-        }
-        zbfs_face_capacity = fcount;
+        if (!zbfs_face_plane) { ZBFS_FreeFaces(); return; }
     }
     /* Agrandir les buffers de sommets du rendu direct. */
-    if (zbfs_vert_capacity < vcount) {
-        ZBFS_FreeVertices();
-        zbfs_inv_z = (float*)malloc((size_t)vcount * sizeof(float));
-        zbfs_vzq = (UWORD16*)malloc((size_t)vcount * sizeof(UWORD16));
-        zbfs_vzq_b = (UWORD16*)malloc((size_t)vcount * sizeof(UWORD16));
-        if (!zbfs_inv_z || !zbfs_vzq || !zbfs_vzq_b) {
-            ZBFS_FreeVertices(); return;
-        }
-        zbfs_vert_capacity = vcount;
-    }
+    if (!ZBuffer_ReserveVertices(&zbfs_vertices, vcount)) return;
     if (zbfs_edge_capacity < total_edges) {
         ZBFS_FreeEdges();
         zbfs_edge_buf = (ZbEdge*)malloc((size_t)total_edges * sizeof(ZbEdge));
@@ -1017,21 +940,13 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         zbfs_edge_capacity = total_edges;
     }
 
-    frame_max_inv_z = 0.0f;
-    /* Calculer les profondeurs inverses et les codes selon le format de
-     * cette version.
-     */
-    for (i = 0; i < vcount; i++) {
-        float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
-        zbfs_inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
-        if (zbfs_inv_z[i] > frame_max_inv_z) frame_max_inv_z = zbfs_inv_z[i];
-    }
+    frame_max_inv_z = ZBuffer_PrepareInvZ(vtx, vcount, zbfs_vertices.inv_z);
     ZBuffer_SetScaleForFrame(frame_max_inv_z);
 
     for (i = 0; i < vcount; i++) {
 
-        zbfs_vzq[i]   = ZBuffer_QuantizeInvZ(zbfs_inv_z[i]);
-        zbfs_vzq_b[i] = biased ? ZBuffer_QuantizeInvZ(zbfs_inv_z[i] + ZB_Z_BIAS) : zbfs_vzq[i];
+        zbfs_vertices.vzq[i]   = ZBuffer_QuantizeInvZ(zbfs_vertices.inv_z[i]);
+        zbfs_vertices.vzq_b[i] = biased ? ZBuffer_QuantizeInvZ(zbfs_vertices.inv_z[i] + ZB_Z_BIAS) : zbfs_vertices.vzq[i];
     }
 
     SetPenMode(0);
@@ -1050,32 +965,17 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
     /* Initialiser l'histogramme des premières lignes ; préparer visibilité,
      * couleurs et arêtes.
      */
-    for (b = 0; b <= ZBUF_HEIGHT; b++) bucket[b] = 0;
-
-    for (f = 0; f < fcount; f++) {
-        int n, offt, fmin, fmax, fill;
-        UWORD16* zsrc;
-
-        zbfs_face_start[f] = -1;
-        if (!faces->display_flag[f]) continue;
+    ZBuffer_PrepareFaces(faces, fcount, y_lo, y_hi, ZBUF_HEIGHT, biased,
+                         zbfs_faces.face_start, zbfs_faces.face_fill, zbfs_faces.face_frame,
+                         zbfs_faces.face_nudge, bucket);
+    for (f = 0; f < fcount; ++f) {
+        int n, offt;
+        UWORD16 *zsrc;
+        if (zbfs_faces.face_start[f] < 0) continue;
         n = faces->vertex_count[f];
-        if (n < 3) continue;
-        fmin = faces->miny[f];
-        fmax = faces->maxy[f];
-        if (fmax < y_lo || fmin > y_hi) continue;
-
-        b = ((fmin > y_lo) ? fmin : y_lo) - y_lo;
-        zbfs_face_start[f] = b;
-        bucket[b + 1]++;
-
-        fill = getFaceFillColor(f);
-        zbfs_face_fill[f]  = (unsigned char)fill;
-        zbfs_face_frame[f] = (unsigned char)getFaceFrameColor(f, fill);
-        zbfs_face_nudge[f] = (unsigned char)((biased && faces->plane_d[f] > 0) ? 2 : 0);
-
         offt = faces->vertex_indices_ptr[f];
-        zsrc = (biased && faces->plane_d[f] > 0) ? zbfs_vzq_b : zbfs_vzq;
-        ZBuffer_SetPlane(&zbfs_face_plane[f], vtx, faces, f, zsrc, zbfs_face_nudge[f]);
+        zsrc = (biased && faces->plane_d[f] > 0) ? zbfs_vertices.vzq_b : zbfs_vertices.vzq;
+        ZBuffer_SetPlane(&zbfs_face_plane[f], vtx, faces, f, zsrc, zbfs_faces.face_nudge[f]);
         ed = zbfs_edge_buf + offt;
 
         for (k = 0; k < n; k++, ed++) {
@@ -1113,12 +1013,8 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         }
     }
 
-    for (b = 0; b < ZBUF_HEIGHT; b++) bucket[b + 1] += bucket[b];
-    for (b = 0; b <= ZBUF_HEIGHT; b++) bucket_cur[b] = bucket[b];
-    for (f = 0; f < fcount; f++) {
-        b = zbfs_face_start[f];
-        if (b >= 0) zbfs_face_sorted[bucket_cur[b]++] = f;
-    }
+    ZBuffer_SortFaceStarts(fcount, ZBUF_HEIGHT, zbfs_faces.face_start,
+                           bucket, bucket_cur, zbfs_faces.face_sorted);
 
     screenClearTopLines(12);
 
@@ -1131,16 +1027,8 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         /* Insérer les faces commençant sur cette ligne en gardant l'ordre
          * d'identifiants.
          */
-        for (si = bucket[row]; si < bucket[row + 1]; si++) {
-            int nf = zbfs_face_sorted[si];
-            int pos = active_count;
-            while (pos > 0 && zbfs_face_active[pos - 1] > nf) {
-                zbfs_face_active[pos] = zbfs_face_active[pos - 1];
-                pos--;
-            }
-            zbfs_face_active[pos] = nf;
-            active_count++;
-        }
+        active_count = ZBuffer_ActivateFaces(row, bucket, zbfs_faces.face_sorted,
+                                             zbfs_faces.face_active, active_count);
 
         keep = 0;
         /* Écarter les faces terminées et extraire les intersections des
@@ -1150,9 +1038,9 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
             int n, offt, hit_count;
             int fillColor;
 
-            f = zbfs_face_active[ai];
+            f = zbfs_faces.face_active[ai];
             if (faces->maxy[f] < y) continue;
-            zbfs_face_active[keep++] = f;
+            zbfs_faces.face_active[keep++] = f;
 
             n = faces->vertex_count[f];
             offt = faces->vertex_indices_ptr[f];
@@ -1193,7 +1081,7 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
                 }
             }
 
-            fillColor  = zbfs_face_fill[f];
+            fillColor  = zbfs_faces.face_fill[f];
 
             {
                 int p;
@@ -1224,12 +1112,12 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
     for (f = 0; f < fcount; f++) {
         int n, offt, color, nudge;
         UWORD16 *zsrc;
-        if (zbfs_face_start[f] < 0) continue;
+        if (zbfs_faces.face_start[f] < 0) continue;
         n = faces->vertex_count[f];
         offt = faces->vertex_indices_ptr[f];
-        color = zbfs_face_frame[f];
-        nudge = zbfs_face_nudge[f];
-        zsrc = (biased && faces->plane_d[f] > 0) ? zbfs_vzq_b : zbfs_vzq;
+        color = zbfs_faces.face_frame[f];
+        nudge = zbfs_faces.face_nudge[f];
+        zsrc = (biased && faces->plane_d[f] > 0) ? zbfs_vertices.vzq_b : zbfs_vertices.vzq;
         for (k = 0; k < n; k++) {
             int k2, vid1, vid2;
             long sx0, sy0, sx1, sy1;

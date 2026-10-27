@@ -2835,7 +2835,7 @@ static int geometric_face_relation(Model3D* model, int f1, int f2)
      * la tolérance ne tranche pas.
      */
     prepared=ordering_fixed_plane(model,f1,epsilon);
-    result=0;
+    result = FACE_ORDER_UNDETERMINED;
     obs=prepared->observer;
     if (!obs) goto store_result;
 
@@ -2885,9 +2885,9 @@ static int geometric_face_relation(Model3D* model, int f1, int f2)
     }
 
     if (all_same)
-        result = -1;
+        result = FACE_ORDER_BEFORE;
     else if (all_opp)
-        result = 1;
+        result = FACE_ORDER_AFTER;
 
 /* Publier le résultat dans les caches de la paire orientée. */
 store_result:
@@ -4313,33 +4313,18 @@ static int move_element_remove_and_insert(int *arr, int n, int from, int insert_
  * ----------------------------------------------------------------------------
  */
 static int move_element_remove_and_insert_pos(int *arr, int n, int from, int insert_idx, int *pos_of_face) {
-    /* Valider et borner les positions avant de sauvegarder la valeur déplacée. */
-    if (from < 0 || from >= n) return 0;
-    if (insert_idx < 0) insert_idx = 0;
-    if (insert_idx > n-1) insert_idx = n-1;
-    if (from == insert_idx) return 0;
-    int val = arr[from];
-    /* Mettre à jour la position inverse de chaque élément déplacé, puis
-     * celle de la valeur réinsérée.
+    /* La primitive simple concentre validation, bornage et déplacement stable. */
+    int moved = move_element_remove_and_insert(arr, n, from, insert_idx);
+    if (!moved || !pos_of_face) return moved;
+    /* Retrouver la destination bornée puis mettre à jour seulement le segment
+     * déplacé, dans la permutation finale.
      */
-    if (insert_idx < from) {
-
-        for (int i = from; i > insert_idx; --i) {
-            arr[i] = arr[i-1];
-            if (pos_of_face) pos_of_face[arr[i]] = i;
-        }
-        arr[insert_idx] = val;
-        if (pos_of_face) pos_of_face[val] = insert_idx;
-    } else {
-
-        for (int i = from; i < insert_idx; ++i) {
-            arr[i] = arr[i+1];
-            if (pos_of_face) pos_of_face[arr[i]] = i;
-        }
-        arr[insert_idx] = val;
-        if (pos_of_face) pos_of_face[val] = insert_idx;
-    }
-    return 1;
+    if (insert_idx < 0) insert_idx = 0;
+    if (insert_idx > n - 1) insert_idx = n - 1;
+    int first = from < insert_idx ? from : insert_idx;
+    int last = from > insert_idx ? from : insert_idx;
+    for (int i = first; i <= last; ++i) pos_of_face[arr[i]] = i;
+    return moved;
 }
 
 /* Les relations de plans et les rayons ont des conventions de signe
@@ -4390,19 +4375,19 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
     /* Initialiser les résultats puis effectuer les rejets par profondeur et
      * bornes.
      */
-    for (k = 0; k < 7; ++k) out[k] = 0;
+    for (k = 0; k < 7; ++k) out[k] = FACE_ORDER_UNDETERMINED;
 
-    if (faces->z_max[f2] <= faces->z_min[f1]) out[0] = -1;
-    else if (faces->z_max[f1] <= faces->z_min[f2]) out[0] = 1;
+    if (faces->z_max[f2] <= faces->z_min[f1]) out[0] = FACE_ORDER_BEFORE;
+    else if (faces->z_max[f1] <= faces->z_min[f2]) out[0] = FACE_ORDER_AFTER;
 
     {
         int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], minx2 = faces->minx[f2], maxx2 = faces->maxx[f2];
-        if (maxx1 <= minx2 || maxx2 <= minx1) out[1] = -1;
+        if (maxx1 <= minx2 || maxx2 <= minx1) out[1] = FACE_ORDER_BEFORE;
     }
 
     {
         int miny1 = faces->miny[f1], maxy1 = faces->maxy[f1], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-        if (maxy1 <= miny2 || maxy2 <= miny1) out[2] = -1;
+        if (maxy1 <= miny2 || maxy2 <= miny1) out[2] = FACE_ORDER_BEFORE;
     }
 
     /* Réutiliser la tolérance adaptative, les caches et le chemin C/assembleur
@@ -4416,10 +4401,10 @@ static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7]) {
      * 4 et 6 testent le plan de f1 ; 5 et 7 testent celui de f2.
      * Ramener le sens inverse à la convention de la paire f1/f2.
      */
-    if (forward_relation == -1) out[3] = -1;
-    if (reverse_relation == 1) out[4] = -1;
-    if (forward_relation == 1) out[5] = 1;
-    if (reverse_relation == -1) out[6] = 1;
+    if (forward_relation == FACE_ORDER_BEFORE) out[3] = FACE_ORDER_BEFORE;
+    if (reverse_relation == FACE_ORDER_AFTER) out[4] = FACE_ORDER_BEFORE;
+    if (forward_relation == FACE_ORDER_AFTER) out[5] = FACE_ORDER_AFTER;
+    if (reverse_relation == FACE_ORDER_BEFORE) out[6] = FACE_ORDER_AFTER;
 }
 /*
  * ----------------------------------------------------------------------------
@@ -4514,10 +4499,10 @@ static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy) {
     /* Exiger les deux intersections puis comparer leurs paramètres sans
      * tolérance additionnelle.
      */
-    if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) return 0;
-    if (tf1 > tf2) return 1;
-    else if (tf1 < tf2) return -1;
-    else return 0;
+    if (!ray_cast_distances(model, f1, f2, cx, cy, &tf1, &tf2)) return RAY_ORDER_UNDETERMINED;
+    if (tf1 > tf2) return RAY_FIRST_FARTHER;
+    else if (tf1 < tf2) return RAY_FIRST_NEARER;
+    else return RAY_ORDER_UNDETERMINED;
 }
 
 /*
@@ -4551,26 +4536,26 @@ static int ray_cast_at_fractional(Model3D *model, int f1, int f2,
     double fallback1[4], fallback2[4];
     double *plane1, *plane2;
     /* Valider modèle, identifiants et projection avant la construction du rayon. */
-    if (!model) return 0;
+    if (!model) return RAY_ORDER_UNDETERMINED;
     faces = &model->faces;
-    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return 0;
+    if (f1 < 0 || f2 < 0 || f1 >= faces->face_count || f2 >= faces->face_count) return RAY_ORDER_UNDETERMINED;
     scale = (double)s_global_proj_scale_fixed / (double)FIXED_SCALE;
-    if (scale <= 0.0) return 0;
+    if (scale <= 0.0) return RAY_ORDER_UNDETERMINED;
     dx = (cx - (double)CENTRE_X) / scale;
     dy = ((double)CENTRE_Y - cy) / scale;
     /* Évaluer les deux plans en double avec le même rayon. */
     plane1 = ordering_plane(model, f1, fallback1);
     denominator1 = plane1[0] * dx + plane1[1] * dy + plane1[2];
-    if (fabs(denominator1) < 1e-6) return 0;
+    if (fabs(denominator1) < 1e-6) return RAY_ORDER_UNDETERMINED;
     plane2 = ordering_plane(model, f2, fallback2);
     denominator2 = plane2[0] * dx + plane2[1] * dy + plane2[2];
-    if (fabs(denominator2) < 1e-6) return 0;
+    if (fabs(denominator2) < 1e-6) return RAY_ORDER_UNDETERMINED;
     /* Comparer les paramètres des intersections calculées. */
     t1 = -plane1[3] / denominator1;
     t2 = -plane2[3] / denominator2;
-    if (t1 > t2) return 1;
-    if (t1 < t2) return -1;
-    return 0;
+    if (t1 > t2) return RAY_FIRST_FARTHER;
+    if (t1 < t2) return RAY_FIRST_NEARER;
+    return RAY_ORDER_UNDETERMINED;
 }
 
 #define RCH_ZOOM_MAX_VERTS (2 * MAX_FACE_VERTICES)
@@ -7314,7 +7299,7 @@ void restoreAllFaces(Model3D* model) {
  * ----------------------------------------------------------------------------
  */
 static int pair_order_relation(Model3D* model, int f1, int f2) {
-    if (!model) return 0;
+    if (!model) return FACE_ORDER_UNDETERMINED;
 
     /* Réinitialiser les plans préparés puis tester les intervalles de profondeur. */
     (void)geometric_face_relation(NULL, 0, 0);
@@ -7322,26 +7307,26 @@ static int pair_order_relation(Model3D* model, int f1, int f2) {
     VertexArrays3D* vtx = &model->vertices;
     Fixed32 epsilon = FLOAT_TO_FIXED(0.01f);
 
-    if (faces->z_max[f2] <= faces->z_min[f1]) return -1;
-    if (faces->z_max[f1] <= faces->z_min[f2]) return 1;
+    if (faces->z_max[f2] <= faces->z_min[f1]) return FACE_ORDER_BEFORE;
+    if (faces->z_max[f1] <= faces->z_min[f2]) return FACE_ORDER_AFTER;
 
     /* Départager les séparations projetées avant les deux sens des relations
      * de plans.
      */
     int minx1 = faces->minx[f1], maxx1 = faces->maxx[f1], miny1 = faces->miny[f1], maxy1 = faces->maxy[f1];
     int minx2 = faces->minx[f2], maxx2 = faces->maxx[f2], miny2 = faces->miny[f2], maxy2 = faces->maxy[f2];
-    if (maxx1 <= minx2) return -1;
-    if (maxx2 <= minx1) return 1;
-    if (maxy1 <= miny2) return -1;
-    if (maxy2 <= miny1) return 1;
+    if (maxx1 <= minx2) return FACE_ORDER_BEFORE;
+    if (maxx2 <= minx1) return FACE_ORDER_AFTER;
+    if (maxy1 <= miny2) return FACE_ORDER_BEFORE;
+    if (maxy2 <= miny1) return FACE_ORDER_AFTER;
 
     int geo = geometric_face_relation(model, f1, f2);
-    if (geo != 0) return geo;
+    if (geo != FACE_ORDER_UNDETERMINED) return geo;
 
     geo = geometric_face_relation(model, f2, f1);
-    if (geo != 0) return -geo;
+    if (geo != FACE_ORDER_UNDETERMINED) return -geo;
 
-    return 0;
+    return FACE_ORDER_UNDETERMINED;
 }
 
 
@@ -7381,10 +7366,10 @@ static int pair_order_relation(Model3D* model, int f1, int f2) {
 static int geo_face_order(Model3D* model, int f1, int f2) {
     int relation;
     /* Ignorer un modèle absent avant tout accès aux caches ou aux faces. */
-    if (!model) return 0;
+    if (!model) return FACE_ORDER_UNDETERMINED;
     /* Donner la priorité au verdict orienté f1 vers f2 du noyau optimisé. */
     relation = geometric_face_relation(model, f1, f2);
-    if (relation != 0) return relation;
+    if (relation != FACE_ORDER_UNDETERMINED) return relation;
     /* Ramener le verdict inverse à la convention d'ordre de la paire f1/f2. */
     return -geometric_face_relation(model, f2, f1);
 }
@@ -7572,12 +7557,12 @@ static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py) {
     float d1 = 0.0f, d2 = 0.0f;
     /* Comparer les distances puis conserver le repli historique vers ray_cast_at. */
     if (ray_cast_distances(model, f1, f2, px, py, &d1, &d2)) {
-        if (d1 < d2) return 1; else if (d1 > d2) return 2; else return 0;
+        if (d1 < d2) return PAIR_FRONT_FIRST; else if (d1 > d2) return PAIR_FRONT_SECOND; else return PAIR_FRONT_NONE;
     }
     int r = ray_cast_at(model, f1, f2, px, py);
-    if (r == -1) return 1;
-    if (r == 1) return 2;
-    return 0;
+    if (r == RAY_FIRST_NEARER) return PAIR_FRONT_FIRST;
+    if (r == RAY_FIRST_FARTHER) return PAIR_FRONT_SECOND;
+    return PAIR_FRONT_NONE;
 }
 /*
  * ----------------------------------------------------------------------------
