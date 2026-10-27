@@ -926,16 +926,6 @@ segment "main";
                 inspect_face_pair_ui(model);
                 goto loopReDraw;
 
-            /* Comparer les méthodes de chevauchement avec le benchmark intégré. */
-            case 47: /* Touche : / */
-                if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }
-
-                printf("Running projected overlap benchmark...\n");
-
-                benchmark_projected_overlap_all(model, &params, 1);
-                keypress();
-                goto loopReDraw;
-
                 /* Changer la méthode de chevauchement puis retraiter le modèle. */
                 case 40: /* Touche : ( */
                 overlap_method = select_overlap_method(overlap_method);
