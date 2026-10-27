@@ -3011,7 +3011,7 @@
 <p><a href="zbuffer_scanline.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-SL_SetScale">Contrat dans le dictionnaire</a></p></div></details>
 </section>
 <section class="module"><h3>zbuffer_fullscreen.c <span class="tag">20 fonctions</span></h3><p class="muted">Gérer la table de profondeur plein écran et dessiner directement en SHGR les surfaces et leurs contours, avec un plan affine de codes Z commun aux deux passes.</p>
-<details class="function" id="fn-renderModelFullscreenZBuffer"><summary><code>renderModelFullscreenZBuffer</code><span class="muted">zbuffer_fullscreen.c · ligne 1596</span></summary><div class="body"><pre><code>void renderModelFullscreenZBuffer(Model3D* model)</code></pre>
+<details class="function" id="fn-renderModelFullscreenZBuffer"><summary><code>renderModelFullscreenZBuffer</code><span class="muted">zbuffer_fullscreen.c · ligne 1642</span></summary><div class="body"><pre><code>void renderModelFullscreenZBuffer(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Choisir la variante de rendu public selon le back-face culling.</p>
 <h4>Paramètres :</h4>
@@ -3023,7 +3023,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-renderModelFullscreenZBuffer_biasedV2" title="Appeler ZBuffer_RenderCore avec rapprochement des faces de plane_d&gt;0."><code>renderModelFullscreenZBuffer_biasedV2</code></a>, <a href="#fn-renderModelFullscreenZBuffer_fastV2" title="Appeler ZBuffer_RenderCore sans rapprochement des faces de plane_d&gt;0."><code>renderModelFullscreenZBuffer_fastV2</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-animation_render_frame" title="préparer et rendre une orientation, sans classement automatique."><code>animation_render_frame</code></a>, <a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-renderModelFullscreenZBuffer">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-renderModelFullscreenZBuffer_biasedV2"><summary><code>renderModelFullscreenZBuffer_biasedV2</code><span class="muted">zbuffer_fullscreen.c · ligne 1569</span></summary><div class="body"><pre><code>void renderModelFullscreenZBuffer_biasedV2(Model3D* model)</code></pre>
+<details class="function" id="fn-renderModelFullscreenZBuffer_biasedV2"><summary><code>renderModelFullscreenZBuffer_biasedV2</code><span class="muted">zbuffer_fullscreen.c · ligne 1615</span></summary><div class="body"><pre><code>void renderModelFullscreenZBuffer_biasedV2(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Appeler ZBuffer_RenderCore avec rapprochement des faces de plane_d&gt;0.</p>
 <h4>Paramètres :</h4>
@@ -3035,7 +3035,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-renderModelFullscreenZBuffer" title="Choisir la variante de rendu public selon le back-face culling."><code>renderModelFullscreenZBuffer</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-renderModelFullscreenZBuffer_biasedV2">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-renderModelFullscreenZBuffer_fastV2"><summary><code>renderModelFullscreenZBuffer_fastV2</code><span class="muted">zbuffer_fullscreen.c · ligne 1543</span></summary><div class="body"><pre><code>void renderModelFullscreenZBuffer_fastV2(Model3D* model)</code></pre>
+<details class="function" id="fn-renderModelFullscreenZBuffer_fastV2"><summary><code>renderModelFullscreenZBuffer_fastV2</code><span class="muted">zbuffer_fullscreen.c · ligne 1589</span></summary><div class="body"><pre><code>void renderModelFullscreenZBuffer_fastV2(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Appeler ZBuffer_RenderCore sans rapprochement des faces de plane_d&gt;0.</p>
 <h4>Paramètres :</h4>
@@ -3047,7 +3047,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-renderModelFullscreenZBuffer" title="Choisir la variante de rendu public selon le back-face culling."><code>renderModelFullscreenZBuffer</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-renderModelFullscreenZBuffer_fastV2">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBFS_FreeEdges"><summary><code>ZBFS_FreeEdges</code><span class="muted">zbuffer_fullscreen.c · ligne 473</span></summary><div class="body"><pre><code>static void ZBFS_FreeEdges(void)</code></pre>
+<details class="function" id="fn-ZBFS_FreeEdges"><summary><code>ZBFS_FreeEdges</code><span class="muted">zbuffer_fullscreen.c · ligne 475</span></summary><div class="body"><pre><code>static void ZBFS_FreeEdges(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Libérer les arêtes préparées.</p>
 <h4>Paramètres :</h4>
@@ -3058,9 +3058,9 @@
 <p>Remet les pointeurs et leur capacité à zéro. Utilise uniquement les allocations du rendu plein écran direct.</p>
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBFS_FreeScratch" title="Libérer les trois familles de buffers auxiliaires du plein écran direct."><code>ZBFS_FreeScratch</code></a>, <a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>. Cette liste peut inclure des macros.</p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBFS_FreeEdges">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBFS_FreeFaces"><summary><code>ZBFS_FreeFaces</code><span class="muted">zbuffer_fullscreen.c · ligne 419</span></summary><div class="body"><pre><code>static void ZBFS_FreeFaces(void)</code></pre>
+<details class="function" id="fn-ZBFS_FreeFaces"><summary><code>ZBFS_FreeFaces</code><span class="muted">zbuffer_fullscreen.c · ligne 421</span></summary><div class="body"><pre><code>static void ZBFS_FreeFaces(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Libérer les tables de faces, couleurs, biais et plans.</p>
 <h4>Paramètres :</h4>
@@ -3071,9 +3071,9 @@
 <p>Remet les pointeurs et leur capacité à zéro. Utilise uniquement les allocations du rendu plein écran direct.</p>
 <h4>Appels internes directs :</h4><p><a href="#fn-ZBuffer_FreeFaces" title="Libérer les tables communes de préparation des faces."><code>ZBuffer_FreeFaces</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBFS_FreeScratch" title="Libérer les trois familles de buffers auxiliaires du plein écran direct."><code>ZBFS_FreeScratch</code></a>, <a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>. Cette liste peut inclure des macros.</p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBFS_FreeFaces">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBFS_FreeScratch"><summary><code>ZBFS_FreeScratch</code><span class="muted">zbuffer_fullscreen.c · ligne 502</span></summary><div class="body"><pre><code>static void ZBFS_FreeScratch(void)</code></pre>
+<details class="function" id="fn-ZBFS_FreeScratch"><summary><code>ZBFS_FreeScratch</code><span class="muted">zbuffer_fullscreen.c · ligne 504</span></summary><div class="body"><pre><code>static void ZBFS_FreeScratch(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Libérer les trois familles de buffers auxiliaires du plein écran direct.</p>
 <h4>Paramètres :</h4>
@@ -3085,7 +3085,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ZBFS_FreeEdges" title="Libérer les arêtes préparées."><code>ZBFS_FreeEdges</code></a>, <a href="#fn-ZBFS_FreeFaces" title="Libérer les tables de faces, couleurs, biais et plans."><code>ZBFS_FreeFaces</code></a>, <a href="#fn-ZBFS_FreeVertices" title="Libérer les profondeurs inverses et codes des sommets."><code>ZBFS_FreeVertices</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBuffer_Shutdown" title="Libérer les ressources du rendu plein écran direct."><code>ZBuffer_Shutdown</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBFS_FreeScratch">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBFS_FreeVertices"><summary><code>ZBFS_FreeVertices</code><span class="muted">zbuffer_fullscreen.c · ligne 447</span></summary><div class="body"><pre><code>static void ZBFS_FreeVertices(void)</code></pre>
+<details class="function" id="fn-ZBFS_FreeVertices"><summary><code>ZBFS_FreeVertices</code><span class="muted">zbuffer_fullscreen.c · ligne 449</span></summary><div class="body"><pre><code>static void ZBFS_FreeVertices(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Libérer les profondeurs inverses et codes des sommets.</p>
 <h4>Paramètres :</h4>
@@ -3101,17 +3101,13 @@
 <h4>Rôle :</h4>
 <p>Remplir de $FFFF les 200 lignes de profondeur.</p>
 <h4>Paramètres :</h4>
-<p>Aucun paramètre explicite.</p>
-<h4>Entrées et sorties implicites :</h4>
-<p>Entrée : zbuf_row préparé.</p>
+<p>Aucun paramètre explicite. Entrées et sorties implicites : Entrée : zbuf_row préparé.</p>
 <h4>Retour :</h4>
-<p>Aucun.</p>
-<h4>Registres et indicateurs :</h4>
-<p>Préserve P, DBR et D ; A/X/Y servent au transfert. Cadre D de six octets : offset de table à 0, pointeur de ligne à 2/4 ; D pointe S+1 après réserve. Chemin rapide par blocs de seize mots avec DBR de la ligne ; chemin [dp],Y pour une ligne traversant une banque. Largeur multiple de 16 requise. Les accès |offset,X imposent le mode absolu, pas la page directe.</p>
+<p>Aucun. Registres et indicateurs : Préserve P, DBR et D ; A/X/Y servent au transfert. Cadre D de six octets : offset de table à 0, pointeur de ligne à 2/4 ; D pointe S+1 après réserve. Chemin rapide par blocs de seize mots avec DBR de la ligne ; chemin [dp],Y pour une ligne traversant une banque. Largeur multiple de 16 requise. Les accès |offset,X imposent le mode absolu, pas la page directe.</p>
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-Off_RenderCore" title="Rendre les surfaces par balayage plein écran offscreen."><code>Off_RenderCore</code></a>, <a href="#fn-ZBuffer_Init" title="Réserver le Z-buffer plein écran aligné sur une frontière de banque."><code>ZBuffer_Init</code></a>, <a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_Clear">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBuffer_DrawEdge"><summary><code>ZBuffer_DrawEdge</code><span class="muted">zbuffer_fullscreen.c · ligne 1103</span></summary><div class="body"><pre><code>static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0, int x1, int y1, UWORD16 edge_z1, int color, ZbPlane *plane)</code></pre>
+<details class="function" id="fn-ZBuffer_DrawEdge"><summary><code>ZBuffer_DrawEdge</code><span class="muted">zbuffer_fullscreen.c · ligne 1149</span></summary><div class="body"><pre><code>static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0, int x1, int y1, UWORD16 edge_z1, int color, ZbPlane *plane)</code></pre>
 <h4>Rôle :</h4>
 <p>Rasteriser un côté par Bresenham et tester sa visibilité après les surfaces.</p>
 <h4>Paramètres :</h4>
@@ -3134,22 +3130,23 @@
 <p>Demande 192 Kio pour garantir deux banques utilisables après alignement 64 Kio. Prépare zbuf_row pour 200 lignes de 320 mots puis efface les profondeurs. Le handle fixe reste possédé par le module jusqu&#x27;à ZBuffer_Shutdown.</p>
 <h4>Appels internes directs :</h4><p><a href="#fn-ZBuffer_Clear" title="Remplir de $FFFF les 200 lignes de profondeur."><code>ZBuffer_Clear</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-animate_model_rotation" title="précalculer un tour complet puis jouer ses transitions jusqu’au clavier."><code>animate_model_rotation</code></a>, <a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>DisposeHandle</code>, <code>NewHandle</code>, <code>toolerror</code>, <code>userid</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>DisposeHandle</code>, <code>NewHandle</code>, <code>toolerror</code>, <code>userid</code>. Cette liste peut inclure des macros.</p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_Init">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBuffer_PaintSpanZ"><summary><code>ZBuffer_PaintSpanZ</code><span class="muted">zbuffer_fullscreen.c · ligne 675</span></summary><div class="body"><pre><code>static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY, int fillColor, ZbPlane *plane, unsigned long row_raw)</code></pre>
+<details class="function" id="fn-ZBuffer_PaintSpanZ"><summary><code>ZBuffer_PaintSpanZ</code><span class="muted">zbuffer_fullscreen.c · ligne 700</span></summary><div class="body"><pre><code>static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY, int fillColor, ZbPlane *plane, unsigned long row_raw)</code></pre>
 <h4>Rôle :</h4>
 <p>Préparer un span de surface évalué sur le plan Z commun de la face.</p>
 <h4>Paramètres :</h4>
-<p>[entrée] x0/x1 inclus sans pan, screenY avec pan, fillColor et plane.</p>
+<p>[entrée] x0/x1 inclus sans pan, screenY avec pan, fillColor et plane. row_raw : plan évalué en x écran nul sur cette ligne.</p>
 <h4>Retour :</h4>
 <p>Aucun ; écrit profondeur et écran via ZBuffer_SpanRun.</p>
 <h4>Préconditions :</h4>
-<p>coordonnées déjà clippées et lignes valides. Prépare codes exacts aux extrémités et pas 16.16 depuis le gradient à douze fractions.</p>
-<h4>Optimisation :</h4><p>Le plan de ligne row_raw est fourni en x écran nul et avancé de gy par ligne ; une seule multiplication par gx localise le début du span, sans changer les codes Z.</p>
+<p>coordonnées déjà clippées et lignes valides. Prépare codes exacts aux extrémités et pas 16.16 depuis le gradient à douze fractions. Le plan de ligne avance par addition de gy dans le noyau de rendu ; une seule multiplication par gx localise ici le début du span.</p>
+<h4>Fonctionnement :</h4>
+<p>Rogner les extrémités dont le code de plan sort de near_code/far_code. Un span entièrement hors intervalle est ignoré ; sinon les extrémités conservées et l&#x27;accumulateur 16.16 partagent le même plan. Le test et le parcours des contours ne sont pas modifiés.</p>
 <h4>Appels internes directs :</h4><p><a href="#fn-ZBuffer_PlaneCode" title="Arrondir et borner un accumulateur Z à douze bits fractionnaires."><code>ZBuffer_PlaneCode</code></a>, <a href="#fn-ZBuffer_SpanRun" title="Dessiner un span préclippé avec test Z strict dans un noyau 65C816."><code>ZBuffer_SpanRun</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_PaintSpanZ">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBuffer_PlaneAt"><summary><code>ZBuffer_PlaneAt</code><span class="muted">zbuffer_fullscreen.c · ligne 611</span></summary><div class="body"><pre><code>static unsigned long ZBuffer_PlaneAt(ZbPlane *p, long x, long y)</code></pre>
+<details class="function" id="fn-ZBuffer_PlaneAt"><summary><code>ZBuffer_PlaneAt</code><span class="muted">zbuffer_fullscreen.c · ligne 630</span></summary><div class="body"><pre><code>static unsigned long ZBuffer_PlaneAt(ZbPlane *p, long x, long y)</code></pre>
 <h4>Rôle :</h4>
 <p>Évaluer le plan Z à un pixel écran sans encore réduire ses fractions.</p>
 <h4>Paramètres :</h4>
@@ -3160,9 +3157,9 @@
 <p>Aucun effet de bord ; saturation faite séparément.</p>
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBuffer_DrawEdge" title="Rasteriser un côté par Bresenham et tester sa visibilité après les surfaces."><code>ZBuffer_DrawEdge</code></a>, <a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>return</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>return</code>. Cette liste peut inclure des macros.</p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_PlaneAt">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBuffer_PlaneCode"><summary><code>ZBuffer_PlaneCode</code><span class="muted">zbuffer_fullscreen.c · ligne 641</span></summary><div class="body"><pre><code>static UWORD16 ZBuffer_PlaneCode(unsigned long z)</code></pre>
+<details class="function" id="fn-ZBuffer_PlaneCode"><summary><code>ZBuffer_PlaneCode</code><span class="muted">zbuffer_fullscreen.c · ligne 660</span></summary><div class="body"><pre><code>static UWORD16 ZBuffer_PlaneCode(unsigned long z)</code></pre>
 <h4>Rôle :</h4>
 <p>Arrondir et borner un accumulateur Z à douze bits fractionnaires.</p>
 <h4>Paramètres :</h4>
@@ -3173,9 +3170,9 @@
 <p>Aucun effet de bord.</p>
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBuffer_PaintSpanZ" title="Préparer un span de surface évalué sur le plan Z commun de la face."><code>ZBuffer_PaintSpanZ</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>return</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>return</code>. Cette liste peut inclure des macros.</p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_PlaneCode">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBuffer_EdgeRun"><summary><code>ZBuffer_EdgeRun</code><span class="muted">zbuffer_fullscreen.c · ligne 782</span></summary><div class="body"><pre><code>static void ZBuffer_EdgeRun(void)</code></pre>
+<details class="function" id="fn-ZBuffer_EdgeRun"><summary><code>ZBuffer_EdgeRun</code><span class="muted">zbuffer_fullscreen.c · ligne 828</span></summary><div class="body"><pre><code>static void ZBuffer_EdgeRun(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Parcourir une arête préparée et écrire ses pixels visibles en SHGR.</p>
 <h4>Paramètres :</h4>
@@ -3183,9 +3180,7 @@
 <h4>Retour :</h4>
 <p>Aucun ; met à jour les profondeurs et les nibbles des pixels acceptés.</p>
 <h4>Fonctionnement :</h4>
-<p>Copie le paquet de 50 octets dans un cadre direct de 52 octets, puis avance Bresenham, les profondeurs et les pointeurs sans appel C par pixel. Les profondeurs égales restent dessinables ; un contour strictement plus proche doit aussi passer le test de profondeur géométrique de l&#x27;arête. Vérifie les coordonnées avant tout accès mémoire. Les sommes de restes propagent la retenue pour les arêtes dont l&#x27;axe majeur dépasse 32767.</p>
-<h4>Registres et contraintes :</h4>
-<p>Préserve P et D ; DBR inchangé, A/X/Y volatils. Accumulateur 16 bits sauf pendant l&#x27;écriture du nibble. Offsets 0..49 : paquet ; 50 : code Z local. Pointeurs far avancés sur 32 bits pour franchir les banques du Z-buffer. Appel synchrone et non réentrant ; count positif, major/minor &lt;= 65535.</p>
+<p>Copie le paquet de 50 octets dans un cadre direct de 52 octets, puis avance Bresenham, les profondeurs et les pointeurs sans appel C par pixel. Les profondeurs égales restent dessinables ; un contour strictement plus proche doit aussi passer le test de profondeur géométrique de l&#x27;arête. Vérifie les coordonnées avant tout accès mémoire. Les sommes de restes propagent la retenue pour les arêtes dont l&#x27;axe majeur dépasse 32767. Registres et contraintes : Préserve P et D ; DBR inchangé, A/X/Y volatils. Accumulateur 16 bits sauf pendant l&#x27;écriture du nibble. Offsets 0..49 : paquet ; 50 : code Z local. Pointeurs far avancés sur 32 bits pour franchir les banques du Z-buffer. Appel synchrone et non réentrant ; count positif, major/minor &lt;= 65535.</p>
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBuffer_DrawEdge" title="Rasteriser un côté par Bresenham et tester sa visibilité après les surfaces."><code>ZBuffer_DrawEdge</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_EdgeRun">Contrat dans le dictionnaire</a></p></div></details>
@@ -3201,7 +3196,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ZBuffer_QuantizeAtScale" title="Quantifier une profondeur inverse avec une échelle explicite."><code>ZBuffer_QuantizeAtScale</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-Off_RenderCore" title="Rendre les surfaces par balayage plein écran offscreen."><code>Off_RenderCore</code></a>, <a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_QuantizeInvZ">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBuffer_RenderCore"><summary><code>ZBuffer_RenderCore</code><span class="muted">zbuffer_fullscreen.c · ligne 1255</span></summary><div class="body"><pre><code>static void ZBuffer_RenderCore(Model3D* model, int biased)</code></pre>
+<details class="function" id="fn-ZBuffer_RenderCore"><summary><code>ZBuffer_RenderCore</code><span class="muted">zbuffer_fullscreen.c · ligne 1301</span></summary><div class="body"><pre><code>static void ZBuffer_RenderCore(Model3D* model, int biased)</code></pre>
 <h4>Rôle :</h4>
 <p>Rendre les surfaces par balayage plein écran direct.</p>
 <h4>Paramètres :</h4>
@@ -3211,15 +3206,12 @@
 <h4>Sorties et effets de bord :</h4>
 <p>couleurs, mémoire Z, écran ou framebuffer, buffers statiques non réentrants.</p>
 <h4>Fonctionnement :</h4>
-<p>N’effectue ni transformation ni classement des faces ; les faces actives sont parcourues par identifiant pour définir les égalités de profondeur. Réserve/réutilise buffers par sommet/face/arête, calcule 1/z, prépare les arêtes, classe les débuts de face par histogramme puis balaie uniquement les faces actives. Plan Z commun au remplissage et aux contours ; arrondi intérieur ceil/floor, puis côtés originaux par Bresenham et masque facultatif.</p>
-<p>Le clipping du viewport est appliqué aux spans ; pas de clipping 3D général. Les réserves et le comportement d&#x27;échec restent propres à cette version.</p>
-<p>Les réserves, inverses de profondeur, filtres de faces, histogrammes et listes actives passent par les primitives communes. Le plan de profondeur et les contours du rendu direct restent distincts.</p>
-<h4>Optimisation :</h4><p>Le remplissage avance le plan de chaque face par addition de gy à chaque ligne, y compris sans span ; les contours conservent leur calcul initial.</p>
+<p>N’effectue ni transformation ni classement des faces ; les faces actives sont parcourues par identifiant pour définir les égalités de profondeur. Réserve/réutilise buffers par sommet/face/arête, calcule 1/z, prépare les arêtes, classe les débuts de face par histogramme puis balaie uniquement les faces actives. Plan Z commun au remplissage et aux contours ; arrondi intérieur ceil/floor, puis côtés originaux par Bresenham et masque facultatif. Pendant le remplissage, le plan de chaque face avance de gy par ligne, y compris sans intersection ; aucune approximation supplémentaire. Le clipping du viewport est appliqué aux spans ; pas de clipping 3D général. Les réserves et le comportement d&#x27;échec restent propres à cette version.</p>
 <h4>Appels internes directs :</h4><p><a href="#fn-applyPalette" title="Installer une palette logicielle dans la table matérielle active numéro zéro."><code>applyPalette</code></a>, <a href="#fn-screenClearTopLines" title="Effacer les premières lignes de pixels de l&#x27;écran SHGR 320x200."><code>screenClearTopLines</code></a>, <a href="#fn-ZBFS_FreeEdges" title="Libérer les arêtes préparées."><code>ZBFS_FreeEdges</code></a>, <a href="#fn-ZBFS_FreeFaces" title="Libérer les tables de faces, couleurs, biais et plans."><code>ZBFS_FreeFaces</code></a>, <a href="#fn-ZBuffer_ActivateFaces" title="Ajouter les faces d’une ligne à la liste active ordonnée."><code>ZBuffer_ActivateFaces</code></a>, <a href="#fn-ZBuffer_Clear" title="Remplir de $FFFF les 200 lignes de profondeur."><code>ZBuffer_Clear</code></a>, <a href="#fn-ZBuffer_DrawEdge" title="Rasteriser un côté par Bresenham et tester sa visibilité après les surfaces."><code>ZBuffer_DrawEdge</code></a>, <a href="#fn-ZBuffer_PaintSpanZ" title="Préparer un span de surface évalué sur le plan Z commun de la face."><code>ZBuffer_PaintSpanZ</code></a>, <a href="#fn-ZBuffer_PlaneAt" title="Évaluer le plan Z à un pixel écran sans encore réduire ses fractions."><code>ZBuffer_PlaneAt</code></a>, <a href="#fn-ZBuffer_PrepareFaces" title="Filtrer les faces et préparer leurs premières lignes et couleurs."><code>ZBuffer_PrepareFaces</code></a>, <a href="#fn-ZBuffer_PrepareInvZ" title="Préparer les profondeurs inverses des sommets d’une vue."><code>ZBuffer_PrepareInvZ</code></a>, <a href="#fn-ZBuffer_QuantizeInvZ" title="Quantifier une profondeur inverse en code 16 bits où petit signifie proche."><code>ZBuffer_QuantizeInvZ</code></a>, <a href="#fn-ZBuffer_ReserveFaces" title="Garantir les six tables communes de faces."><code>ZBuffer_ReserveFaces</code></a>, <a href="#fn-ZBuffer_ReserveVertices" title="Garantir la capacité des trois buffers de profondeur."><code>ZBuffer_ReserveVertices</code></a>, <a href="#fn-ZBuffer_SetPlane" title="Préparer un plan affine de codes Z dans le repère écran."><code>ZBuffer_SetPlane</code></a>, <a href="#fn-ZBuffer_SetScaleForFrame" title="Adapter l&#x27;échelle de quantification à la profondeur inverse maximale."><code>ZBuffer_SetScaleForFrame</code></a>, <a href="#fn-ZBuffer_SizeFits" title="Vérifier qu&#x27;un tableau de count éléments est représentable par size_t."><code>ZBuffer_SizeFits</code></a>, <a href="#fn-ZBuffer_SortFaceStarts" title="Transformer l’histogramme en liste stable des départs de faces."><code>ZBuffer_SortFaceStarts</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-renderModelFullscreenZBuffer_biasedV2" title="Appeler ZBuffer_RenderCore avec rapprochement des faces de plane_d&gt;0."><code>renderModelFullscreenZBuffer_biasedV2</code></a>, <a href="#fn-renderModelFullscreenZBuffer_fastV2" title="Appeler ZBuffer_RenderCore sans rapprochement des faces de plane_d&gt;0."><code>renderModelFullscreenZBuffer_fastV2</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>malloc</code>, <code>SetPenMode</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_TO_FLOAT</code>, <code>malloc</code>, <code>SetPenMode</code>. Cette liste peut inclure des macros.</p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_RenderCore">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBuffer_SetEdgeFlags"><summary><code>ZBuffer_SetEdgeFlags</code><span class="muted">zbuffer_fullscreen.c · ligne 733</span></summary><div class="body"><pre><code>void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count)</code></pre>
+<details class="function" id="fn-ZBuffer_SetEdgeFlags"><summary><code>ZBuffer_SetEdgeFlags</code><span class="muted">zbuffer_fullscreen.c · ligne 779</span></summary><div class="body"><pre><code>void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count)</code></pre>
 <h4>Rôle :</h4>
 <p>Installer un masque facultatif des côtés de faces, sans prendre sa propriété.</p>
 <h4>Paramètres :</h4>
@@ -3231,15 +3223,15 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBuffer_Shutdown" title="Libérer les ressources du rendu plein écran direct."><code>ZBuffer_Shutdown</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_SetEdgeFlags">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBuffer_SetPlane"><summary><code>ZBuffer_SetPlane</code><span class="muted">zbuffer_fullscreen.c · ligne 542</span></summary><div class="body"><pre><code>static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge, float code_bias)</code></pre>
+<details class="function" id="fn-ZBuffer_SetPlane"><summary><code>ZBuffer_SetPlane</code><span class="muted">zbuffer_fullscreen.c · ligne 547</span></summary><div class="body"><pre><code>static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge, float code_bias)</code></pre>
 <h4>Rôle :</h4>
 <p>Préparer un plan affine de codes Z dans le repère écran.</p>
 <h4>Paramètres :</h4>
-<p>[entrée] vtx/faces : coordonnées et plans observateur à jour ; f valide. zsrc : codes des sommets pour le repli dégénéré ; nudge : rapprochement en codes ; code_bias : biais déjà converti en codes, nul sans rapprochement.</p>
+<p>[entrée] vtx/faces : coordonnées et plans observateur à jour ; f valide. [entrée] zsrc : codes des sommets pour les bornes et le repli ; nudge en codes. [entrée] code_bias : biais déjà converti en codes, nul sans rapprochement.</p>
 <h4>Retour :</h4>
-<p>Aucun ; écrit *p, avec pan et gradients à douze bits fractionnaires.</p>
+<p>Aucun ; écrit le plan *p, avec pan et gradients à douze bits fractionnaires.</p>
 <h4>Fonctionnement :</h4>
-<p>Réutilise le plan observateur de Newell calculé par calculateFaceDepths : pour le rayon écran (u,v,1), 1/z = -(a*u+b*v+c)/d. Les coordonnées projetées arrondies servent uniquement à choisir l’ancrage, jamais à reconstruire les gradients. Un plan passant par l’observateur ou une projection non positive conserve la profondeur constante de repli. Le biais et la quantification sont appliqués après le calcul du plan. Les coefficients conservent leur échelle entière commune, qui se simplifie dans les rapports : les conversions intermédiaires en double et les divisions par 65536 sont supprimées. L’inverse de projection et le biais en codes sont préparés une fois par vue ; il reste une division flottante par face.</p>
+<p>Réutilise le plan de Newell calculé par calculateFaceDepths. Pour le rayon écran (u,v,1), 1/z = -(a*u+b*v+c)/d ; cette fonction est affine avant quantification. Les coordonnées arrondies des sommets servent uniquement à choisir l&#x27;ancrage, jamais à reconstruire les gradients. Un plan nul ou passant par l&#x27;observateur conserve la profondeur constante de repli. Les quatre coefficients ont la même échelle : elle se simplifie dans leurs rapports. Évite donc les conversions intermédiaires en double et les divisions par 65536 ; l&#x27;inverse de projection est préparé par vue. Mémorise aussi les codes minimal et maximal des sommets, élargis de deux unités pour les arrondis. Le remplissage rejette les extrapolations hors de cet intervalle physique, notamment sur une face presque de profil.</p>
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_SetPlane">Contrat dans le dictionnaire</a></p></div></details>
@@ -3266,7 +3258,7 @@
 <p>Libère scratch et handle Z, annule lignes et banques. Oublie le masque d&#x27;arêtes emprunté sans le libérer. Appel répété accepté. Ne libère pas les allocations statiques propres aux autres moteurs de rendu.</p>
 <h4>Appels internes directs :</h4><p><a href="#fn-ZBFS_FreeScratch" title="Libérer les trois familles de buffers auxiliaires du plein écran direct."><code>ZBFS_FreeScratch</code></a>, <a href="#fn-ZBuffer_SetEdgeFlags" title="Installer un masque facultatif des côtés de faces, sans prendre sa propriété."><code>ZBuffer_SetEdgeFlags</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>DisposeHandle</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>DisposeHandle</code>. Cette liste peut inclure des macros.</p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_Shutdown">Contrat dans le dictionnaire</a></p></div></details>
 </section>
 <section class="module"><h3>zbuffer_fullscreen_offscreen.c <span class="tag">11 fonctions</span></h3><p class="muted">Rendre le modèle dans un framebuffer RAM de 32000 octets, puis transférer les pixels vers SHGR en une copie MVN, en utilisant le Z-buffer géré par zbuffer_fullscreen.c.</p>

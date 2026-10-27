@@ -383,6 +383,8 @@ typedef struct {
     UWORD16 z;
     /* Plan évalué en x écran nul sur la prochaine ligne de remplissage. */
     unsigned long scan_raw;
+    /* Intervalle physique des codes des sommets, avec marge de quantification. */
+    UWORD16 near_code, far_code;
 } ZbPlane;
 
 /* Inverse de projection commun à tous les plans de la vue courante. */
@@ -521,7 +523,7 @@ static void ZBFS_FreeScratch(void)
  *
  *  Paramètres :
  *    [entrée] vtx/faces : coordonnées et plans observateur à jour ; f valide.
- *    [entrée] zsrc : codes des sommets pour le repli dégénéré ; nudge en codes.
+ *    [entrée] zsrc : codes des sommets pour les bornes et le repli ; nudge en codes.
  *    [entrée] code_bias : biais déjà converti en codes, nul sans rapprochement.
  *
  *  Retour :
@@ -536,6 +538,9 @@ static void ZBFS_FreeScratch(void)
  *    Les quatre coefficients ont la même échelle : elle se simplifie dans
  *    leurs rapports. Évite donc les conversions intermédiaires en double et
  *    les divisions par 65536 ; l'inverse de projection est préparé par vue.
+ *    Mémorise aussi les codes minimal et maximal des sommets, élargis de deux
+ *    unités pour les arrondis. Le remplissage rejette les extrapolations hors
+ *    de cet intervalle physique, notamment sur une face presque de profil.
  *
  * ----------------------------------------------------------------------------
  */
@@ -544,9 +549,23 @@ static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx,
                              int nudge, float code_bias)
 {
     int off, vertex;
+    int k;
+    UWORD16 near_code = ZBUF_FAR_VALUE, far_code = 0;
     float a, b, c, d, factor, gradient_factor, gx, gy, code;
     off = faces->vertex_indices_ptr[f];
     vertex = faces->vertex_indices_buffer[off] - 1;
+    /* Un échantillon intérieur ne peut sortir de l'intervalle des profondeurs
+     * des sommets. Deux codes couvrent les arrondis d'ancrage et de gradient.
+     */
+    for (k = 0; k < faces->vertex_count[f]; ++k) {
+        int vi = faces->vertex_indices_buffer[off + k] - 1;
+        UWORD16 code = (zsrc[vi] > (UWORD16)nudge) ?
+                      (UWORD16)(zsrc[vi] - nudge) : 0;
+        if (code < near_code) near_code = code;
+        if (code > far_code) far_code = code;
+    }
+    p->near_code = (near_code > 2U) ? (UWORD16)(near_code - 2U) : 0;
+    p->far_code = (far_code < 65533U) ? (UWORD16)(far_code + 2U) : ZBUF_FAR_VALUE;
     /* Préparer un repli constant pour les plans dégénérés, avec le même biais
      * que les codes des sommets.
      */
@@ -670,6 +689,12 @@ static UWORD16 ZBuffer_PlaneCode(unsigned long z)
  *    Le plan de ligne avance par addition de gy dans le noyau de rendu ;
  *    une seule multiplication par gx localise ici le début du span.
  *
+ *  Fonctionnement :
+ *    Rogner les extrémités dont le code de plan sort de near_code/far_code.
+ *    Un span entièrement hors intervalle est ignoré ; sinon les extrémités
+ *    conservées et l'accumulateur 16.16 partagent le même plan. Le test et
+ *    le parcours des contours ne sont pas modifiés.
+ *
  * ----------------------------------------------------------------------------
  */
 static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY,
@@ -678,15 +703,37 @@ static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY,
 {
     int sx0, nsteps;
     unsigned long raw;
+    unsigned long right_raw;
+    UWORD16 left_code, right_code;
     if (x0 > x1) return;
     /* Appliquer pan horizontal et calculer les adresses du premier pixel. */
     sx0 = x0 + pan_dx;
     raw = row_raw + (unsigned long)plane->gx * (unsigned long)sx0;
+    /* L'arrondi des sommets peut épaissir une face presque de profil. Exclure
+     * les bouts du span où son plan extrapole une profondeur physiquement
+     * impossible, avant qu'un faux pixel proche ne pollue le Z-buffer.
+     */
+    left_code = ZBuffer_PlaneCode(raw);
+    while (left_code < plane->near_code || left_code > plane->far_code) {
+        if (x0 == x1) return;
+        ++x0;
+        ++sx0;
+        raw += (unsigned long)plane->gx;
+        left_code = ZBuffer_PlaneCode(raw);
+    }
+    right_raw = raw + (unsigned long)plane->gx * (unsigned long)(x1 - x0);
+    right_code = ZBuffer_PlaneCode(right_raw);
+    while (right_code < plane->near_code || right_code > plane->far_code) {
+        if (x0 == x1) return;
+        --x1;
+        right_raw -= (unsigned long)plane->gx;
+        right_code = ZBuffer_PlaneCode(right_raw);
+    }
     zspan_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
     zspan_p_pptr = ZB_SHGR_BASE + (unsigned long)screenY * 160UL +
                 (unsigned long)(sx0 >> 1);
     zspan_p_odd = sx0 & 1;
-    zspan_p_zl = ZBuffer_PlaneCode(raw);
+    zspan_p_zl = left_code;
     zspan_p_cl = fillColor;
     zspan_p_mode = 0;
     /* Distinguer un seul pixel d'un span avec intérieur et extrémité droite. */
@@ -694,8 +741,7 @@ static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY,
         nsteps = x1 - x0;
         zspan_p_zstep = (long)(((unsigned long)plane->gx << 4) & 0xFFFFFFFFUL);
         zspan_p_zacc = (long)(((raw << 4) + 0x8000UL) & 0xFFFFFFFFUL);
-        zspan_p_zr = ZBuffer_PlaneCode(raw +
-                      (unsigned long)plane->gx * (unsigned long)nsteps);
+        zspan_p_zr = right_code;
         zspan_p_n = nsteps - 1;
         zspan_p_ci = fillColor;
         zspan_p_cr = fillColor;

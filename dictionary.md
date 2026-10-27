@@ -271,6 +271,8 @@ Les macros `ANIM_LEFT/TOP/ROW_BYTES/FRAME_BYTES/FRAME_WORDS/CODE_BYTES` utilisen
 
 Pendant la lecture, `Arrows: up/right +, down/left -` est dessiné en blanc via le périphérique graphique après restauration de SHGR, à (3,195). Le modèle et les transitions restent dans le rectangle de capture ; aucun effacement d’image ne touche cette consigne. La réduction de surface diminue le volume maximal de pixels et de code par vue ; la réduction du balayage visible doit être confirmée sur cible.
 
+Le Z-buffer plein écran direct conserve `ZbPlane.near_code/far_code`, bornes des codes de sommets après biais/nudge, élargies de deux unités pour les arrondis. `ZBuffer_PaintSpanZ` rogne les extrémités de span hors de cet intervalle avant l’écriture. Un point intérieur ne peut être plus proche ou plus éloigné que tous les sommets de sa face ; les faces presque de profil peuvent violer cette contrainte après arrondi des coordonnées écran. Sans filtre, leur plan crée quelques faux pixels proches que leurs contours rendent visibles au travers d’une surface avant. Les règles de Bresenham et de visibilité des contours restent inchangées, ainsi que les moteurs offscreen et scanline. Coût mémoire ajouté : deux mots par face du rendu direct. Régression reproduite avec `models/a`, H=350°, V=20°, W=0°, D=150, P≈957,97, culling activé : face 49 aux pixels (172,135), (186,134), (187,134). Le test retrouve ces trois pixels rouges avant correction et la face avant 12 après. Vérifications de 20000 spans sur hôte et 1000 en exécution native 65816 ; les performances globales restent à mesurer sur GS.
+
 ## Index alphabétique des fonctions
 
 - [add_vertex](#fn-add_vertex) — `engine.c` : Ajouter un sommet au repère objet du modèle.
@@ -5903,7 +5905,7 @@ Appels internes directs : aucun repéré.
 
 ### renderModelFullscreenZBuffer
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1596.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1642.
 
 ```c
 void renderModelFullscreenZBuffer(Model3D* model)
@@ -5931,7 +5933,7 @@ Appels internes directs : [renderModelFullscreenZBuffer_biasedV2](arbre_appels.h
 
 ### renderModelFullscreenZBuffer_biasedV2
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1569.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1615.
 
 ```c
 void renderModelFullscreenZBuffer_biasedV2(Model3D* model)
@@ -5959,7 +5961,7 @@ Appels internes directs : [ZBuffer_RenderCore](arbre_appels.html#fn-ZBuffer_Rend
 
 ### renderModelFullscreenZBuffer_fastV2
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1543.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1589.
 
 ```c
 void renderModelFullscreenZBuffer_fastV2(Model3D* model)
@@ -7069,7 +7071,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBFS_FreeEdges
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 473.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 475.
 
 ```c
 static void ZBFS_FreeEdges(void)
@@ -7097,7 +7099,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBFS_FreeFaces
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 419.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 421.
 
 ```c
 static void ZBFS_FreeFaces(void)
@@ -7125,7 +7127,7 @@ Appels internes directs : [ZBuffer_FreeFaces](arbre_appels.html#fn-ZBuffer_FreeF
 
 ### ZBFS_FreeScratch
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 502.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 504.
 
 ```c
 static void ZBFS_FreeScratch(void)
@@ -7153,7 +7155,7 @@ Appels internes directs : [ZBFS_FreeEdges](arbre_appels.html#fn-ZBFS_FreeEdges),
 
 ### ZBFS_FreeVertices
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 447.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 449.
 
 ```c
 static void ZBFS_FreeVertices(void)
@@ -7241,7 +7243,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_DrawEdge
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1103.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1149.
 
 ```c
 static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0, int x1, int y1, UWORD16 edge_z1, int color, ZbPlane *plane)
@@ -7385,7 +7387,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PaintSpanZ
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 675.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 700.
 
 ```c
 static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY, int fillColor, ZbPlane *plane, unsigned long row_raw)
@@ -7397,7 +7399,7 @@ Préparer un span de surface évalué sur le plan Z commun de la face.
 
 **Paramètres :**
 
-[entrée] x0/x1 inclus sans pan, screenY avec pan, fillColor et plane.
+[entrée] x0/x1 inclus sans pan, screenY avec pan, fillColor et plane. row_raw : plan évalué en x écran nul sur cette ligne.
 
 **Retour :**
 
@@ -7405,11 +7407,11 @@ Aucun ; écrit profondeur et écran via ZBuffer_SpanRun.
 
 **Préconditions :**
 
-coordonnées déjà clippées et lignes valides. Prépare codes exacts aux extrémités et pas 16.16 depuis le gradient à douze fractions.
+coordonnées déjà clippées et lignes valides. Prépare codes exacts aux extrémités et pas 16.16 depuis le gradient à douze fractions. Le plan de ligne avance par addition de gy dans le noyau de rendu ; une seule multiplication par gx localise ici le début du span.
 
-**Optimisation :**
+**Fonctionnement :**
 
-Le plan de ligne row_raw est fourni en x écran nul et avancé de gy par ligne ; une seule multiplication par gx localise le début du span, sans changer les codes Z.
+Rogner les extrémités dont le code de plan sort de near_code/far_code. Un span entièrement hors intervalle est ignoré ; sinon les extrémités conservées et l'accumulateur 16.16 partagent le même plan. Le test et le parcours des contours ne sont pas modifiés.
 
 Appels internes directs : [ZBuffer_PlaneCode](arbre_appels.html#fn-ZBuffer_PlaneCode), [ZBuffer_SpanRun](arbre_appels.html#fn-ZBuffer_SpanRun).
 
@@ -7417,7 +7419,7 @@ Appels internes directs : [ZBuffer_PlaneCode](arbre_appels.html#fn-ZBuffer_Plane
 
 ### ZBuffer_PlaneAt
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 611.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 630.
 
 ```c
 static unsigned long ZBuffer_PlaneAt(ZbPlane *p, long x, long y)
@@ -7445,7 +7447,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PlaneCode
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 641.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 660.
 
 ```c
 static UWORD16 ZBuffer_PlaneCode(unsigned long z)
@@ -7473,7 +7475,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_EdgeRun
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 782.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 828.
 
 ```c
 static void ZBuffer_EdgeRun(void)
@@ -7649,7 +7651,7 @@ Appels internes directs : [ZBuffer_QuantizeAtScale](arbre_appels.html#fn-ZBuffer
 
 ### ZBuffer_RenderCore
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1255.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1301.
 
 ```c
 static void ZBuffer_RenderCore(Model3D* model, int biased)
@@ -7745,7 +7747,7 @@ Appels internes directs : [ZBuffer_FreeVertices](arbre_appels.html#fn-ZBuffer_Fr
 
 ### ZBuffer_SetEdgeFlags
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 733.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 779.
 
 ```c
 void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count)
@@ -7773,7 +7775,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_SetPlane
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 542.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 547.
 
 ```c
 static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge, float code_bias)
@@ -7785,15 +7787,15 @@ Préparer un plan affine de codes Z dans le repère écran.
 
 **Paramètres :**
 
-[entrée] vtx/faces : coordonnées et plans observateur à jour ; f valide. zsrc : codes des sommets pour le repli dégénéré ; nudge : rapprochement en codes ; code_bias : biais déjà converti en codes, nul sans rapprochement.
+[entrée] vtx/faces : coordonnées et plans observateur à jour ; f valide. [entrée] zsrc : codes des sommets pour les bornes et le repli ; nudge en codes. [entrée] code_bias : biais déjà converti en codes, nul sans rapprochement.
 
 **Retour :**
 
-Aucun ; écrit *p, avec pan et gradients à douze bits fractionnaires.
+Aucun ; écrit le plan *p, avec pan et gradients à douze bits fractionnaires.
 
 **Fonctionnement :**
 
-Réutilise le plan observateur de Newell calculé par calculateFaceDepths : pour le rayon écran (u,v,1), 1/z = -(a*u+b*v+c)/d. Les coordonnées projetées arrondies servent uniquement à choisir l’ancrage, jamais à reconstruire les gradients. Un plan passant par l’observateur ou une projection non positive conserve la profondeur constante de repli. Le biais et la quantification sont appliqués après le calcul du plan. Les coefficients conservent leur échelle entière commune, qui se simplifie dans les rapports : les conversions intermédiaires en double et les divisions par 65536 sont supprimées. L’inverse de projection et le biais en codes sont préparés une fois par vue ; il reste une division flottante par face.
+Réutilise le plan de Newell calculé par calculateFaceDepths. Pour le rayon écran (u,v,1), 1/z = -(a*u+b*v+c)/d ; cette fonction est affine avant quantification. Les coordonnées arrondies des sommets servent uniquement à choisir l'ancrage, jamais à reconstruire les gradients. Un plan nul ou passant par l'observateur conserve la profondeur constante de repli. Les quatre coefficients ont la même échelle : elle se simplifie dans leurs rapports. Évite donc les conversions intermédiaires en double et les divisions par 65536 ; l'inverse de projection est préparé par vue. Mémorise aussi les codes minimal et maximal des sommets, élargis de deux unités pour les arrondis. Le remplissage rejette les extrapolations hors de cet intervalle physique, notamment sur une face presque de profil.
 
 Appels internes directs : aucun repéré.
 
