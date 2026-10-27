@@ -1,0 +1,65 @@
+[
+  {
+    "model": "a",
+    "fast_calls": 1,
+    "candidates": 244,
+    "plane_calls": 244,
+    "rejected_bytes": 0
+  },
+  {
+    "model": "gear2",
+    "fast_calls": 1,
+    "candidates": 1267,
+    "plane_calls": 1267,
+    "rejected_bytes": 0
+  },
+  {
+    "model": "monkey",
+    "fast_calls": 1,
+    "candidates": 1630,
+    "plane_calls": 1630,
+    "rejected_bytes": 0
+  },
+  {
+    "model": "other01",
+    "fast_calls": 1,
+    "candidates": 626,
+    "plane_calls": 626,
+    "rejected_bytes": 0
+  },
+  {
+    "model": "other03",
+    "fast_calls": 1,
+    "candidates": 1214,
+    "plane_calls": 1214,
+    "rejected_bytes": 0
+  },
+  {
+    "model": "ring",
+    "fast_calls": 1,
+    "candidates": 903,
+    "plane_calls": 903,
+    "rejected_bytes": 0
+  },
+  {
+    "model": "star",
+    "fast_calls": 1,
+    "candidates": 931,
+    "plane_calls": 931,
+    "rejected_bytes": 0
+  },
+  {
+    "model": "stool",
+    "fast_calls": 1,
+    "candidates": 300,
+    "plane_calls": 300,
+    "rejected_bytes": 0
+  },
+  {
+    "model": "tore",
+    "fast_calls": 1,
+    "candidates": 481,
+    "plane_calls": 481,
+    "rejected_bytes": 0
+  }
+]

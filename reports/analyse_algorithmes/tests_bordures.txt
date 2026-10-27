@@ -1,0 +1,10 @@
+reversed_shared_edge
+y=0 forward=10 reverse=10
+y=1 forward=8 reverse=7
+y=2 forward=4 reverse=3
+bridge_visibility
+stored=65535 edge=30000 drawn=0
+stored=30001 edge=30000 drawn=0
+stored=30000 edge=30000 drawn=1
+stored=29999 edge=30000 drawn=1
+stored=29998 edge=30000 drawn=0

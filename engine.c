@@ -534,6 +534,85 @@ int loadModel3D(Model3D* model, const char* filename) {
 }
 /*
  * ----------------------------------------------------------------------------
+ *  compute_auto_fit
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Calculer la distance et l'échelle suggérées pour la vue initiale.
+ *
+ *  Paramètres :
+ *    [entrée] vtx : sommets déjà centrés ; vertex_count : nombre positif.
+ *    [entrée] max_dim : plus grande dimension objet en 16.16.
+ *    [sortie] owner : distance, projection suggérée et drapeau auto_fit_ready.
+ *
+ *  Retour :
+ *    Aucun ; ne modifie ni les coordonnées ni les paramètres de la vue active.
+ *
+ *  Fonctionnement :
+ *    Distance de trois dimensions maximales, vue 30°/20°, marge de 90 %.
+ *    Réutilise les produits fixes rapides et simplifie l'échelle commune des
+ *    rapports de projection. Appelée par readVertices lors du chargement.
+ *
+ * ----------------------------------------------------------------------------
+ */
+static void compute_auto_fit(VertexArrays3D *vtx, int vertex_count,
+                             Fixed32 max_dim, Model3D *owner)
+{
+    owner->auto_suggested_distance = fixed_mul32_fast(max_dim, INT_TO_FIXED(3));
+
+    /* Projeter provisoirement les sommets à la vue initiale pour mesurer
+     * leur emprise. Les produits 16.16 réutilisent le noyau rapide existant,
+     * avec le même décalage et la même troncature que FIXED_MUL_64.
+     */
+    int ah = 30, av = 20;
+    Fixed32 cos_h = cos_deg_int(ah), sin_h = sin_deg_int(ah);
+    Fixed32 cos_v = cos_deg_int(av), sin_v = sin_deg_int(av);
+    const Fixed32 cos_h_cos_v = fixed_mul32_fast(cos_h, cos_v);
+    const Fixed32 sin_h_cos_v = fixed_mul32_fast(sin_h, cos_v);
+    const Fixed32 cos_h_sin_v = fixed_mul32_fast(cos_h, sin_v);
+    const Fixed32 sin_h_sin_v = fixed_mul32_fast(sin_h, sin_v);
+    float pxmin = 1e30f, pxmax = -1e30f, pymin = 1e30f, pymax = -1e30f;
+    for (int i = 0; i < vertex_count; ++i) {
+        Fixed32 x = vtx->x[i]; Fixed32 y = vtx->y[i]; Fixed32 z = vtx->z[i];
+        Fixed32 term1 = fixed_mul32_fast(x, cos_h_cos_v);
+        Fixed32 term2 = fixed_mul32_fast(y, sin_h_cos_v);
+        Fixed32 term3 = fixed_mul32_fast(z, sin_v);
+        Fixed32 zo = FIXED_ADD(FIXED_SUB(FIXED_SUB(FIXED_NEG(term1), term2), term3), owner->auto_suggested_distance);
+        if (zo > 0) {
+            Fixed32 xo = FIXED_ADD(FIXED_NEG(fixed_mul32_fast(x, sin_h)), fixed_mul32_fast(y, cos_h));
+            Fixed32 yo = FIXED_ADD(FIXED_SUB(FIXED_NEG(fixed_mul32_fast(x, cos_h_sin_v)), fixed_mul32_fast(y, sin_h_sin_v)), fixed_mul32_fast(z, cos_v));
+            /* L'échelle 16.16 s'annule dans xo/zo et yo/zo : ne pas
+             * diviser les quatre conversions par 65536. Garder les deux
+             * divisions finales, sans approximation par un inverse partagé.
+             */
+            float zo_float = (float)zo;
+            float px = (float)xo / zo_float;
+            float py = (float)yo / zo_float;
+            if (px < pxmin) pxmin = px;
+            if (px > pxmax) pxmax = px;
+            if (py < pymin) pymin = py;
+            if (py > pymax) pymax = py;
+        }
+    }
+
+    /* Choisir l'échelle qui tient dans 90 % de la largeur et de la
+     * hauteur disponibles.
+     */
+    float margin = 0.9f;
+    float winw = (float)(CENTRE_X * 2);
+    float winh = (float)(CENTRE_Y * 2);
+    float s = 100.0f;
+    if (pxmax > pxmin && pymax > pymin) {
+        float s1 = (winw * margin) / (pxmax - pxmin);
+        float s2 = (winh * margin) / (pymax - pymin);
+        s = (s1 < s2) ? s1 : s2;
+    }
+    owner->auto_suggested_proj_scale = FLOAT_TO_FIXED(s);
+    owner->auto_fit_ready = 1;
+}
+
+/*
+ * ----------------------------------------------------------------------------
  *  readVertices
  * ----------------------------------------------------------------------------
  *
@@ -556,7 +635,10 @@ int loadModel3D(Model3D* model, const char* filename) {
  *  Fonctionnement :
  *    Les axes OBJ y et z sont échangés à l'import. L'ajustement utilise la
  *    vue 30°/20°, une distance de trois fois la dimension maximale et une
- *    marge écran de 90 %. Ne lit ni normales ni coordonnées de texture.
+ *    marge écran de 90 %. Les produits utilisent fixed_mul32_fast ; les
+ *    rapports de projection simplifient l'échelle 16.16 commune avant les
+ *    divisions flottantes. La progression reste affichée tous les dix sommets.
+ *    Ne lit ni normales ni coordonnées de texture.
  *
  * ----------------------------------------------------------------------------
  */
@@ -636,55 +718,13 @@ int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Mo
         if (dy > max_dim) max_dim = dy;
         if (dz > max_dim) max_dim = dz;
 
-        owner->auto_suggested_distance = FIXED_MUL_64(max_dim, INT_TO_FIXED(3));
-
-        /* Projeter provisoirement les sommets à la vue initiale pour mesurer
-         * leur emprise.
-         */
-        int ah = 30, av = 20, aw = 0;
-        Fixed32 cos_h = cos_deg_int(ah), sin_h = sin_deg_int(ah);
-        Fixed32 cos_v = cos_deg_int(av), sin_v = sin_deg_int(av);
-        const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
-        const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
-        const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
-        const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
-        float pxmin = 1e30f, pxmax = -1e30f, pymin = 1e30f, pymax = -1e30f;
-        for (int i = 0; i < vertex_count; ++i) {
-            Fixed32 x = vtx->x[i]; Fixed32 y = vtx->y[i]; Fixed32 z = vtx->z[i];
-            Fixed32 term1 = FIXED_MUL_64(x, cos_h_cos_v);
-            Fixed32 term2 = FIXED_MUL_64(y, sin_h_cos_v);
-            Fixed32 term3 = FIXED_MUL_64(z, sin_v);
-            Fixed32 zo = FIXED_ADD(FIXED_SUB(FIXED_SUB(FIXED_NEG(term1), term2), term3), owner->auto_suggested_distance);
-            if (zo > 0) {
-                Fixed32 xo = FIXED_ADD(FIXED_NEG(FIXED_MUL_64(x, sin_h)), FIXED_MUL_64(y, cos_h));
-                Fixed32 yo = FIXED_ADD(FIXED_SUB(FIXED_NEG(FIXED_MUL_64(x, cos_h_sin_v)), FIXED_MUL_64(y, sin_h_sin_v)), FIXED_MUL_64(z, cos_v));
-                float px = FIXED_TO_FLOAT(xo) / FIXED_TO_FLOAT(zo);
-                float py = FIXED_TO_FLOAT(yo) / FIXED_TO_FLOAT(zo);
-                if (px < pxmin) pxmin = px;
-                if (px > pxmax) pxmax = px;
-                if (py < pymin) pymin = py;
-                if (py > pymax) pymax = py;
-            }
-        }
-
-        /* Choisir l'échelle qui tient dans 90 % de la largeur et de la
-         * hauteur disponibles.
-         */
-        float margin = 0.9f;
-        float winw = (float)(CENTRE_X * 2);
-        float winh = (float)(CENTRE_Y * 2);
-        float s = 100.0f;
-        if (pxmax > pxmin && pymax > pymin) {
-            float s1 = (winw * margin) / (pxmax - pxmin);
-            float s2 = (winh * margin) / (pymax - pymin);
-            s = (s1 < s2) ? s1 : s2;
-        }
-        owner->auto_suggested_proj_scale = FLOAT_TO_FIXED(s);
-        owner->auto_fit_ready = 1;
+        compute_auto_fit(vtx, vertex_count, max_dim, owner);
     }
 
     return vertex_count;
 }
+
+
 /*
  * ----------------------------------------------------------------------------
  *  readFaces_model
@@ -4335,8 +4375,6 @@ segment "ordering";
 segment "overlap";
 
 
-
-
 /*
  * ----------------------------------------------------------------------------
  *  evaluate_pair_tests
@@ -7331,8 +7369,6 @@ static int pair_order_relation(Model3D* model, int f1, int f2) {
 
 
 
-
-
 /*
  * ----------------------------------------------------------------------------
  *  geo_face_order
@@ -8274,8 +8310,6 @@ static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd,
         }
     }
 }
-
-
 
 
 /*

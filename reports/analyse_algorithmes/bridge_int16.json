@@ -1,0 +1,20 @@
+[
+  {
+    "edge": 65534,
+    "stored": 0,
+    "difference_int16": -2,
+    "accepted": true
+  },
+  {
+    "edge": 50000,
+    "stored": 1000,
+    "difference_int16": -16536,
+    "accepted": true
+  },
+  {
+    "edge": 30000,
+    "stored": 29999,
+    "difference_int16": 1,
+    "accepted": true
+  }
+]

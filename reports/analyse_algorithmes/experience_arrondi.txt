@@ -1,0 +1,1 @@
+5000 reversed edges, 370691 visible scanline samples: old disagreements=366165; absolute-coordinate experiment=0. Depth preparation unchanged.

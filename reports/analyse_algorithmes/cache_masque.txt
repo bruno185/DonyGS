@@ -1,0 +1,1 @@
+PASS: modulo versus mask: 600000 mixed operations, all 3 capacities, reverse relations and final cache contents identical.

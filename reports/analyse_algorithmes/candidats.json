@@ -1,0 +1,92 @@
+[
+  {
+    "model": "a",
+    "vertices": 79,
+    "faces": 67,
+    "z_candidates": 830,
+    "xyz_bbox_candidates": 244,
+    "max_active": 19,
+    "capacity_needed": 1024,
+    "cache4096_exceeded": false
+  },
+  {
+    "model": "gear2.obj",
+    "vertices": 599,
+    "faces": 452,
+    "z_candidates": 18490,
+    "xyz_bbox_candidates": 1267,
+    "max_active": 77,
+    "capacity_needed": 32768,
+    "cache4096_exceeded": true
+  },
+  {
+    "model": "other03.obj",
+    "vertices": 642,
+    "faces": 640,
+    "z_candidates": 30163,
+    "xyz_bbox_candidates": 1214,
+    "max_active": 65,
+    "capacity_needed": 32768,
+    "cache4096_exceeded": true
+  },
+  {
+    "model": "ring.obj",
+    "vertices": 384,
+    "faces": 384,
+    "z_candidates": 12378,
+    "xyz_bbox_candidates": 903,
+    "max_active": 49,
+    "capacity_needed": 16384,
+    "cache4096_exceeded": true
+  },
+  {
+    "model": "star.obj",
+    "vertices": 152,
+    "faces": 150,
+    "z_candidates": 4146,
+    "xyz_bbox_candidates": 931,
+    "max_active": 43,
+    "capacity_needed": 8192,
+    "cache4096_exceeded": true
+  },
+  {
+    "model": "other01.obj",
+    "vertices": 258,
+    "faces": 256,
+    "z_candidates": 6585,
+    "xyz_bbox_candidates": 626,
+    "max_active": 34,
+    "capacity_needed": 8192,
+    "cache4096_exceeded": true
+  },
+  {
+    "model": "monkey.obj",
+    "vertices": 507,
+    "faces": 500,
+    "z_candidates": 20897,
+    "xyz_bbox_candidates": 1630,
+    "max_active": 60,
+    "capacity_needed": 32768,
+    "cache4096_exceeded": true
+  },
+  {
+    "model": "stool.obj",
+    "vertices": 234,
+    "faces": 117,
+    "z_candidates": 2280,
+    "xyz_bbox_candidates": 300,
+    "max_active": 31,
+    "capacity_needed": 4096,
+    "cache4096_exceeded": false
+  },
+  {
+    "model": "tore.obj",
+    "vertices": 192,
+    "faces": 192,
+    "z_candidates": 4578,
+    "xyz_bbox_candidates": 481,
+    "max_active": 33,
+    "capacity_needed": 8192,
+    "cache4096_exceeded": true
+  }
+]

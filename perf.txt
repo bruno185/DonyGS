@@ -141,6 +141,17 @@ other03 :
 
 
 
-
+----------------------
+After optim.
+1 : 14
+2 : 63
+3 : 147
+4 : 63
+5 : 118
+6 : 59
+7 : 89
+ZB full on screen : 109
+ZB full off screen : 90 (mais bordures en pointillé)
+ZB scan : 55 (mais bordures en pointillé)
 
 

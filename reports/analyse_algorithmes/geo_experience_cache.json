@@ -1,0 +1,113 @@
+[
+  {
+    "model": "gear2",
+    "hash8": {
+      "passes": 156,
+      "adjacent_visits": 58044,
+      "find_calls": 58044,
+      "find_probes": 288955,
+      "plane_calls": 37105,
+      "insert_probes": 256984,
+      "swaps": 18051,
+      "swaps_without_bbox_overlap": 18014,
+      "hits": 22976,
+      "ambiguous_plane_pairs": 1470,
+      "potential_ray_calls": 1333,
+      "probe_limit_misses": 30972,
+      "insert_drops": 30972,
+      "distinct_plane_pairs": 18213,
+      "cache_occupied": 4096,
+      "safety_limit_hit": 0
+    },
+    "seen_without_eviction": {
+      "passes": 154,
+      "adjacent_visits": 57668,
+      "find_calls": 57668,
+      "find_probes": 57668,
+      "plane_calls": 17838,
+      "insert_probes": 17726,
+      "swaps": 17275,
+      "swaps_without_bbox_overlap": 17241,
+      "hits": 39942,
+      "ambiguous_plane_pairs": 34,
+      "potential_ray_calls": 26,
+      "distinct_plane_pairs": 17838,
+      "cache_occupied": 17726,
+      "safety_limit_hit": 0
+    }
+  },
+  {
+    "model": "other03",
+    "hash8": {
+      "passes": 151,
+      "adjacent_visits": 82441,
+      "find_calls": 82441,
+      "find_probes": 444236,
+      "plane_calls": 57479,
+      "insert_probes": 393605,
+      "swaps": 21549,
+      "swaps_without_bbox_overlap": 21171,
+      "ambiguous_plane_pairs": 3479,
+      "hits": 30350,
+      "probe_limit_misses": 47995,
+      "potential_ray_calls": 1754,
+      "insert_drops": 47995,
+      "distinct_plane_pairs": 19780,
+      "cache_occupied": 4096,
+      "safety_limit_hit": 0
+    },
+    "seen_without_eviction": {
+      "passes": 88,
+      "adjacent_visits": 52389,
+      "find_calls": 52389,
+      "find_probes": 52389,
+      "plane_calls": 15163,
+      "insert_probes": 14993,
+      "swaps": 14354,
+      "swaps_without_bbox_overlap": 14240,
+      "ambiguous_plane_pairs": 61,
+      "hits": 37396,
+      "potential_ray_calls": 38,
+      "distinct_plane_pairs": 15163,
+      "cache_occupied": 14993,
+      "safety_limit_hit": 0
+    }
+  },
+  {
+    "model": "ring",
+    "hash8": {
+      "passes": 19,
+      "adjacent_visits": 6960,
+      "find_calls": 6960,
+      "find_probes": 9253,
+      "plane_calls": 1845,
+      "swaps": 1276,
+      "insert_probes": 2273,
+      "ambiguous_plane_pairs": 69,
+      "potential_ray_calls": 35,
+      "swaps_without_bbox_overlap": 1227,
+      "hits": 5302,
+      "probe_limit_misses": 2,
+      "insert_drops": 2,
+      "distinct_plane_pairs": 1845,
+      "cache_occupied": 1656,
+      "safety_limit_hit": 0
+    },
+    "seen_without_eviction": {
+      "passes": 19,
+      "adjacent_visits": 6960,
+      "find_calls": 6960,
+      "find_probes": 6960,
+      "plane_calls": 1845,
+      "swaps": 1276,
+      "insert_probes": 1658,
+      "ambiguous_plane_pairs": 69,
+      "potential_ray_calls": 35,
+      "swaps_without_bbox_overlap": 1227,
+      "hits": 5302,
+      "distinct_plane_pairs": 1845,
+      "cache_occupied": 1658,
+      "safety_limit_hit": 0
+    }
+  }
+]

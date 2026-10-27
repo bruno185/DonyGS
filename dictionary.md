@@ -409,6 +409,7 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [rch_unpatch_pair](#fn-rch_unpatch_pair) — `engine.c` : Restaurer l'état temporairement remplacé par rch_patch_pair_at_scale.
 - [readFaces_model](#fn-readFaces_model) — `engine.c` : Lire les lignes OBJ « f » dans le buffer compact des faces.
 - [ReadPalette](#fn-ReadPalette) — `engine.c` : Lire seize mots de couleur à partir de l'adresse calculée pour une palette.
+- [compute_auto_fit](#fn-compute_auto_fit) — `engine.c` : Calculer la distance et l'échelle suggérées pour la vue initiale.
 - [readVertices](#fn-readVertices) — `engine.c` : Lire les lignes OBJ « v x y z », centrer la géométrie et proposer une vue.
 - [remove_duplicates](#fn-remove_duplicates) — `engine.c` : Retirer toutes les répétitions d'identifiants en conservant leur premier ordre.
 - [renderModelFullscreenZBuffer](#fn-renderModelFullscreenZBuffer) — `zbuffer_fullscreen.c` : Choisir la variante de rendu public selon le back-face culling.
@@ -482,13 +483,14 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [ZBuffer_SortScanHits](#fn-ZBuffer_SortScanHits) — `zbuffer_common.c` : Ordonner les intersections quantifiées d’un span.
 - [ZBuffer_SpanRun](#fn-ZBuffer_SpanRun) — `zbuffer_common.c` : Dessiner un span préclippé avec test Z strict dans un noyau 65C816.
 
+
 ## Contrats des fonctions
 
 <a id="fn-add_vertex"></a>
 
 ### add_vertex
 
-Définition : [engine.c](engine.c), ligne 1644.
+Définition : [engine.c](engine.c), ligne 1684.
 
 ```c
 static int add_vertex(Model3D* model, Fixed32 x, Fixed32 y, Fixed32 z)
@@ -520,7 +522,7 @@ Appels internes directs : [fractional_projection_cache_invalidate](arbre_appels.
 
 ### applyPalette
 
-Définition : [engine.c](engine.c), ligne 6263.
+Définition : [engine.c](engine.c), ligne 6301.
 
 ```c
 void applyPalette(int palette_num)
@@ -580,7 +582,7 @@ Appels internes directs : [calculateFaceDepths](arbre_appels.html#fn-calculateFa
 
 ### calculateFaceDepths
 
-Définition : [engine.c](engine.c), ligne 4929.
+Définition : [engine.c](engine.c), ligne 4967.
 
 ```c
 void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count)
@@ -612,7 +614,7 @@ Appels internes directs : [FaceDepth_CentroidCoordinate](arbre_appels.html#fn-Fa
 
 ### check_intersect
 
-Définition : [engine.c](engine.c), ligne 856.
+Définition : [engine.c](engine.c), ligne 896.
 
 ```c
 static void check_intersect(Model3D* model)
@@ -644,7 +646,7 @@ Appels internes directs : [compute_face_bboxes3D](arbre_appels.html#fn-compute_f
 
 ### cleanup_list
 
-Définition : [engine.c](engine.c), ligne 1686.
+Définition : [engine.c](engine.c), ligne 1726.
 
 ```c
 static void cleanup_list(int *arr, int *n)
@@ -672,7 +674,7 @@ Appels internes directs : aucun repéré.
 
 ### cmp_faces_by_zmean
 
-Définition : [engine.c](engine.c), ligne 2156.
+Définition : [engine.c](engine.c), ligne 2196.
 
 ```c
 static int cmp_faces_by_zmean(const void* pa, const void* pb)
@@ -736,7 +738,7 @@ Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [dr
 
 ### compare_faces_diagnostic
 
-Définition : [engine.c](engine.c), ligne 8089.
+Définition : [engine.c](engine.c), ligne 8125.
 
 ```c
 static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out)
@@ -772,7 +774,7 @@ Appels internes directs : [compute_bbox_intersection](arbre_appels.html#fn-compu
 
 ### compute2DFromObserver
 
-Définition : [engine.c](engine.c), ligne 5122.
+Définition : [engine.c](engine.c), ligne 5160.
 
 ```c
 void compute2DFromObserver(Model3D* model, int angle_w)
@@ -870,7 +872,7 @@ Appels internes directs : [compute_bbox_intersection](arbre_appels.html#fn-compu
 
 ### compute_face_bboxes3D
 
-Définition : [engine.c](engine.c), ligne 1911.
+Définition : [engine.c](engine.c), ligne 1951.
 
 ```c
 static void compute_face_bboxes3D(Model3D* model)
@@ -898,7 +900,7 @@ Appels internes directs : aucun repéré.
 
 ### compute_face_plane
 
-Définition : [engine.c](engine.c), ligne 1150.
+Définition : [engine.c](engine.c), ligne 1190.
 
 ```c
 static void compute_face_plane(Model3D* model, int fidx, double *a, double *b, double *c, double *d, int coordinate_mode)
@@ -1124,7 +1126,7 @@ Appels internes directs : aucun repéré.
 
 ### computeOrientationShading
 
-Définition : [engine.c](engine.c), ligne 6429.
+Définition : [engine.c](engine.c), ligne 6467.
 
 ```c
 static void computeOrientationShading(Model3D* model)
@@ -1184,7 +1186,7 @@ Appels internes directs : aucun repéré.
 
 ### count_edge_crossings
 
-Définition : [engine.c](engine.c), ligne 1283.
+Définition : [engine.c](engine.c), ligne 1323.
 
 ```c
 static int count_edge_crossings(Model3D* model, int ei, int fj)
@@ -1276,7 +1278,7 @@ Appels internes directs : [fractional_projection_cache_release](arbre_appels.htm
 
 ### display_model_face_ids
 
-Définition : [engine.c](engine.c), ligne 6135.
+Définition : [engine.c](engine.c), ligne 6173.
 
 ```c
 void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename)
@@ -1310,7 +1312,7 @@ Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbr
 
 ### DoColor
 
-Définition : [engine.c](engine.c), ligne 6337.
+Définition : [engine.c](engine.c), ligne 6375.
 
 ```c
 void DoColor()
@@ -1434,7 +1436,7 @@ Appels internes directs : aucun repéré.
 
 ### DoText
 
-Définition : [engine.c](engine.c), ligne 8619.
+Définition : [engine.c](engine.c), ligne 8653.
 
 ```c
 void DoText()
@@ -1490,7 +1492,7 @@ Appels internes directs : [getSquareRect](arbre_appels.html#fn-getSquareRect).
 
 ### drawFace
 
-Définition : [engine.c](engine.c), ligne 5673.
+Définition : [engine.c](engine.c), ligne 5711.
 
 ```c
 void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index)
@@ -1530,7 +1532,7 @@ Appels internes directs : aucun repéré.
 
 ### drawFaceIndex
 
-Définition : [engine.c](engine.c), ligne 5810.
+Définition : [engine.c](engine.c), ligne 5848.
 
 ```c
 void drawFaceIndex(Model3D* model, int face_id)
@@ -1618,7 +1620,7 @@ Appels internes directs : aucun repéré.
 
 ### drawPolygons
 
-Définition : [engine.c](engine.c), ligne 5417.
+Définition : [engine.c](engine.c), ligne 5455.
 
 ```c
 void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)
@@ -1654,7 +1656,7 @@ Appels internes directs : aucun repéré.
 
 ### drawPolygons_jitter
 
-Définition : [engine.c](engine.c), ligne 5604.
+Définition : [engine.c](engine.c), ligne 5642.
 
 ```c
 void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)
@@ -1778,7 +1780,7 @@ Appels internes directs : [getSquareRect](arbre_appels.html#fn-getSquareRect).
 
 ### dump_compare_results_to_file
 
-Définition : [engine.c](engine.c), ligne 8046.
+Définition : [engine.c](engine.c), ligne 8082.
 
 ```c
 static void dump_compare_results_to_file(const CompareFacesResult *out, int f1, int f2)
@@ -1806,7 +1808,7 @@ Appels internes directs : aucun repéré.
 
 ### dumpFace2DCoordinates
 
-Définition : [engine.c](engine.c), ligne 8427.
+Définition : [engine.c](engine.c), ligne 8461.
 
 ```c
 static void dumpFace2DCoordinates(Model3D* model, const char* txt_filename)
@@ -1834,7 +1836,7 @@ Appels internes directs : aucun repéré.
 
 ### dumpFaceEquationsCSV
 
-Définition : [engine.c](engine.c), ligne 8303.
+Définition : [engine.c](engine.c), ligne 8337.
 
 ```c
 void dumpFaceEquationsCSV(Model3D* model, const char* csv_filename, int alt_format)
@@ -1862,7 +1864,7 @@ Appels internes directs : aucun repéré.
 
 ### dumpSortedFaceIndices
 
-Définition : [engine.c](engine.c), ligne 8473.
+Définition : [engine.c](engine.c), ligne 8507.
 
 ```c
 static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename)
@@ -1890,7 +1892,7 @@ Appels internes directs : aucun repéré.
 
 ### edge_crosses_interior
 
-Définition : [engine.c](engine.c), ligne 1058.
+Définition : [engine.c](engine.c), ligne 1098.
 
 ```c
 static int edge_crosses_interior(Model3D* model, int ei, int fj)
@@ -1922,7 +1924,7 @@ Appels internes directs : [compute_face_plane](arbre_appels.html#fn-compute_face
 
 ### encodePaletteColor
 
-Définition : [declare.c](declare.c), ligne 555.
+Définition : [declare.c](declare.c), ligne 557.
 
 ```c
 static GS_Color encodePaletteColor(int r, int g, int b)
@@ -1950,7 +1952,7 @@ Appels internes directs : aucun repéré.
 
 ### evaluate_pair_tests
 
-Définition : [engine.c](engine.c), ligne 4371.
+Définition : [engine.c](engine.c), ligne 4409.
 
 ```c
 static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7])
@@ -2118,7 +2120,7 @@ Appels internes directs : aucun repéré.
 
 ### faces_share_vertex_or_edge
 
-Définition : [engine.c](engine.c), ligne 1016.
+Définition : [engine.c](engine.c), ligne 1056.
 
 ```c
 static int faces_share_vertex_or_edge(FaceArrays3D* faces, int i, int j)
@@ -2174,7 +2176,7 @@ Appels internes directs : aucun repéré.
 
 ### fixed_mul32_fast
 
-Définition : [engine.c](engine.c), ligne 2603.
+Définition : [engine.c](engine.c), ligne 2643.
 
 ```c
 static Fixed32 fixed_mul32_fast(Fixed32 a,Fixed32 b)
@@ -2202,7 +2204,7 @@ Appels internes directs : [GeoV3_Mul32x32SetInputs](arbre_appels.html#fn-GeoV3_M
 
 ### fixed_product32_fast
 
-Définition : [engine.c](engine.c), ligne 2638.
+Définition : [engine.c](engine.c), ligne 2678.
 
 ```c
 static Fixed64 fixed_product32_fast(Fixed32 a,Fixed32 b)
@@ -2230,7 +2232,7 @@ Appels internes directs : [GeoV3_Mul32x32SetInputs](arbre_appels.html#fn-GeoV3_M
 
 ### fixed_product64x32_fast
 
-Définition : [engine.c](engine.c), ligne 2672.
+Définition : [engine.c](engine.c), ligne 2712.
 
 ```c
 static Fixed64 fixed_product64x32_fast(Fixed64 a,Fixed32 b)
@@ -2406,7 +2408,7 @@ Appels internes directs : [fractional_projection_cache_invalidate](arbre_appels.
 
 ### frameInconclusivePairs
 
-Définition : [engine.c](engine.c), ligne 5880.
+Définition : [engine.c](engine.c), ligne 5918.
 
 ```c
 void frameInconclusivePairs(Model3D* model)
@@ -2440,7 +2442,7 @@ Appels internes directs : aucun repéré.
 
 ### generate_random_colors
 
-Définition : [engine.c](engine.c), ligne 5991.
+Définition : [engine.c](engine.c), ligne 6029.
 
 ```c
 void generate_random_colors(int face_count)
@@ -2476,7 +2478,7 @@ Appels internes directs : aucun repéré.
 
 ### geo_face_order
 
-Définition : [engine.c](engine.c), ligne 7366.
+Définition : [engine.c](engine.c), ligne 7402.
 
 ```c
 static int geo_face_order(Model3D* model, int f1, int f2)
@@ -2508,7 +2510,7 @@ Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometr
 
 ### geometric_face_relation
 
-Définition : [engine.c](engine.c), ligne 2761.
+Définition : [engine.c](engine.c), ligne 2801.
 
 ```c
 static int geometric_face_relation(Model3D* model, int f1, int f2)
@@ -2684,7 +2686,7 @@ Appels internes directs : [GeoV3_ScanCandidates](arbre_appels.html#fn-GeoV3_Scan
 
 ### GeoV3_Mul32x32
 
-Définition : [engine.c](engine.c), ligne 2218.
+Définition : [engine.c](engine.c), ligne 2258.
 
 ```c
 asm void GeoV3_Mul32x32(void)
@@ -2732,7 +2734,7 @@ Appels internes directs : aucun repéré.
 
 ### GeoV3_Mul32x32SetInputs
 
-Définition : [engine.c](engine.c), ligne 2572.
+Définition : [engine.c](engine.c), ligne 2612.
 
 ```c
 static void GeoV3_Mul32x32SetInputs(Fixed32 a, Fixed32 b)
@@ -2760,7 +2762,7 @@ Appels internes directs : [GeoV3_Mul32x32](arbre_appels.html#fn-GeoV3_Mul32x32).
 
 ### GeoV3_MulFixed64Fixed32Shift
 
-Définition : [engine.c](engine.c), ligne 2701.
+Définition : [engine.c](engine.c), ligne 2741.
 
 ```c
 static Fixed64 GeoV3_MulFixed64Fixed32Shift(Fixed64 coefficient, Fixed32 coordinate)
@@ -3018,7 +3020,7 @@ Appels internes directs : aucun repéré.
 
 ### getObserverParams
 
-Définition : [engine.c](engine.c), ligne 5302.
+Définition : [engine.c](engine.c), ligne 5340.
 
 ```c
 void getObserverParams(ObserverParams* params, Model3D* model)
@@ -3084,7 +3086,7 @@ Appels internes directs : aucun repéré.
 
 ### hideFace
 
-Définition : [engine.c](engine.c), ligne 7199.
+Définition : [engine.c](engine.c), ligne 7237.
 
 ```c
 void hideFace(Model3D* model, int face_idx)
@@ -3116,7 +3118,7 @@ Appels internes directs : [ordering_cache_invalidate](arbre_appels.html#fn-order
 
 ### initPalettes
 
-Définition : [engine.c](engine.c), ligne 6300.
+Définition : [engine.c](engine.c), ligne 6338.
 
 ```c
 void initPalettes(void)
@@ -3180,7 +3182,7 @@ Appels internes directs : aucun repéré.
 
 ### inspect_face_pair_ui
 
-Définition : [engine.c](engine.c), ligne 7590.
+Définition : [engine.c](engine.c), ligne 7626.
 
 ```c
 static void inspect_face_pair_ui(Model3D* model)
@@ -3210,7 +3212,7 @@ Appels internes directs : [compare_faces_diagnostic](arbre_appels.html#fn-compar
 
 ### inspect_faces_order
 
-Définition : [engine.c](engine.c), ligne 6488.
+Définition : [engine.c](engine.c), ligne 6526.
 
 ```c
 static void inspect_faces_order(Model3D* model, ObserverParams* params, int inspect_after)
@@ -3244,7 +3246,7 @@ Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [drawFace](arbr
 
 ### inspection_view_begin
 
-Définition : [engine.c](engine.c), ligne 6039.
+Définition : [engine.c](engine.c), ligne 6077.
 
 ```c
 static int inspection_view_begin(Model3D *model, InspectionViewState *state)
@@ -3272,7 +3274,7 @@ Appels internes directs : aucun repéré.
 
 ### inspection_view_end
 
-Définition : [engine.c](engine.c), ligne 6102.
+Définition : [engine.c](engine.c), ligne 6140.
 
 ```c
 static void inspection_view_end(Model3D *model, InspectionViewState *state)
@@ -3300,7 +3302,7 @@ Appels internes directs : [inspection_view_restore](arbre_appels.html#fn-inspect
 
 ### inspection_view_restore
 
-Définition : [engine.c](engine.c), ligne 6073.
+Définition : [engine.c](engine.c), ligne 6111.
 
 ```c
 static void inspection_view_restore(Model3D *model, const InspectionViewState *state)
@@ -3422,7 +3424,7 @@ Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [be
 
 ### move_element_remove_and_insert
 
-Définition : [engine.c](engine.c), ligne 4273.
+Définition : [engine.c](engine.c), ligne 4313.
 
 ```c
 static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx)
@@ -3452,7 +3454,7 @@ Appels internes directs : aucun repéré.
 
 ### move_element_remove_and_insert_pos
 
-Définition : [engine.c](engine.c), ligne 4315.
+Définition : [engine.c](engine.c), ligne 4355.
 
 ```c
 static int move_element_remove_and_insert_pos(int *arr, int n, int from, int insert_idx, int *pos_of_face)
@@ -3512,7 +3514,7 @@ Appels internes directs : aucun repéré.
 
 ### normalizeAutoFitDistanceTo150
 
-Définition : [engine.c](engine.c), ligne 5239.
+Définition : [engine.c](engine.c), ligne 5277.
 
 ```c
 void normalizeAutoFitDistanceTo150(Model3D* model)
@@ -4562,7 +4564,7 @@ Appels internes directs : [ovmax_inside](arbre_appels.html#fn-ovmax_inside).
 
 ### painter_bubble_sort
 
-Définition : [engine.c](engine.c), ligne 2986.
+Définition : [engine.c](engine.c), ligne 3026.
 
 ```c
 void painter_bubble_sort(Model3D* model, int face_count)
@@ -4594,7 +4596,7 @@ Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometr
 
 ### painter_correct
 
-Définition : [engine.c](engine.c), ligne 3989.
+Définition : [engine.c](engine.c), ligne 4029.
 
 ```c
 static int painter_correct(Model3D* model, int face_count, int use_v2)
@@ -4636,7 +4638,7 @@ Appels internes directs : [geo_face_order](arbre_appels.html#fn-geo_face_order),
 
 ### painter_geoV2
 
-Définition : [engine.c](engine.c), ligne 3813.
+Définition : [engine.c](engine.c), ligne 3853.
 
 ```c
 void painter_geoV2(Model3D* model, int face_count)
@@ -4700,7 +4702,7 @@ Appels internes directs : [geov3_run](arbre_appels.html#fn-geov3_run).
 
 ### painter_newell_sancha
 
-Définition : [engine.c](engine.c), ligne 3181.
+Définition : [engine.c](engine.c), ligne 3221.
 
 ```c
 void painter_newell_sancha(Model3D* model, int face_count)
@@ -4734,7 +4736,7 @@ Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometr
 
 ### painter_newell_sancha_fast
 
-Définition : [engine.c](engine.c), ligne 2927.
+Définition : [engine.c](engine.c), ligne 2967.
 
 ```c
 void painter_newell_sancha_fast(Model3D* model, int face_count)
@@ -4768,7 +4770,7 @@ Référence indirecte : `cmp_faces_by_zmean` via `qsort`.
 
 ### pair_cache_create
 
-Définition : [engine.c](engine.c), ligne 3642.
+Définition : [engine.c](engine.c), ligne 3682.
 
 ```c
 static PairCache* pair_cache_create(int capacity)
@@ -4796,7 +4798,7 @@ Appels internes directs : aucun repéré.
 
 ### pair_cache_destroy
 
-Définition : [engine.c](engine.c), ligne 3782.
+Définition : [engine.c](engine.c), ligne 3822.
 
 ```c
 static void pair_cache_destroy(PairCache* c)
@@ -4820,7 +4822,7 @@ Appels internes directs : aucun repéré.
 
 ### pair_cache_find
 
-Définition : [engine.c](engine.c), ligne 3703.
+Définition : [engine.c](engine.c), ligne 3743.
 
 ```c
 static int pair_cache_find(PairCache* c, int f1, int f2)
@@ -4848,7 +4850,7 @@ Appels internes directs : [pair_cache_slot](arbre_appels.html#fn-pair_cache_slot
 
 ### pair_cache_insert
 
-Définition : [engine.c](engine.c), ligne 3744.
+Définition : [engine.c](engine.c), ligne 3784.
 
 ```c
 static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation)
@@ -4880,7 +4882,7 @@ Appels internes directs : [pair_cache_slot](arbre_appels.html#fn-pair_cache_slot
 
 ### pair_cache_slot
 
-Définition : [engine.c](engine.c), ligne 3674.
+Définition : [engine.c](engine.c), ligne 3714.
 
 ```c
 static int pair_cache_slot(PairCache* c, int f1, int f2)
@@ -4908,7 +4910,7 @@ Appels internes directs : aucun repéré.
 
 ### pair_order_relation
 
-Définition : [engine.c](engine.c), ligne 7301.
+Définition : [engine.c](engine.c), ligne 7339.
 
 ```c
 static int pair_order_relation(Model3D* model, int f1, int f2)
@@ -4940,7 +4942,7 @@ Appels internes directs : [geometric_face_relation](arbre_appels.html#fn-geometr
 
 ### paletteGradientColor
 
-Définition : [declare.c](declare.c), ligne 586.
+Définition : [declare.c](declare.c), ligne 588.
 
 ```c
 static GS_Color paletteGradientColor(int palette_num, int index)
@@ -5024,7 +5026,7 @@ Appels internes directs : [on_seg_ll](arbre_appels.html#fn-on_seg_ll), [orient_l
 
 ### poly_signed_area
 
-Définition : [engine.c](engine.c), ligne 1752.
+Définition : [engine.c](engine.c), ligne 1792.
 
 ```c
 static double poly_signed_area(Model3D* model, int *list, int n, double a, double b, double c)
@@ -5052,7 +5054,7 @@ Appels internes directs : aucun repéré.
 
 ### processModelFast
 
-Définition : [engine.c](engine.c), ligne 2000.
+Définition : [engine.c](engine.c), ligne 2040.
 
 ```c
 void processModelFast(Model3D* model, ObserverParams* params, const char* filename)
@@ -5564,7 +5566,7 @@ Appels internes directs : aucun repéré.
 
 ### ray_cast_at
 
-Définition : [engine.c](engine.c), ligne 4497.
+Définition : [engine.c](engine.c), ligne 4535.
 
 ```c
 static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy)
@@ -5592,7 +5594,7 @@ Appels internes directs : [ray_cast_distances](arbre_appels.html#fn-ray_cast_dis
 
 ### ray_cast_at_fractional
 
-Définition : [engine.c](engine.c), ligne 4531.
+Définition : [engine.c](engine.c), ligne 4569.
 
 ```c
 static int ray_cast_at_fractional(Model3D *model, int f1, int f2, double cx, double cy)
@@ -5624,7 +5626,7 @@ Appels internes directs : [ordering_plane](arbre_appels.html#fn-ordering_plane).
 
 ### ray_cast_distances
 
-Définition : [engine.c](engine.c), ligne 4437.
+Définition : [engine.c](engine.c), ligne 4475.
 
 ```c
 static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2)
@@ -5658,7 +5660,7 @@ Appels internes directs : [ordering_plane](arbre_appels.html#fn-ordering_plane).
 
 ### ray_cast_hierarchical
 
-Définition : [engine.c](engine.c), ligne 4841.
+Définition : [engine.c](engine.c), ligne 4879.
 
 ```c
 static int ray_cast_hierarchical(Model3D* model, int f1, int f2)
@@ -5686,7 +5688,7 @@ Appels internes directs : [compute_intersection_centroid_fractional_tryboth](arb
 
 ### ray_cast_hierarchical_impl
 
-Définition : [engine.c](engine.c), ligne 4785.
+Définition : [engine.c](engine.c), ligne 4823.
 
 ```c
 static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)
@@ -5718,7 +5720,7 @@ Appels internes directs : [compute_bbox_intersection_center](arbre_appels.html#f
 
 ### rch_gather_pair_vertex_indices
 
-Définition : [engine.c](engine.c), ligne 4595.
+Définition : [engine.c](engine.c), ligne 4633.
 
 ```c
 static int rch_gather_pair_vertex_indices(FaceArrays3D* faces, int f1, int f2, int* out_idx)
@@ -5750,7 +5752,7 @@ Appels internes directs : aucun repéré.
 
 ### rch_patch_pair_at_scale
 
-Définition : [engine.c](engine.c), ligne 4685.
+Définition : [engine.c](engine.c), ligne 4723.
 
 ```c
 static void rch_patch_pair_at_scale(Model3D* model, int f1, int f2, Fixed32 test_scale, RCHZoomPatch* p)
@@ -5786,7 +5788,7 @@ Appels internes directs : [FIXED_ROUND_TO_INT](arbre_appels.html#fn-FIXED_ROUND_
 
 ### rch_recompute_face_bbox_cache
 
-Définition : [engine.c](engine.c), ligne 4641.
+Définition : [engine.c](engine.c), ligne 4679.
 
 ```c
 static void rch_recompute_face_bbox_cache(Model3D* model, int f)
@@ -5818,7 +5820,7 @@ Appels internes directs : aucun repéré.
 
 ### rch_unpatch_pair
 
-Définition : [engine.c](engine.c), ligne 4746.
+Définition : [engine.c](engine.c), ligne 4784.
 
 ```c
 static void rch_unpatch_pair(Model3D* model, RCHZoomPatch* p, int f1, int f2)
@@ -5848,7 +5850,7 @@ Appels internes directs : aucun repéré.
 
 ### readFaces_model
 
-Définition : [engine.c](engine.c), ligne 717.
+Définition : [engine.c](engine.c), ligne 757.
 
 ```c
 int readFaces_model(const char* filename, Model3D* model)
@@ -5884,7 +5886,7 @@ Appels internes directs : aucun repéré.
 
 ### ReadPalette
 
-Définition : [engine.c](engine.c), ligne 6224.
+Définition : [engine.c](engine.c), ligne 6262.
 
 ```c
 GS_Palette ReadPalette(int palette_num)
@@ -5908,11 +5910,39 @@ Attention : PALETTE_BASE est un pointeur unsigned int ; son addition avec palett
 
 Appels internes directs : aucun repéré.
 
+<a id="fn-compute_auto_fit"></a>
+
+### compute_auto_fit
+
+Définition : [engine.c](engine.c), ligne 558.
+
+```c
+static void compute_auto_fit(VertexArrays3D *vtx, int vertex_count, Fixed32 max_dim, Model3D *owner)
+```
+
+**Rôle :**
+
+Calculer la distance et l'échelle suggérées pour la vue initiale.
+
+**Paramètres :**
+
+[entrée] vtx : sommets déjà centrés ; vertex_count : nombre positif. [entrée] max_dim : plus grande dimension objet en 16.16. [sortie] owner : distance, projection suggérée et drapeau auto_fit_ready.
+
+**Retour :**
+
+Aucun ; ne modifie ni les coordonnées ni les paramètres de la vue active.
+
+**Fonctionnement :**
+
+Distance de trois dimensions maximales, vue 30°/20°, marge de 90 %. Réutilise les produits fixes rapides et simplifie l'échelle commune des rapports de projection. Appelée par readVertices lors du chargement.
+
+Appels internes directs : [cos_deg_int](arbre_appels.html#fn-cos_deg_int), [fixed_mul32_fast](arbre_appels.html#fn-fixed_mul32_fast), [sin_deg_int](arbre_appels.html#fn-sin_deg_int).
+
 <a id="fn-readVertices"></a>
 
 ### readVertices
 
-Définition : [engine.c](engine.c), ligne 563.
+Définition : [engine.c](engine.c), ligne 645.
 
 ```c
 int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Model3D* owner)
@@ -5938,13 +5968,17 @@ vtx->x/y/z et, si owner est fourni, centrage et suggestions d'ajustement.
 
 Les axes OBJ y et z sont échangés à l'import. L'ajustement utilise la vue 30°/20°, une distance de trois fois la dimension maximale et une marge écran de 90 %. Ne lit ni normales ni coordonnées de texture.
 
-Appels internes directs : [cos_deg_int](arbre_appels.html#fn-cos_deg_int), [keypress](arbre_appels.html#fn-keypress), [sin_deg_int](arbre_appels.html#fn-sin_deg_int).
+**Optimisation de l’auto-fit :**
+
+Les produits fixes de l’auto-fit utilisent fixed_mul32_fast avec la même réduction 16.16 que le produit 64 bits précédent. L’échelle commune est simplifiée dans xo/zo et yo/zo : quatre divisions flottantes par 65536 sont supprimées pour chaque sommet devant l’observateur. Les deux divisions finales, les angles 30°/20°, la marge de 90 % et la progression sont conservés.
+
+Appels internes directs : [compute_auto_fit](arbre_appels.html#fn-compute_auto_fit), [keypress](arbre_appels.html#fn-keypress).
 
 <a id="fn-remove_duplicates"></a>
 
 ### remove_duplicates
 
-Définition : [engine.c](engine.c), ligne 1720.
+Définition : [engine.c](engine.c), ligne 1760.
 
 ```c
 static void remove_duplicates(int *arr, int *n)
@@ -6260,7 +6294,7 @@ Appels internes directs : [renderModelScanlineZBuffer_coreV3](arbre_appels.html#
 
 ### reorder_poly
 
-Définition : [engine.c](engine.c), ligne 1813.
+Définition : [engine.c](engine.c), ligne 1853.
 
 ```c
 static void reorder_poly(Model3D* model, int fidx, int *list, int *n)
@@ -6294,7 +6328,7 @@ Appels internes directs : [compute_face_plane](arbre_appels.html#fn-compute_face
 
 ### repair_geov3
 
-Définition : [engine.c](engine.c), ligne 7482.
+Définition : [engine.c](engine.c), ligne 7518.
 
 ```c
 static void repair_geov3(Model3D* model)
@@ -6324,7 +6358,7 @@ Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [geov3_run](arb
 
 ### repair_geov3_confirm
 
-Définition : [engine.c](engine.c), ligne 7410.
+Définition : [engine.c](engine.c), ligne 7446.
 
 ```c
 static int repair_geov3_confirm(Model3D *model, int p, int q, int pos_p, int pos_q, int reason, void *context)
@@ -6354,7 +6388,7 @@ Appels internes directs : [drawFace](arbre_appels.html#fn-drawFace), [drawPolygo
 
 ### restoreAllFaces
 
-Définition : [engine.c](engine.c), ligne 7264.
+Définition : [engine.c](engine.c), ligne 7302.
 
 ```c
 void restoreAllFaces(Model3D* model)
@@ -6382,7 +6416,7 @@ Appels internes directs : [ordering_cache_invalidate](arbre_appels.html#fn-order
 
 ### restoreFace
 
-Définition : [engine.c](engine.c), ligne 7233.
+Définition : [engine.c](engine.c), ligne 7271.
 
 ```c
 void restoreFace(Model3D* model, int face_idx)
@@ -6442,7 +6476,7 @@ Appels internes directs : aucun repéré.
 
 ### reverseFaceVertexOrder
 
-Définition : [engine.c](engine.c), ligne 7142.
+Définition : [engine.c](engine.c), ligne 7180.
 
 ```c
 static void reverseFaceVertexOrder(Model3D* model, int face_idx)
@@ -6474,7 +6508,7 @@ Appels internes directs : [ordering_cache_invalidate](arbre_appels.html#fn-order
 
 ### run_raycast_test
 
-Définition : [engine.c](engine.c), ligne 7556.
+Définition : [engine.c](engine.c), ligne 7592.
 
 ```c
 static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py)
@@ -6502,7 +6536,7 @@ Appels internes directs : [ray_cast_at](arbre_appels.html#fn-ray_cast_at), [ray_
 
 ### saveNextScreenshot
 
-Définition : [engine.c](engine.c), ligne 8729.
+Définition : [engine.c](engine.c), ligne 8763.
 
 ```c
 void saveNextScreenshot(void)
@@ -6566,7 +6600,7 @@ Appels internes directs : aucun repéré.
 
 ### saveSHGRAsRawPic
 
-Définition : [engine.c](engine.c), ligne 8683.
+Définition : [engine.c](engine.c), ligne 8717.
 
 ```c
 void saveSHGRAsRawPic(const char *filename)
@@ -6594,7 +6628,7 @@ Appels internes directs : [setProDOSFileType](arbre_appels.html#fn-setProDOSFile
 
 ### screen2Black
 
-Définition : [engine.c](engine.c), ligne 6389.
+Définition : [engine.c](engine.c), ligne 6427.
 
 ```c
 void screen2Black()
@@ -6750,7 +6784,7 @@ Appels internes directs : aucun repéré.
 
 ### setProDOSFileType
 
-Définition : [engine.c](engine.c), ligne 8645.
+Définition : [engine.c](engine.c), ligne 8679.
 
 ```c
 void setProDOSFileType(const char* filename, int fileType, long auxType)
@@ -6806,7 +6840,7 @@ Appels internes directs : aucun repéré.
 
 ### show_face_normal
 
-Définition : [engine.c](engine.c), ligne 6765.
+Définition : [engine.c](engine.c), ligne 6803.
 
 ```c
 static void show_face_normal(Model3D* model, int target_face)
@@ -6838,7 +6872,7 @@ Appels internes directs : [FIXED_ROUND_TO_INT](arbre_appels.html#fn-FIXED_ROUND_
 
 ### show_help_pager
 
-Définition : [engine.c](engine.c), ligne 8519.
+Définition : [engine.c](engine.c), ligne 8553.
 
 ```c
 static void show_help_pager(void)
@@ -6870,7 +6904,7 @@ Appels internes directs : [DoText](arbre_appels.html#fn-DoText), [getkeypress](a
 
 ### showFace
 
-Définition : [engine.c](engine.c), ligne 6850.
+Définition : [engine.c](engine.c), ligne 6888.
 
 ```c
 void showFace(Model3D* model, ObserverParams* params, const char* filename)
@@ -7050,7 +7084,7 @@ Appels internes directs : [move_element_remove_and_insert](arbre_appels.html#fn-
 
 ### split_face_by_plane
 
-Définition : [engine.c](engine.c), ligne 1395.
+Définition : [engine.c](engine.c), ligne 1435.
 
 ```c
 static int split_face_by_plane(Model3D* model, int f1, int f2, int *out_newverts, int *out_n, int *constraint_verts, int constraint_n, int force_one_edge)
@@ -7084,7 +7118,7 @@ Appels internes directs : [add_vertex](arbre_appels.html#fn-add_vertex), [cleanu
 
 ### strict_inside
 
-Définition : [engine.c](engine.c), ligne 1229.
+Définition : [engine.c](engine.c), ligne 1269.
 
 ```c
 static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_local)
@@ -7112,7 +7146,7 @@ Appels internes directs : [point_in_poly_arrays_int](arbre_appels.html#fn-point_
 
 ### updateFace2DBounds
 
-Définition : [engine.c](engine.c), ligne 5175.
+Définition : [engine.c](engine.c), ligne 5213.
 
 ```c
 static void updateFace2DBounds(Model3D* model)

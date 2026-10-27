@@ -268,6 +268,8 @@ static inline int normalize_deg(int deg) {
 #define MAX_VERTICES            6000
 #define MAX_FACES               6000
 #define MAX_FACE_VERTICES       16
+
+
 #define CENTRE_X                160
 #define CENTRE_Y                100
 #define mode                    320

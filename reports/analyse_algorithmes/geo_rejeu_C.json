@@ -1,0 +1,80 @@
+[
+  {
+    "model": "a",
+    "passes": 22,
+    "adjacent_visits": 1117,
+    "find_calls": 1117,
+    "find_probes": 1182,
+    "insert_probes": 571,
+    "probe_limit_misses": 0,
+    "insert_drops": 0,
+    "swaps": 482,
+    "swaps_without_bbox_overlap": 439,
+    "plane_calls": 565
+  },
+  {
+    "model": "gear2",
+    "passes": 156,
+    "adjacent_visits": 58044,
+    "find_calls": 58044,
+    "find_probes": 288955,
+    "insert_probes": 256984,
+    "probe_limit_misses": 30972,
+    "insert_drops": 30972,
+    "swaps": 18051,
+    "swaps_without_bbox_overlap": 18014,
+    "plane_calls": 37105
+  },
+  {
+    "model": "other03",
+    "passes": 151,
+    "adjacent_visits": 82441,
+    "find_calls": 82441,
+    "find_probes": 444236,
+    "insert_probes": 393605,
+    "probe_limit_misses": 47995,
+    "insert_drops": 47995,
+    "swaps": 21549,
+    "swaps_without_bbox_overlap": 21171,
+    "plane_calls": 57479
+  },
+  {
+    "model": "ring",
+    "passes": 19,
+    "adjacent_visits": 6960,
+    "find_calls": 6960,
+    "find_probes": 9253,
+    "insert_probes": 2273,
+    "probe_limit_misses": 2,
+    "insert_drops": 2,
+    "swaps": 1276,
+    "swaps_without_bbox_overlap": 1227,
+    "plane_calls": 1845
+  },
+  {
+    "model": "star",
+    "passes": 11,
+    "adjacent_visits": 1394,
+    "find_calls": 1394,
+    "find_probes": 1482,
+    "insert_probes": 488,
+    "probe_limit_misses": 0,
+    "insert_drops": 0,
+    "swaps": 308,
+    "swaps_without_bbox_overlap": 269,
+    "plane_calls": 575
+  },
+  {
+    "model": "monkey",
+    "passes": 18,
+    "adjacent_visits": 8347,
+    "find_calls": 8347,
+    "find_probes": 12694,
+    "insert_probes": 2903,
+    "probe_limit_misses": 6,
+    "insert_drops": 6,
+    "swaps": 1440,
+    "swaps_without_bbox_overlap": 1402,
+    "plane_calls": 1982
+  }
+]

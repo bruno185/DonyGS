@@ -1,0 +1,74 @@
+[
+  {
+    "model": "a",
+    "fast_calls": 1,
+    "candidates_if_reached": 830,
+    "plane_calls_if_reached": 244,
+    "rejected_realloc_bytes": 0,
+    "fallback_to_fast": false
+  },
+  {
+    "model": "gear2",
+    "fast_calls": 2,
+    "candidates_if_reached": 0,
+    "plane_calls_if_reached": 0,
+    "rejected_realloc_bytes": 4294836224,
+    "fallback_to_fast": true
+  },
+  {
+    "model": "monkey",
+    "fast_calls": 2,
+    "candidates_if_reached": 0,
+    "plane_calls_if_reached": 0,
+    "rejected_realloc_bytes": 4294836224,
+    "fallback_to_fast": true
+  },
+  {
+    "model": "other01",
+    "fast_calls": 1,
+    "candidates_if_reached": 6585,
+    "plane_calls_if_reached": 626,
+    "rejected_realloc_bytes": 0,
+    "fallback_to_fast": false
+  },
+  {
+    "model": "other03",
+    "fast_calls": 2,
+    "candidates_if_reached": 0,
+    "plane_calls_if_reached": 0,
+    "rejected_realloc_bytes": 4294836224,
+    "fallback_to_fast": true
+  },
+  {
+    "model": "ring",
+    "fast_calls": 1,
+    "candidates_if_reached": 12378,
+    "plane_calls_if_reached": 903,
+    "rejected_realloc_bytes": 0,
+    "fallback_to_fast": false
+  },
+  {
+    "model": "star",
+    "fast_calls": 1,
+    "candidates_if_reached": 4146,
+    "plane_calls_if_reached": 931,
+    "rejected_realloc_bytes": 0,
+    "fallback_to_fast": false
+  },
+  {
+    "model": "stool",
+    "fast_calls": 1,
+    "candidates_if_reached": 2280,
+    "plane_calls_if_reached": 300,
+    "rejected_realloc_bytes": 0,
+    "fallback_to_fast": false
+  },
+  {
+    "model": "tore",
+    "fast_calls": 1,
+    "candidates_if_reached": 4578,
+    "plane_calls_if_reached": 481,
+    "rejected_realloc_bytes": 0,
+    "fallback_to_fast": false
+  }
+]

@@ -214,11 +214,13 @@ Observer-space culling eliminates faces oriented away from the viewer:
 
 1. **Preprocessor Directives**: #pragma optimize 1
 
-2. **Precomputed Tables**: Sine/cosine tables avoid runtime trigonometric calculations
+2. **Precomputed Tables**: Sine/cosine tables avoid runtime trigonometric calculations. Auto-fit reuses the fixed-point multiplication kernel and cancels the shared 16.16 scale in projection ratios, avoiding four floating-point divisions per projected vertex while retaining the existing progress display. The isolated auto-fit benchmark measured a 45–47% reduction in calculation time; its reference calculation and test driver are now archived as disabled code in `old/chutier.c`
 
 3. **Buffer Reuse**: Persistent polygon handles and memory buffers reduce allocations
 
 4. **Shared Kernels and Caches**: Candidate filtering, cached pair/overlap results, fixed-point assembly helpers, and a common Z-buffer span kernel avoid repeated work
+
+The batch CSV benchmark of the ten rendering methods has been archived as disabled code in `old/chutier.c`, together with its 50 KiB limit and repetition settings. It is no longer compiled or mapped to a key. Existing CSV files and analysis reports remain available.
 
 ## User Guide
 

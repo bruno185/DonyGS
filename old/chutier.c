@@ -6230,3 +6230,651 @@ static int show_inspect_faces_with_message(Model3D* model, int f1, int f2, const
     return key;
 }
 #endif
+
+
+/*
+ * ============================================================================
+ *  Archive du benchmark d'auto-fit — 27 octobre 2026
+ * ============================================================================
+ *  Comparaison ancien calcul / calcul optimisé : réduction du temps d'auto-fit
+ *  mesurée entre 45 et 47 %. Lecture du fichier et centrage exclus des mesures.
+ *  Ancienne commande : touche « : », avec saisie du nom du modèle.
+ *  Code désactivé ; dépend de compute_auto_fit et readVertices du moteur actif,
+ *  des types déclarés dans declare.c, de GetTick et de keypress.
+ * ============================================================================
+ */
+#if 0
+/*
+ * ----------------------------------------------------------------------------
+ *  compute_auto_fit_reference
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Conserver le calcul d'auto-fit antérieur pour la comparaison chronométrée.
+ *
+ *  Paramètres :
+ *    [entrée] vtx : sommets centrés ; vertex_count positif ; max_dim en 16.16.
+ *    [sortie] owner : suggestions de distance/projection et drapeau de validité.
+ *
+ *  Retour :
+ *    Aucun ; ne modifie pas les sommets.
+ *
+ *  Fonctionnement :
+ *    Même vue et marge que compute_auto_fit, avec FIXED_MUL_64 et les rapports
+ *    FIXED_TO_FLOAT(xo)/FIXED_TO_FLOAT(zo) d'origine. Réservé au benchmark ;
+ *    le chargement normal utilise uniquement le calcul optimisé.
+ *
+ * ----------------------------------------------------------------------------
+ */
+static void compute_auto_fit_reference(VertexArrays3D *vtx, int vertex_count,
+                                       Fixed32 max_dim, Model3D *owner)
+{
+    owner->auto_suggested_distance = FIXED_MUL_64(max_dim, INT_TO_FIXED(3));
+
+    /* Projeter provisoirement les sommets à la vue initiale pour mesurer
+     * leur emprise, avec les produits 64 bits génériques de référence.
+     */
+    int ah = 30, av = 20;
+    Fixed32 cos_h = cos_deg_int(ah), sin_h = sin_deg_int(ah);
+    Fixed32 cos_v = cos_deg_int(av), sin_v = sin_deg_int(av);
+    const Fixed32 cos_h_cos_v = FIXED_MUL_64(cos_h, cos_v);
+    const Fixed32 sin_h_cos_v = FIXED_MUL_64(sin_h, cos_v);
+    const Fixed32 cos_h_sin_v = FIXED_MUL_64(cos_h, sin_v);
+    const Fixed32 sin_h_sin_v = FIXED_MUL_64(sin_h, sin_v);
+    float pxmin = 1e30f, pxmax = -1e30f, pymin = 1e30f, pymax = -1e30f;
+    for (int i = 0; i < vertex_count; ++i) {
+        Fixed32 x = vtx->x[i]; Fixed32 y = vtx->y[i]; Fixed32 z = vtx->z[i];
+        Fixed32 term1 = FIXED_MUL_64(x, cos_h_cos_v);
+        Fixed32 term2 = FIXED_MUL_64(y, sin_h_cos_v);
+        Fixed32 term3 = FIXED_MUL_64(z, sin_v);
+        Fixed32 zo = FIXED_ADD(FIXED_SUB(FIXED_SUB(FIXED_NEG(term1), term2), term3), owner->auto_suggested_distance);
+        if (zo > 0) {
+            Fixed32 xo = FIXED_ADD(FIXED_NEG(FIXED_MUL_64(x, sin_h)), FIXED_MUL_64(y, cos_h));
+            Fixed32 yo = FIXED_ADD(FIXED_SUB(FIXED_NEG(FIXED_MUL_64(x, cos_h_sin_v)), FIXED_MUL_64(y, sin_h_sin_v)), FIXED_MUL_64(z, cos_v));
+            float px = FIXED_TO_FLOAT(xo) / FIXED_TO_FLOAT(zo);
+            float py = FIXED_TO_FLOAT(yo) / FIXED_TO_FLOAT(zo);
+            if (px < pxmin) pxmin = px;
+            if (px > pxmax) pxmax = px;
+            if (py < pymin) pymin = py;
+            if (py > pymax) pymax = py;
+        }
+    }
+
+    /* Choisir l'échelle qui tient dans 90 % de la largeur et de la
+     * hauteur disponibles.
+     */
+    float margin = 0.9f;
+    float winw = (float)(CENTRE_X * 2);
+    float winh = (float)(CENTRE_Y * 2);
+    float s = 100.0f;
+    if (pxmax > pxmin && pymax > pymin) {
+        float s1 = (winw * margin) / (pxmax - pxmin);
+        float s2 = (winh * margin) / (pymax - pymin);
+        s = (s1 < s2) ? s1 : s2;
+    }
+    owner->auto_suggested_proj_scale = FLOAT_TO_FIXED(s);
+    owner->auto_fit_ready = 1;
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  benchmark_model_autofit
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Demander un fichier et comparer les temps de l'auto-fit ancien et optimisé.
+ *
+ *  Paramètres :
+ *    Aucun ; saisie du nom sur stdin, suffixe .obj essayé si nécessaire.
+ *
+ *  Retour :
+ *    Aucun ; affiche les ticks cumulés, la moyenne par calcul et le gain.
+ *
+ *  Fonctionnement :
+ *    Charge et centre les sommets une seule fois, hors mesure, dans trois
+ *    buffers privés. Compare les suggestions puis calibre 1..32 répétitions
+ *    pour viser 30 ticks par lot. Mesure trois lots de chaque variante en
+ *    alternant leur ordre ; aucune lecture ni progression dans les mesures.
+ *    Le chargement normal et le benchmark partagent compute_auto_fit.
+ *    Ne change ni le modèle affiché ni la caméra ; libère toujours ses buffers.
+ *
+ * ----------------------------------------------------------------------------
+ */
+static void benchmark_model_autofit(void)
+{
+    char filename[256];
+    VertexArrays3D vertices;
+    Model3D initial, reference, optimized;
+    Fixed32 *coords[3];
+    Fixed32 max_dim = 0;
+    long start, calibration, reference_ticks = 0, optimized_ticks = 0;
+    int count, axis, i, repeats, round, pass, use_optimized;
+    size_t len;
+
+    /* La saisie et la lecture restent hors chronométrage. */
+    printf("\nAUTO-FIT BENCHMARK\n");
+    printf("Model filename (ENTER cancels): ");
+    if (fgets(filename, sizeof(filename), stdin) == NULL) return;
+    filename[strcspn(filename, "\r\n")] = 0;
+    if (filename[0] == 0) return;
+    memset(&vertices, 0, sizeof(vertices));
+    memset(&initial, 0, sizeof(initial));
+    memset(&reference, 0, sizeof(reference));
+    memset(&optimized, 0, sizeof(optimized));
+    vertices.x = (Fixed32*)malloc((size_t)MAX_VERTICES * sizeof(Fixed32));
+    vertices.y = (Fixed32*)malloc((size_t)MAX_VERTICES * sizeof(Fixed32));
+    vertices.z = (Fixed32*)malloc((size_t)MAX_VERTICES * sizeof(Fixed32));
+    if (!vertices.x || !vertices.y || !vertices.z) {
+        printf("Not enough memory for benchmark vertices.\n");
+        goto finish;
+    }
+    count = readVertices(filename, &vertices, MAX_VERTICES, &initial);
+    len = strlen(filename);
+    if (count < 0 && len + 4 < sizeof(filename) &&
+        (len < 4 || strcmp(filename + len - 4, ".obj") != 0)) {
+        strcat(filename, ".obj");
+        count = readVertices(filename, &vertices, MAX_VERTICES, &initial);
+    }
+    if (count <= 0) {
+        printf("No vertices loaded from '%s'.\n", filename);
+        goto finish;
+    }
+    /* Retrouver la dimension des sommets centrés, sans relire le fichier. */
+    coords[0] = vertices.x; coords[1] = vertices.y; coords[2] = vertices.z;
+    for (axis = 0; axis < 3; ++axis) {
+        Fixed32 lo = coords[axis][0], hi = lo;
+        for (i = 1; i < count; ++i) {
+            if (coords[axis][i] < lo) lo = coords[axis][i];
+            if (coords[axis][i] > hi) hi = coords[axis][i];
+        }
+        if (hi - lo > max_dim) max_dim = hi - lo;
+    }
+    /* Vérifier les paramètres avant de comparer la vitesse ; le premier
+     * calcul de référence sert aussi à choisir la longueur des lots.
+     */
+    start = GetTick();
+    compute_auto_fit_reference(&vertices, count, max_dim, &reference);
+    calibration = GetTick() - start;
+    compute_auto_fit(&vertices, count, max_dim, &optimized);
+    if (reference.auto_suggested_distance != optimized.auto_suggested_distance ||
+        reference.auto_suggested_proj_scale != optimized.auto_suggested_proj_scale ||
+        reference.auto_fit_ready != optimized.auto_fit_ready) {
+        printf("Results differ: reference scale %.6f, optimized %.6f\n",
+               FIXED_TO_FLOAT(reference.auto_suggested_proj_scale),
+               FIXED_TO_FLOAT(optimized.auto_suggested_proj_scale));
+        goto finish;
+    }
+    repeats = (calibration > 0) ? (int)(30L / calibration) : 32;
+    if (repeats < 1) repeats = 1;
+    if (repeats > 32) repeats = 32;
+    printf("%d vertices, 3 batches of %d runs per version.\n", count, repeats);
+    printf("File I/O, centering and progress excluded. Please wait...\n");
+    /* Alterner les variantes sans affichage dans les lots chronométrés. */
+    for (round = 0; round < 3; ++round) {
+        for (pass = 0; pass < 2; ++pass) {
+            use_optimized = (round + pass) & 1;
+            if (use_optimized) {
+                start = GetTick();
+                for (i = 0; i < repeats; ++i)
+                    compute_auto_fit(&vertices, count, max_dim, &optimized);
+                optimized_ticks += GetTick() - start;
+            } else {
+                start = GetTick();
+                for (i = 0; i < repeats; ++i)
+                    compute_auto_fit_reference(&vertices, count, max_dim, &reference);
+                reference_ticks += GetTick() - start;
+            }
+        }
+    }
+    /* Les ticks cumulés donnent une comparaison même sur les petits modèles. */
+    printf("Reference: %ld ticks total, %.2f ticks/run\n", reference_ticks,
+           (float)reference_ticks / (float)(3 * repeats));
+    printf("Optimized: %ld ticks total, %.2f ticks/run\n", optimized_ticks,
+           (float)optimized_ticks / (float)(3 * repeats));
+    if (reference_ticks > 0)
+        printf("Time reduction: %.1f%%\n",
+               100.0f * (float)(reference_ticks - optimized_ticks) / (float)reference_ticks);
+    else
+        printf("Below timer resolution; use a larger model.\n");
+    printf("Parameters match exactly. One tick = 1/60 second.\n");
+finish:
+    /* Nettoyer aussi les allocations partielles et tous les chemins d'erreur. */
+    free(vertices.x); free(vertices.y); free(vertices.z);
+    printf("Press any key to return...\n");
+    keypress();
+}
+#endif
+
+
+/*
+ * ============================================================================
+ *  Archive du benchmark CSV des dix traitements — 27 octobre 2026
+ * ============================================================================
+ *  Ancien fichier benchmark.c ; ancienne commande « : ».
+ *  Limite par défaut : 50 Kio ; trois passages ; mode texte avec progression.
+ *  Dépend des types et fonctions du moteur actif. Conservé pour référence,
+ *  exclu de la compilation ; aucune inclusion depuis les sources actives.
+ * ============================================================================
+ */
+#if 0
+/* Benchmark des rendus : ignorer les OBJ de plus de 50 Kio avant lecture. */
+#define BENCHMARK_MAX_OBJ_BYTES  (50UL * 1024UL)
+#define BENCHMARK_RUNS           3
+#if BENCHMARK_RUNS < 1 || (BENCHMARK_RUNS % 2) == 0
+#error BENCHMARK_RUNS_must_be_positive_and_odd
+#endif
+
+/*
+ * ============================================================================
+ *  benchmark.c — Comparaison des dix rendus sur les fichiers OBJ locaux
+ * ============================================================================
+ *
+ *  Rôle :
+ *    Parcourir le répertoire courant GS/OS, filtrer les OBJ par taille puis
+ *    consigner leurs temps de classement et de rendu dans un nouveau CSV.
+ *
+ *  Organisation et contraintes :
+ *    Inclus à la fin de engine.c. La vue est 30°/20°/0°, avec auto-fit et
+ *    normalisation habituels, culling désactivé, couleurs par défaut et sans
+ *    jitter. BENCHMARK_MAX_OBJ_BYTES limite les fichiers avant chargement.
+ *    Trois passages par défaut ; médianes indépendantes des temps de tri et
+ *    des traitements. Aucun dessin des painters ; écran maintenu en texte.
+ *    Chargement, préparation, démarrage QuickDraw et transfert offscreen exclus.
+ *    Les bordures scanline/offscreen restent celles de ces moteurs, imparfaites.
+ *    Le répertoire courant est celui utilisé pour les noms sans préfixe.
+ *
+ * ============================================================================
+ */
+segment "benchmark";
+
+/*
+ * ----------------------------------------------------------------------------
+ *  benchmark_cancelled
+ * ----------------------------------------------------------------------------
+ *  Rôle : Tester Échap sans attendre de frappe, entre deux mesures.
+ *  Paramètres : Aucun ; lit et acquitte le clavier matériel.
+ *  Retour : 1 pour Échap, 0 sinon ; les autres frappes sont consommées.
+ *  Registres : Préserve P ; A contient le résultat, X/Y/D/DBR inchangés.
+ * ----------------------------------------------------------------------------
+ */
+asm int benchmark_cancelled(void)
+{
+    php
+    rep #0x30
+    lda >0xC000
+    and #0x0080
+    beq bmc_no
+    lda >0xC000
+    and #0x007F
+    sta >0xC010
+    cmp #27
+    beq bmc_yes
+bmc_no:
+    lda #0
+    plp
+    rtl
+bmc_yes:
+    lda #1
+    plp
+    rtl
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  benchmark_csv_name
+ * ----------------------------------------------------------------------------
+ *  Rôle : Créer un nouveau benchNNN.csv sans écraser un fichier existant.
+ *  Paramètres : [sortie] name, buffer d'au moins 13 caractères.
+ *  Retour : Flux ouvert, ou NULL si aucun nom disponible ou erreur GS/OS.
+ *  Fonctionnement : Vérifie l'existence avec GetFileInfoGS avant fopen.
+ * ----------------------------------------------------------------------------
+ */
+static FILE *benchmark_csv_name(char *name)
+{
+    GSString255 path;
+    FileInfoRecGS info;
+    int i, error;
+    /* Une erreur d'accès ne doit pas être confondue avec un fichier absent. */
+    for (i = 0; i < 1000; ++i) {
+        sprintf(name, "bench%03d.csv", i);
+        path.length = strlen(name);
+        memcpy(path.text, name, path.length);
+        memset(&info, 0, sizeof(info));
+        info.pCount = 2;
+        info.pathname = &path;
+        GetFileInfoGS(&info);
+        error = toolerror();
+        if (error == fileNotFound) return fopen(name, "w");
+        if (error != 0) return NULL;
+    }
+    return NULL;
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  benchmark_csv_row
+ * ----------------------------------------------------------------------------
+ *  Rôle : Écrire une ligne de résultats et la transmettre au système de fichiers.
+ *  Paramètres : [entrée] out, nom, taille, compteurs, distance/échelle, statut.
+ *    [entrée] total[10], ou NULL pour une ligne sans mesure.
+ *  Retour : 1 si écriture et fflush réussissent, 0 sinon.
+ *  Fonctionnement : Séparateur point-virgule, noms quotés, temps en ticks.
+ * ----------------------------------------------------------------------------
+ */
+static int benchmark_csv_row(FILE *out, const char *name, unsigned long bytes,
+                             int vertices, int faces, Fixed32 distance,
+                             Fixed32 scale, const char *status,
+                             const long *total)
+{
+    int i;
+    /* Échapper les guillemets du nom indépendamment du séparateur CSV. */
+    fputc('"', out);
+    while (*name) {
+        if (*name == '"') fputc('"', out);
+        fputc(*name++, out);
+    }
+    fprintf(out, "\";%lu;%d;%d;30;20;0;0;%ld;%ld;%lu;%d;%s",
+            bytes, vertices, faces, (long)distance, (long)scale,
+            (unsigned long)BENCHMARK_MAX_OBJ_BYTES, BENCHMARK_RUNS, status);
+    for (i = 0; i < 10; ++i) {
+        if (total && total[i] >= 0) fprintf(out, ";%ld", total[i]);
+        else fputc(';', out);
+    }
+    fputc('\n', out);
+    return fflush(out) == 0 && !ferror(out);
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  benchmark_obj_valid
+ * ----------------------------------------------------------------------------
+ *  Rôle : Écarter les entrées qui dépasseraient les capacités du chargeur.
+ *  Paramètres : [entrée] name, fichier OBJ déjà filtré par taille.
+ *  Retour : 1 si les sommets et les indices positifs acceptés sont valides.
+ *  Fonctionnement : Prélecture hors mesure ; évite les attentes d'erreur du
+ *    lecteur interactif et borne les indices avant écriture dans le modèle.
+ * ----------------------------------------------------------------------------
+ */
+static int benchmark_obj_valid(const char *name)
+{
+    FILE *in = fopen(name, "r");
+    char line[MAX_LINE_LENGTH];
+    int vertices = 0, faces = 0, indices = 0, max_index = 0, valid = 1;
+    if (!in) return 0;
+    /* La même limite de ligne que le chargeur est appliquée explicitement. */
+    while (fgets(line, sizeof(line), in)) {
+        if (!strchr(line, '\n') && !feof(in) && strlen(line) == sizeof(line)-1) {
+            valid = 0; break;
+        }
+        if (line[0] == 'v' && line[1] == ' ') {
+            float x, y, z;
+            if (++vertices > MAX_VERTICES ||
+                sscanf(line+2, "%f %f %f", &x, &y, &z) != 3) {
+                valid = 0; break;
+            }
+        } else if (line[0] == 'f' && line[1] == ' ') {
+            char *p = line+2;
+            int count = 0;
+            while (*p && *p != '\n' && count < MAX_FACE_VERTICES) {
+                long index = 0;
+                while (*p == ' ' || *p == '\t') ++p;
+                while (*p >= '0' && *p <= '9') {
+                    index = index * 10L + (*p++ - '0');
+                    if (index > MAX_VERTICES) { valid = 0; break; }
+                }
+                if (!valid) break;
+                while (*p && *p != ' ' && *p != '\t' && *p != '\n') ++p;
+                if (index > 0) {
+                    ++count;
+                    if (index > max_index) max_index = (int)index;
+                }
+            }
+            if (!valid) break;
+            if (count) { ++faces; indices += count; }
+            if (faces > MAX_FACES || indices > MAX_FACES*5) { valid = 0; break; }
+        }
+    }
+    if (ferror(in)) valid = 0;
+    fclose(in);
+    return valid && vertices > 0 && faces > 0 && max_index <= vertices;
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  benchmark_render_model
+ * ----------------------------------------------------------------------------
+ *  Rôle : Mesurer les sept classements seuls et les trois rendus Z-buffer.
+ *  Paramètres : [entrée] model chargé, params de la vue par défaut, filename.
+ *    [sortie] total[10] : médianes, -1 pour les modes non terminés.
+ *  Retour : 1 si complet, 0 sur Échap, -1 si QuickDraw ne peut être initialisé.
+ *  Fonctionnement : Recalcule projection/métriques sans tri avant chaque essai,
+ *    réinitialise la permutation et invalide les caches. Les effacements Z,
+ *    Offscreen_Clear est inclus ; le transfert offscreen est exclu. Écran texte
+ *    conservé, avec progression par méthode hors des mesures.
+ * ----------------------------------------------------------------------------
+ */
+static int benchmark_render_model(Model3D *model, ObserverParams *params,
+                                   const char *filename, long *total)
+{
+    long totals[BENCHMARK_RUNS];
+    long begin, after_sort, swap;
+    Handle qd_page;
+    int result = 1;
+    int method, run, i, j;
+    for (i = 0; i < 10; ++i) total[i] = -1;
+    /* Les tests géométriques utilisent QuickDraw même sans afficher d'image.
+     * Initialiser son contexte comme dans le moteur, sans startgraph.
+     */
+    qd_page = NewHandle(0x300L, userid(), 0xC015, NULL);
+    if (toolerror() || !qd_page) {
+        if (qd_page) DisposeHandle(qd_page);
+        printf("QuickDraw allocation failed.\n");
+        return -1;
+    }
+    QDStartUp((Word)*qd_page, 0, mode320, userid());
+    if (toolerror()) {
+        DisposeHandle(qd_page);
+        printf("QuickDraw startup failed.\n");
+        return -1;
+    }
+    shgroff();
+    printf("File %s : ", filename);
+    fflush(stdout);
+    /* Chaque essai part des mêmes coordonnées, métriques et identifiants. */
+    for (method = 0; method < 10; ++method) {
+        printf("%d..", method + 1);
+        fflush(stdout);
+        for (run = 0; run < BENCHMARK_RUNS; ++run) {
+            if (benchmark_cancelled()) { result = 0; goto close_quickdraw; }
+            framePolyOnly = 1;
+            cull_back_faces = 0;
+            processModelFast(model, params, filename);
+            framePolyOnly = 0;
+            for (i = 0; i < model->faces.face_count; ++i)
+                model->faces.sorted_face_indices[i] = i;
+            inconclusive_pairs_count = 0;
+            screenClearTopLines(200);
+            begin = GetTick();
+            switch (method) {
+                case 0: painter_newell_sancha_fast(model, model->faces.face_count); break;
+                case 1: painter_bubble_sort(model, model->faces.face_count); break;
+                case 2: painter_newell_sancha(model, model->faces.face_count); break;
+                case 3: painter_geoV2(model, model->faces.face_count); break;
+                case 4: painter_geoV3(model, model->faces.face_count); break;
+                case 5: painter_correct(model, model->faces.face_count, 0); break;
+                case 6: painter_correct(model, model->faces.face_count, 1); break;
+                case 7: renderModelFullscreenZBuffer(model); break;
+                case 8:
+                    Offscreen_Clear();
+                    renderModelFullscreenZBuffer_offscreen(model);
+                    break;
+                case 9: renderModelScanlineZBuffer(model); break;
+            }
+            after_sort = GetTick();
+            totals[run] = after_sort - begin;
+        }
+        /* Trier les essais du traitement ; conserver leur médiane. */
+        for (i = 1; i < BENCHMARK_RUNS; ++i)
+            for (j = i; j > 0; --j) {
+                if (totals[j] < totals[j-1]) {
+                    swap = totals[j]; totals[j] = totals[j-1]; totals[j-1] = swap;
+                }
+            }
+        total[method] = totals[BENCHMARK_RUNS/2];
+    }
+close_quickdraw:
+    QDShutDown();
+    DisposeHandle(qd_page);
+    printf("\n");
+    return result;
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ *  benchmark_all_models
+ * ----------------------------------------------------------------------------
+ *  Rôle : Comparer automatiquement les OBJ locaux de taille admissible en CSV.
+ *  Paramètres : [entrée] current, modèle affiché dont les caches seront invalidés.
+ *  Retour : Aucun ; affiche le nom du CSV et attend une touche à la fin.
+ *  Fonctionnement : Parcours GS/OS sans récursion, contrôle de taille avant
+ *    prélecture/chargement, résultats vidés après chaque fichier et arrêt entre
+ *    mesures par Échap. Restaure les options globales et les paires de diagnostic.
+ *    Les OBJ ignorés ou invalides figurent aussi dans le CSV avec leur statut.
+ * ----------------------------------------------------------------------------
+ */
+static void benchmark_all_models(Model3D *current)
+{
+    PrefixRecGS prefix;
+    ResultBuf255 directory, entry_name;
+    OpenRecGS open;
+    DirEntryRecGS entry;
+    RefNumRecGS close;
+    FILE *csv = NULL;
+    Model3D *model = NULL;
+    ObserverParams params;
+    InconclusivePair *pairs = NULL;
+    FaceArrays3D *old_qsort = qsort_faces_ptr_for_cmp;
+    int saved[10], saved_count = inconclusive_pairs_count;
+    Fixed32 saved_scale = s_global_proj_scale_fixed;
+    Fixed32 saved_distance = current_observer_distance;
+    long total[10];
+    char name[256], csv_name[16];
+    const char *status;
+    unsigned long size;
+    unsigned int index = 1;
+    int error, opened = 0, aborted = 0, done = 0, skipped = 0, len, i, measured;
+
+    /* Préserver les options de la vue active avant toute modification. */
+    saved[0]=cull_back_faces; saved[1]=framePolyOnly; saved[2]=pan_dx;
+    saved[3]=pan_dy; saved[4]=jitter; saved[5]=palette;
+    saved[6]=user_fill_color; saved[7]=user_frame_color;
+    saved[8]=shaded_by_orientation; saved[9]=painter_mode;
+    if (saved_count) {
+        pairs = (InconclusivePair*)malloc((size_t)saved_count*sizeof(InconclusivePair));
+        if (!pairs) { printf("Not enough memory to save inspection state.\n"); goto finish; }
+        memcpy(pairs, inconclusive_pairs, (size_t)saved_count*sizeof(InconclusivePair));
+    }
+    printf("\nMODEL RENDER BENCHMARK\nMax OBJ size: %lu bytes; %d runs/method.\n",
+           (unsigned long)BENCHMARK_MAX_OBJ_BYTES, BENCHMARK_RUNS);
+    if (!ZBuffer_Init() || !Offscreen_Init()) {
+        printf("Cannot initialize Z-buffer benchmark resources.\n");
+        goto finish;
+    }
+    /* Ouvrir le préfixe courant sans changer les chemins des chargements. */
+    memset(&prefix, 0, sizeof(prefix));
+    directory.bufSize = sizeof(directory);
+    prefix.pCount = 2; prefix.prefixNum = 0; prefix.buffer.getPrefix = &directory;
+    GetPrefixGS(&prefix);
+    if (toolerror()) { printf("Cannot read current directory.\n"); goto finish; }
+    memset(&open, 0, sizeof(open));
+    open.pCount = 3; open.pathname = &directory.bufString; open.requestAccess = readEnable;
+    OpenGS(&open);
+    if (toolerror()) { printf("Cannot open current directory.\n"); goto finish; }
+    opened = 1;
+    csv = benchmark_csv_name(csv_name);
+    if (!csv) { printf("Cannot create benchmark CSV.\n"); goto finish; }
+    fprintf(csv, "model;bytes;vertices;faces;h;v;w;culling;distance_fixed;scale_fixed;max_obj_bytes;runs;status;fast_sort;bubble_sort;newell_sort;geo_sort;geov3_sort;correct_sort;correct_v2_sort;zb_direct_render;zb_offscreen_render;zb_scanline_render\n");
+    if (fflush(csv) != 0) { printf("CSV write failed.\n"); goto finish; }
+    printf("CSV: %s. ESC stops between measurements.\n", csv_name);
+    cull_back_faces=0; framePolyOnly=0; pan_dx=pan_dy=0; jitter=0;
+    palette=0; user_fill_color=user_frame_color=-1; shaded_by_orientation=0;
+    /* Les entrées absolues évitent de dépendre de la position laissée par les
+     * autres accès aux fichiers. eof est fourni par GS/OS sans ouvrir les OBJ.
+     */
+    while (index) {
+        if (benchmark_cancelled()) { aborted = 1; break; }
+        memset(&entry, 0, sizeof(entry));
+        entry_name.bufSize = sizeof(entry_name);
+        entry.pCount=9; entry.refNum=open.refNum; entry.base=0;
+        entry.displacement=index++; entry.name=&entry_name;
+        GetDirEntryGS(&entry);
+        error = toolerror();
+        if (error == endOfDir) break;
+        if (error) { printf("Directory error: $%04X\n", error); break; }
+        len = entry_name.bufString.length;
+        if (len < 4 || len > 255 || entry.fileType == 0x0F) continue;
+        memcpy(name, entry_name.bufString.text, len); name[len]=0;
+        if (name[len-4] != '.' || (name[len-3]|32) != 'o' ||
+            (name[len-2]|32) != 'b' || (name[len-1]|32) != 'j') continue;
+        size = (unsigned long)entry.eof;
+        /* Filtrer avant la prélecture, puis isoler le modèle de la vue active. */
+        if (size > BENCHMARK_MAX_OBJ_BYTES) {
+            if (!benchmark_csv_row(csv,name,size,0,0,0,0,"too_large",NULL)) break;
+            ++skipped; continue;
+        }
+        printf("%s (%lu bytes)\n", name, size);
+        if (!benchmark_obj_valid(name)) {
+            if (!benchmark_csv_row(csv,name,size,0,0,0,0,"invalid_obj",NULL)) break;
+            ++skipped; continue;
+        }
+        model = createModel3D();
+        if (!model) { printf("Not enough memory for model.\n"); break; }
+        s_global_proj_scale_fixed = INT_TO_FIXED(100);
+        if (loadModel3D(model, name) < 0 || model->faces.face_count <= 0 ||
+            model->vertices.vertex_count <= 0 || !model->auto_fit_ready ||
+            model->auto_suggested_distance <= 0 || model->auto_suggested_proj_scale <= 0) {
+            status = "load_error";
+            for (i=0;i<10;++i) total[i]=-1;
+        } else {
+            normalizeAutoFitDistanceTo150(model);
+            params.angle_h=30; params.angle_v=20; params.angle_w=0;
+            params.distance=model->auto_suggested_distance;
+            s_global_proj_scale_fixed=model->auto_suggested_proj_scale;
+            current_observer_distance=params.distance;
+            measured=benchmark_render_model(model,&params,name,total);
+            status=measured > 0 ? "ok" : (measured == 0 ? "aborted" : "quickdraw_error");
+        }
+        if (!benchmark_csv_row(csv,name,size,model->vertices.vertex_count,
+                model->faces.face_count,model->auto_suggested_distance,
+                model->auto_suggested_proj_scale,status,total)) {
+            printf("CSV write failed.\n"); break;
+        }
+        if (strcmp(status,"aborted")==0) aborted=1;
+        if (strcmp(status,"ok")==0) ++done; else ++skipped;
+        destroyModel3D(model); model=NULL;
+        if (aborted) break;
+    }
+    if (ferror(csv)) printf("CSV write failed; benchmark stopped.\n");
+    printf("\n%s: %d completed, %d skipped/partial. %s\n",
+           csv_name, done, skipped, aborted ? "Stopped." : "Finished.");
+finish:
+    /* Fermer avant restauration, y compris après erreur d'écriture ou Échap. */
+    if (model) destroyModel3D(model);
+    if (csv && fclose(csv) != 0) printf("CSV close failed.\n");
+    if (opened) { close.pCount=1; close.refNum=open.refNum; CloseGS(&close); }
+    cull_back_faces=saved[0]; framePolyOnly=saved[1]; pan_dx=saved[2];
+    pan_dy=saved[3]; jitter=saved[4]; palette=saved[5];
+    user_fill_color=saved[6]; user_frame_color=saved[7];
+    shaded_by_orientation=saved[8]; painter_mode=saved[9];
+    s_global_proj_scale_fixed=saved_scale; current_observer_distance=saved_distance;
+    qsort_faces_ptr_for_cmp=old_qsort;
+    if (pairs) memcpy(inconclusive_pairs,pairs,(size_t)saved_count*sizeof(InconclusivePair));
+    inconclusive_pairs_count=saved_count;
+    free(pairs);
+    ordering_cache_invalidate(current);
+    fractional_projection_cache_invalidate(current);
+    printf("Press any key to return...\n");
+    keypress();
+}
+
+#endif
