@@ -61,7 +61,9 @@ segment "model_loading";
  *    buffer d'indices est dimensionné à MAX_FACES*5, et non
  *    MAX_FACES*MAX_FACE_VERTICES. vertex_count contient initialement la
  *    capacité ; loadModel3D le remplace par le nombre lu. Les géométries et
- *    métriques restent à remplir après allocation.
+ *    métriques restent à remplir après allocation. La structure seule est
+ *    initialisée à zéro ; chaque échec utilise destroyModel3D, qui accepte
+ *    les pointeurs NULL des réserves pas encore effectuées.
  *
  * ----------------------------------------------------------------------------
  */
@@ -74,40 +76,16 @@ Model3D* createModel3D(void) {
     if (model == NULL) {
         return NULL;
     }
-    /* Initialiser les métadonnées de centrage et d'ajustement ; la capacité
-     * sert d'abord de vertex_count.
-     */
+    /* Initialiser uniquement la structure propriétaire : tous les pointeurs
+     * non encore alloués restent NULL, donc le destructeur accepte chaque
+     * étape de création. Les grands tableaux gardent leurs malloc d’origine. */
+    memset(model, 0, sizeof(*model));
     int n = MAX_VERTICES;
     model->vertices.vertex_count = n;
-
     model->auto_scale = FIXED_ONE;
-    model->auto_center_x = 0;
-    model->auto_center_y = 0;
-    model->auto_center_z = 0;
-    model->auto_scaled = 0;
-    model->auto_centered = 0;
-    model->orig_x = NULL;
-    model->orig_y = NULL;
-    model->orig_z = NULL;
 
-    model->faces.minx3 = NULL;
-    model->faces.maxx3 = NULL;
-    model->faces.miny3 = NULL;
-    model->faces.maxy3 = NULL;
-    model->faces.minz3 = NULL;
-    model->faces.maxz3 = NULL;
-
-    model->auto_suggested_distance = 0;
-    model->auto_suggested_proj_scale = 0;
-    model->auto_proj_scale = 0;
-    model->auto_fit_ready = 0;
-    model->auto_fit_applied = 0;
-    model->coord_buf = NULL;
-    model->coord_buf_capacity = 0;
-
-    /* Allouer les coordonnées objet, observateur et écran ; chaque chemin
-     * d'échec libère les allocations explicitement listées.
-     */
+    /* Allouer les coordonnées objet, observateur et écran ; tout échec
+     * rejoint la sortie de libération commune. */
     model->vertices.x = (Fixed32*)malloc(n * sizeof(Fixed32));
     model->vertices.y = (Fixed32*)malloc(n * sizeof(Fixed32));
     model->vertices.z = (Fixed32*)malloc(n * sizeof(Fixed32));
@@ -122,27 +100,9 @@ Model3D* createModel3D(void) {
         !model->vertices.x2d || !model->vertices.y2d) {
         printf("Error: Unable to allocate memory for vertex arrays\n");
         keypress();
-
-        if (model->vertices.x) free(model->vertices.x);
-        if (model->vertices.y) free(model->vertices.y);
-        if (model->vertices.z) free(model->vertices.z);
-        if (model->vertices.xo) free(model->vertices.xo);
-        if (model->vertices.yo) free(model->vertices.yo);
-        if (model->vertices.zo) free(model->vertices.zo);
-        if (model->vertices.x2d) free(model->vertices.x2d);
-        if (model->vertices.y2d) free(model->vertices.y2d);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
-    model->vertices.xHandle = NULL;
-    model->vertices.yHandle = NULL;
-    model->vertices.zHandle = NULL;
-    model->vertices.xoHandle = NULL;
-    model->vertices.yoHandle = NULL;
-    model->vertices.zoHandle = NULL;
-    model->vertices.x2dHandle = NULL;
-    model->vertices.y2dHandle = NULL;
 
     /* Réserver les listes et métriques des faces indépendamment des
      * coordonnées des sommets.
@@ -153,33 +113,14 @@ Model3D* createModel3D(void) {
     if (!model->faces.vertex_count) {
         printf("Error: Unable to allocate memory for face vertex_count array\n");
         keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
     model->faces.saved_vertex_count = (int*)calloc(nf, sizeof(int));
     if (!model->faces.saved_vertex_count) {
         printf("Error: Unable to allocate memory for face saved_vertex_count array\n");
         keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
     /* Réserver le buffer compact pour une moyenne de cinq indices par face ;
@@ -190,37 +131,14 @@ Model3D* createModel3D(void) {
     if (!model->faces.vertex_indices_buffer) {
         printf("Error: Unable to allocate memory for vertex_indices_buffer\n");
         keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
     model->faces.vertex_indices_ptr = (int*)malloc(nf * sizeof(int));
     if (!model->faces.vertex_indices_ptr) {
         printf("Error: Unable to allocate memory for vertex_indices_ptr array\n");
         keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
     /* Allouer les intervalles de profondeur et la clé moyenne utilisée par FAST. */
@@ -229,45 +147,14 @@ Model3D* createModel3D(void) {
     if (!model->faces.z_min || !model->faces.z_max) {
         printf("Error: Unable to allocate memory for face depth arrays\n");
         keypress();
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
     model->faces.z_mean = (Fixed32*)malloc(nf * sizeof(Fixed32));
     if (!model->faces.z_mean) {
         printf("Error: Unable to allocate memory for face z_mean array\n");
         keypress();
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
     /* Allouer les coefficients 64 bits des plans observateur. */
@@ -278,28 +165,7 @@ Model3D* createModel3D(void) {
     if (!model->faces.plane_a || !model->faces.plane_b || !model->faces.plane_c || !model->faces.plane_d) {
         printf("Error: Unable to allocate memory for face plane arrays\n");
         keypress();
-        if (model->faces.plane_a) free(model->faces.plane_a);
-        if (model->faces.plane_b) free(model->faces.plane_b);
-        if (model->faces.plane_c) free(model->faces.plane_c);
-        if (model->faces.plane_d) free(model->faces.plane_d);
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        free(model->faces.z_max);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
     /* Allouer les bornes projetées servant aux rejets rapides de paires. */
@@ -310,32 +176,7 @@ Model3D* createModel3D(void) {
     if (!model->faces.minx || !model->faces.maxx || !model->faces.miny || !model->faces.maxy) {
         printf("Error: Unable to allocate memory for face bounding box arrays\n");
         keypress();
-        if (model->faces.minx) free(model->faces.minx);
-        if (model->faces.maxx) free(model->faces.maxx);
-        if (model->faces.miny) free(model->faces.miny);
-        if (model->faces.maxy) free(model->faces.maxy);
-        if (model->faces.plane_a) free(model->faces.plane_a);
-        if (model->faces.plane_b) free(model->faces.plane_b);
-        if (model->faces.plane_c) free(model->faces.plane_c);
-        if (model->faces.plane_d) free(model->faces.plane_d);
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        free(model->faces.z_max);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
     /* Réserver les drapeaux de visibilité et la permutation de rendu. */
@@ -343,61 +184,23 @@ Model3D* createModel3D(void) {
     if (!model->faces.display_flag) {
         printf("Error: Unable to allocate memory for face display_flag array\n");
         keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
     model->faces.sorted_face_indices = (int*)malloc(nf * sizeof(int));
     if (!model->faces.sorted_face_indices) {
         printf("Error: Unable to allocate memory for sorted_face_indices array\n");
         keypress();
-        free(model->vertices.x);
-        free(model->vertices.y);
-        free(model->vertices.z);
-        free(model->vertices.xo);
-        free(model->vertices.yo);
-        free(model->vertices.zo);
-        free(model->vertices.x2d);
-        free(model->vertices.y2d);
-        free(model->faces.vertex_count);
-        free(model->faces.saved_vertex_count);
-        free(model->faces.vertex_indices_buffer);
-        free(model->faces.vertex_indices_ptr);
-        if (model->faces.z_min) free(model->faces.z_min);
-        if (model->faces.z_max) free(model->faces.z_max);
-        if (model->faces.z_mean) free(model->faces.z_mean);
-        free(model->faces.display_flag);
-        free(model);
-        return NULL;
+        goto allocation_failed;
     }
 
-    /* Initialiser les handles non utilisés par ces allocations malloc et le
-     * compteur d'indices.
-     */
-    model->faces.vertex_countHandle = NULL;
-    model->faces.vertex_indicesBufferHandle = NULL;
-    model->faces.vertex_indicesPtrHandle = NULL;
-    model->faces.z_maxHandle = NULL;
-    model->faces.display_flagHandle = NULL;
-    model->faces.sorted_face_indicesHandle = NULL;
-    model->faces.total_indices = 0;
-
     return model;
+
+allocation_failed:
+    /* Le même destructeur libère un modèle complet ou partiel, une seule
+     * fois par pointeur. Les messages et l’attente clavier restent locaux. */
+    destroyModel3D(model);
+    return NULL;
 }
 /*
  * ----------------------------------------------------------------------------
@@ -409,7 +212,8 @@ Model3D* createModel3D(void) {
  *    structure.
  *
  *  Paramètres :
- *    [entrée] model, créé par createModel3D ; NULL est accepté.
+ *    [entrée] model, complet ou partiellement alloué par createModel3D ;
+ *    les pointeurs inutilisés doivent être NULL. NULL est accepté.
  *
  *  Retour :
  *    Aucun.
@@ -423,8 +227,8 @@ Model3D* createModel3D(void) {
  * ----------------------------------------------------------------------------
  */
 void destroyModel3D(Model3D* model) {
-    /* Ne rien faire pour NULL ; les pointeurs du modèle doivent sinon
-     * décrire un objet initialisé.
+    /* Ne rien faire pour NULL ; la structure doit avoir ses pointeurs
+     * inutilisés à NULL, même pour une création interrompue.
      */
     if (model != NULL) {
         /* Libérer le cache fractionnaire avant les tableaux qu'il référence. */
@@ -7336,6 +7140,8 @@ typedef struct {
  *    l'ancienne UI du repair. Conserve la géométrie et la permutation ;
  *    restaure visibilité et framePolyOnly avant de revenir au moteur.
  *    En automatique, valide sans ouvrir de vue graphique supplémentaire.
+ *    Le moteur a déjà validé le chevauchement avant l’appel ; le callback
+ *    ne répète pas ce filtre géométrique.
  *
  * ----------------------------------------------------------------------------
  */
@@ -7346,11 +7152,8 @@ static int repair_geov3_confirm(Model3D *model, int p, int q,
     GeoV3RepairUI *ui = (GeoV3RepairUI*)context;
     FaceArrays3D *faces = &model->faces;
     int key;
-    /* Les boîtes de GEO V3 peuvent se croiser sans que les polygones se
-     * chevauchent : ne pas proposer ni appliquer cet échange dans le repair.
-     * Le classement normal, sans callback, conserve ses règles existantes.
-     */
-    if (!projected_polygons_overlap_cached(model, p, q)) return 0;
+    /* Le moteur a déjà vérifié le chevauchement réel avant cet échange,
+     * pour le tri comme pour le repair ; ne pas répéter le test dans l’UI. */
     ++ui->proposed;
     /* Le mode automatique conserve les tests GEO V3 sans pause graphique. */
     if (ui->automatic_mode) return 1;

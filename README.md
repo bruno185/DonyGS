@@ -126,7 +126,7 @@ This image couldn't have been generated with painters as they are implemented he
 
 - `painter_geoV3` delegates to the shared `geov3_run` core.
 - Normal sorting starts from canonical face IDs and a stable maximum-depth ordering, then filters candidate pairs with C/assembly helpers.
-- Geometric relations, cached polygon overlap, and hierarchical ray casting guide exchanges. Stamps and iteration limits bound repeated work.
+- Geometric relations, cached polygon overlap, and hierarchical ray casting guide exchanges. Stamps and iteration limits bound repeated work. Every exchange, including one decided directly by the plane tests, requires overlap confirmed by the selected method. This prevents adjacent split fragments from creating false exchange cycles; sorting and repair use the same filter.
 - The interactive repair reuses this core, but starts from the current order and asks before applying exchanges.
 - This mode does not split faces; cyclic visibility and intersecting polygons can remain unresolved. Runtime is model-dependent.
 
@@ -509,6 +509,7 @@ python DEPLOY.py
 ### Memory Management
 
 - **Model Storage**: Current constants allow 6,000 vertices, 6,000 faces, and 16 vertices per face. Allocation and index-buffer limits also apply; these constants do not guarantee that every combination fits.
+- **Model Lifetime**: Creation initializes the owner structure to zero and retains the existing array allocation sizes and order. Allocation failures reuse `destroyModel3D` to release every completed allocation once; the same destructor handles fully loaded models and their caches. Only the owner structure is cleared, not the large data arrays.
 - **Handle-Based Graphics**: QuickDraw polygons and inspection tools share a maximum-capacity polygon handle and point construction expanded at compile time, while retaining their existing bounding-box, clipping and pen-state rules. Saved screen/view state is shared by inspection tools.
 - **Z-Buffer Scratch Storage**: Common reservation/free helpers manage prepared vertices and faces; renderer-specific buffers retain their own storage requirements and allocation checks.
 - **Memory Model**: `#pragma memorymodel 1` selects the target's large memory model with far pointers. Available RAM remains a practical limit.

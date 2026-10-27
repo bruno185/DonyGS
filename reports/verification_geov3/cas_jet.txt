@@ -1,0 +1,23 @@
+
+Reading vertices from file 'C:\Users\user\AppData\Local\Temp\dony_geov3_models/jet.obj' ..............
+Reading vertices finished : 79 vertices read.
+
+Reading faces from file 'C:\Users\user\AppData\Local\Temp\dony_geov3_models/jet.obj' ......
+Reading faces finished : 67 faces read.
+Auto-fit normalized: D=150.0000 P=957.97 factor=1.0101
+CASE jet H244 V51 W-12 cull0 projection=957.97480774 QD=0/0
+PIXEL x=127 y=79 previous=46 new=10 old_depth=155.542668560677 new_depth=155.648636132201 overlap=1 clip=0 area2=0
+PIXEL x=128 y=82 previous=46 new=10 old_depth=155.192436550821 new_depth=155.286668376969 overlap=1 clip=0 area2=0
+PIXEL x=129 y=85 previous=46 new=10 old_depth=154.843778216998 new_depth=154.926380259564 overlap=1 clip=0 area2=0
+PIXEL x=130 y=88 previous=46 new=10 old_depth=154.496682976631 new_depth=154.567760116021 overlap=1 clip=0 area2=0
+PIXEL x=131 y=91 previous=46 new=10 old_depth=154.151140341816 new_depth=154.210796390122 overlap=1 clip=0 area2=0
+PIXEL x=132 y=94 previous=46 new=10 old_depth=153.807139918268 new_depth=153.855477632160 overlap=1 clip=0 area2=0
+PIXEL x=136 y=105 previous=46 new=10 old_depth=152.476367267330 new_depth=152.575394896288 overlap=1 clip=0 area2=0
+PIXEL x=137 y=108 previous=46 new=10 old_depth=152.139792855066 new_depth=152.227563970387 overlap=1 clip=0 area2=0
+PIXEL x=138 y=111 previous=46 new=10 old_depth=151.804701070304 new_depth=151.881315359433 overlap=1 clip=0 area2=0
+PIXEL x=139 y=114 previous=46 new=10 old_depth=151.471082137999 new_depth=151.536638290785 overlap=1 clip=0 area2=0
+PIXEL x=140 y=117 previous=46 new=10 old_depth=151.138926368847 new_depth=151.193522089368 overlap=1 clip=0 area2=0
+PIXEL x=179 y=119 previous=43 new=12 old_depth=151.941995679180 new_depth=151.970008195313 overlap=1 clip=0 area2=0
+PIXEL x=141 y=120 previous=46 new=10 old_depth=150.808224158347 new_depth=150.851956176573 overlap=1 clip=0 area2=0
+PIXEL x=142 y=123 previous=46 new=10 old_depth=150.478965985877 new_depth=150.511930069171 overlap=1 clip=0 area2=0
+PIXEL x=143 y=126 previous=46 new=10 old_depth=150.151142413779 new_depth=150.173433378235 overlap=1 clip=0 area2=0

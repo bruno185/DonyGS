@@ -154,4 +154,6 @@ ZB full on screen : 109
 ZB full off screen : 90 (mais bordures en pointillé)
 ZB scan : 55 (mais bordures en pointillé)
 
-
+monkey 40°, culling on : 
+ZB full on : 406 / 390 / 371
+ZB full off : 227 / 219 / 205

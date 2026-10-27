@@ -100,7 +100,7 @@
 <p><a href="declare.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-sin_deg_int">Contrat dans le dictionnaire</a></p></div></details>
 </section>
 <section class="module"><h3>engine.c <span class="tag">94 fonctions</span></h3><p class="muted">Charger le modèle OBJ, transformer et projeter ses sommets, calculer les métriques des faces, construire un ordre de dessin et fournir les outils de rendu et de diagnostic.</p>
-<details class="function" id="fn-add_vertex" open><summary><code>add_vertex</code><span class="muted">engine.c · ligne 1606</span></summary><div class="body"><pre><code>static int add_vertex(Model3D* model, Fixed32 x, Fixed32 y, Fixed32 z)</code></pre>
+<details class="function" id="fn-add_vertex" open><summary><code>add_vertex</code><span class="muted">engine.c · ligne 1410</span></summary><div class="body"><pre><code>static int add_vertex(Model3D* model, Fixed32 x, Fixed32 y, Fixed32 z)</code></pre>
 <h4>Rôle :</h4>
 <p>Ajouter un sommet au repère objet du modèle.</p>
 <h4>Paramètres :</h4>
@@ -114,7 +114,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-fractional_projection_cache_invalidate" title="Invalider les rapports de projection et les caches d&#x27;ordre associés."><code>fractional_projection_cache_invalidate</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-split_face_by_plane" title="Découper expérimentalement f1 par le plan objet de f2."><code>split_face_by_plane</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-add_vertex">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-applyPalette" open><summary><code>applyPalette</code><span class="muted">engine.c · ligne 6197</span></summary><div class="body"><pre><code>void applyPalette(int palette_num)</code></pre>
+<details class="function" id="fn-applyPalette" open><summary><code>applyPalette</code><span class="muted">engine.c · ligne 6001</span></summary><div class="body"><pre><code>void applyPalette(int palette_num)</code></pre>
 <h4>Rôle :</h4>
 <p>Installer une palette logicielle dans la table matérielle active numéro zéro.</p>
 <h4>Paramètres :</h4>
@@ -129,7 +129,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-colorChooser" title="Exécuter la sélection interactive de couleur jusqu&#x27;à confirmation."><code>colorChooser</code></a>, <a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a>, <a href="#fn-Off_RenderCore" title="Rendre les surfaces par balayage plein écran offscreen."><code>Off_RenderCore</code></a>, <a href="#fn-renderModelScanlineZBuffer_coreV3" title="Rendre les surfaces par balayage scanline V3 quantifié."><code>renderModelScanlineZBuffer_coreV3</code></a>, <a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>SetColorTable</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-applyPalette">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-calculateFaceDepths" open><summary><code>calculateFaceDepths</code><span class="muted">engine.c · ligne 4889</span></summary><div class="body"><pre><code>void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count)</code></pre>
+<details class="function" id="fn-calculateFaceDepths" open><summary><code>calculateFaceDepths</code><span class="muted">engine.c · ligne 4693</span></summary><div class="body"><pre><code>void calculateFaceDepths(Model3D* model, Face3D* faces, int face_count)</code></pre>
 <h4>Rôle :</h4>
 <p>Recalculer les métriques et plans observateur des faces de la vue courante.</p>
 <h4>Paramètres :</h4>
@@ -144,7 +144,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-benchmark_projected_overlap_all" title="Comparer six méthodes sur toutes les paires et plusieurs orientations."><code>benchmark_projected_overlap_all</code></a>, <a href="#fn-processModelFast" title="Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie."><code>processModelFast</code></a>, <a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_SUB</code>, <code>FLOAT_TO_FIXED</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-calculateFaceDepths">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-check_intersect" open><summary><code>check_intersect</code><span class="muted">engine.c · ligne 899</span></summary><div class="body"><pre><code>static void check_intersect(Model3D* model)</code></pre>
+<details class="function" id="fn-check_intersect" open><summary><code>check_intersect</code><span class="muted">engine.c · ligne 703</span></summary><div class="body"><pre><code>static void check_intersect(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Examiner les intersections objet et tenter des découpages avant la visualisation.</p>
 <h4>Paramètres :</h4>
@@ -159,7 +159,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fabs</code>, <code>FIXED_TO_FLOAT</code>, <code>FLOAT_TO_FIXED</code>, <code>printf</code>, <code>sqrt</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-check_intersect">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-cleanup_list" open><summary><code>cleanup_list</code><span class="muted">engine.c · ligne 1648</span></summary><div class="body"><pre><code>static void cleanup_list(int *arr, int *n)</code></pre>
+<details class="function" id="fn-cleanup_list" open><summary><code>cleanup_list</code><span class="muted">engine.c · ligne 1452</span></summary><div class="body"><pre><code>static void cleanup_list(int *arr, int *n)</code></pre>
 <h4>Rôle :</h4>
 <p>Compacter une liste cyclique d&#x27;indices en retirant les répétitions adjacentes.</p>
 <h4>Paramètres :</h4>
@@ -171,7 +171,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-split_face_by_plane" title="Découper expérimentalement f1 par le plan objet de f2."><code>split_face_by_plane</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-cleanup_list">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-cmp_faces_by_zmean" open><summary><code>cmp_faces_by_zmean</code><span class="muted">engine.c · ligne 2118</span></summary><div class="body"><pre><code>static int cmp_faces_by_zmean(const void* pa, const void* pb)</code></pre>
+<details class="function" id="fn-cmp_faces_by_zmean" open><summary><code>cmp_faces_by_zmean</code><span class="muted">engine.c · ligne 1922</span></summary><div class="body"><pre><code>static int cmp_faces_by_zmean(const void* pa, const void* pb)</code></pre>
 <h4>Rôle :</h4>
 <p>Comparer deux identifiants de faces pour qsort.</p>
 <h4>Paramètres :</h4>
@@ -183,7 +183,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-painter_newell_sancha_fast" title="Construire l&#x27;ordre FAST par profondeur moyenne décroissante."><code>painter_newell_sancha_fast</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-cmp_faces_by_zmean">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-compare_faces_diagnostic" open><summary><code>compare_faces_diagnostic</code><span class="muted">engine.c · ligne 8021</span></summary><div class="body"><pre><code>static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out)</code></pre>
+<details class="function" id="fn-compare_faces_diagnostic" open><summary><code>compare_faces_diagnostic</code><span class="muted">engine.c · ligne 7824</span></summary><div class="body"><pre><code>static void compare_faces_diagnostic(Model3D* model, int f1, int f2, int use_qd, CompareFacesResult *out)</code></pre>
 <h4>Rôle :</h4>
 <p>Comparer plusieurs méthodes d&#x27;ordre et conserver leurs résultats séparés.</p>
 <h4>Paramètres :</h4>
@@ -200,7 +200,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>GetTick</code>, <code>memset</code>, <code>snprintf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-compare_faces_diagnostic">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-compute2DFromObserver" open><summary><code>compute2DFromObserver</code><span class="muted">engine.c · ligne 5082</span></summary><div class="body"><pre><code>void compute2DFromObserver(Model3D* model, int angle_w)</code></pre>
+<details class="function" id="fn-compute2DFromObserver" open><summary><code>compute2DFromObserver</code><span class="muted">engine.c · ligne 4886</span></summary><div class="body"><pre><code>void compute2DFromObserver(Model3D* model, int angle_w)</code></pre>
 <h4>Rôle :</h4>
 <p>Reprojeter une vue observateur existante après changement d&#x27;échelle.</p>
 <h4>Paramètres :</h4>
@@ -216,7 +216,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_ADD</code>, <code>FIXED_DIV_64</code>, <code>FIXED_MUL_64</code>, <code>FIXED_SUB</code>, <code>INT_TO_FIXED</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-compute2DFromObserver">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-compute_face_bboxes3D" open><summary><code>compute_face_bboxes3D</code><span class="muted">engine.c · ligne 1873</span></summary><div class="body"><pre><code>static void compute_face_bboxes3D(Model3D* model)</code></pre>
+<details class="function" id="fn-compute_face_bboxes3D" open><summary><code>compute_face_bboxes3D</code><span class="muted">engine.c · ligne 1677</span></summary><div class="body"><pre><code>static void compute_face_bboxes3D(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Recalculer les six bornes objet de chaque face.</p>
 <h4>Paramètres :</h4>
@@ -229,7 +229,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-check_intersect" title="Examiner les intersections objet et tenter des découpages avant la visualisation."><code>check_intersect</code></a>, <a href="#fn-split_face_by_plane" title="Découper expérimentalement f1 par le plan objet de f2."><code>split_face_by_plane</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>, <code>malloc</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-compute_face_bboxes3D">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-compute_face_plane" open><summary><code>compute_face_plane</code><span class="muted">engine.c · ligne 1106</span></summary><div class="body"><pre><code>static void compute_face_plane(Model3D* model, int fidx, double *a, double *b, double *c, double *d, int coordinate_mode)</code></pre>
+<details class="function" id="fn-compute_face_plane" open><summary><code>compute_face_plane</code><span class="muted">engine.c · ligne 910</span></summary><div class="body"><pre><code>static void compute_face_plane(Model3D* model, int fidx, double *a, double *b, double *c, double *d, int coordinate_mode)</code></pre>
 <h4>Rôle :</h4>
 <p>Calculer le plan du triangle initial d&#x27;une face dans le repère objet.</p>
 <h4>Paramètres :</h4>
@@ -244,7 +244,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-check_intersect" title="Examiner les intersections objet et tenter des découpages avant la visualisation."><code>check_intersect</code></a>, <a href="#fn-evaluate_face_crossings" title="Compter les traversées d’une face et signaler une traversée strictement intérieure, avec un seul plan et un seul contour projeté temporaires."><code>evaluate_face_crossings</code></a>, <a href="#fn-reorder_poly" title="Réordonner une liste de sommets par angle autour de leur centre moyen projeté."><code>reorder_poly</code></a>, <a href="#fn-split_face_by_plane" title="Découper expérimentalement f1 par le plan objet de f2."><code>split_face_by_plane</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_TO_FLOAT</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-compute_face_plane">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-computeOrientationShading" open><summary><code>computeOrientationShading</code><span class="muted">engine.c · ligne 6363</span></summary><div class="body"><pre><code>static void computeOrientationShading(Model3D* model)</code></pre>
+<details class="function" id="fn-computeOrientationShading" open><summary><code>computeOrientationShading</code><span class="muted">engine.c · ligne 6167</span></summary><div class="body"><pre><code>static void computeOrientationShading(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Calculer une couleur selon l&#x27;orientation de chaque normale observateur.</p>
 <h4>Paramètres :</h4>
@@ -259,7 +259,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a>, <a href="#fn-processModelFast" title="Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie."><code>processModelFast</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fabsf</code>, <code>FIXED64_TO_FLOAT</code>, <code>sqrtf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-computeOrientationShading">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-createModel3D" open><summary><code>createModel3D</code><span class="muted">engine.c · ligne 68</span></summary><div class="body"><pre><code>Model3D* createModel3D(void)</code></pre>
+<details class="function" id="fn-createModel3D" open><summary><code>createModel3D</code><span class="muted">engine.c · ligne 70</span></summary><div class="body"><pre><code>Model3D* createModel3D(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Allouer le modèle et ses tableaux parallèles à capacité fixe.</p>
 <h4>Paramètres :</h4>
@@ -269,25 +269,25 @@
 <h4>Sorties et effets de bord :</h4>
 <p>allocations et messages de diagnostic avec attente clavier sur échec.</p>
 <h4>Fonctionnement :</h4>
-<p>Réserver MAX_VERTICES sommets et MAX_FACES métriques de faces ; le buffer d&#x27;indices est dimensionné à MAX_FACES*5, et non MAX_FACES*MAX_FACE_VERTICES. vertex_count contient initialement la capacité ; loadModel3D le remplace par le nombre lu. Les géométries et métriques restent à remplir après allocation.</p>
-<h4>Appels internes directs :</h4><p><a href="#fn-keypress" title="Attendre une frappe et acquitter le strobe clavier."><code>keypress</code></a></p>
+<p>Réserver MAX_VERTICES sommets et MAX_FACES métriques de faces ; le buffer d&#x27;indices est dimensionné à MAX_FACES*5, et non MAX_FACES*MAX_FACE_VERTICES. vertex_count contient initialement la capacité ; loadModel3D le remplace par le nombre lu. Les géométries et métriques restent à remplir après allocation. La structure seule est initialisée à zéro ; chaque échec utilise destroyModel3D, qui accepte les pointeurs NULL des réserves pas encore effectuées.</p>
+<h4>Appels internes directs :</h4><p><a href="#fn-destroyModel3D" title="Libérer les buffers explicitement possédés par un modèle puis sa structure."><code>destroyModel3D</code></a>, <a href="#fn-keypress" title="Attendre une frappe et acquitter le strobe clavier."><code>keypress</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>calloc</code>, <code>free</code>, <code>malloc</code>, <code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>calloc</code>, <code>malloc</code>, <code>memset</code>, <code>printf</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-createModel3D">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-destroyModel3D" open><summary><code>destroyModel3D</code><span class="muted">engine.c · ligne 425</span></summary><div class="body"><pre><code>void destroyModel3D(Model3D* model)</code></pre>
+<details class="function" id="fn-destroyModel3D" open><summary><code>destroyModel3D</code><span class="muted">engine.c · ligne 229</span></summary><div class="body"><pre><code>void destroyModel3D(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Libérer les buffers explicitement possédés par un modèle puis sa structure.</p>
 <h4>Paramètres :</h4>
-<p>[entrée] model, créé par createModel3D ; NULL est accepté.</p>
+<p>[entrée] model, complet ou partiellement alloué par createModel3D ; les pointeurs inutilisés doivent être NULL. NULL est accepté.</p>
 <h4>Retour :</h4>
 <p>Aucun.</p>
 <h4>Fonctionnement :</h4>
 <p>Invalide le pointeur fourni sans le remettre à NULL chez l&#x27;appelant. Libère aussi le cache de projection fractionnaire associé. Les ressources statiques des méthodes de classement et les Z-buffers ont des cycles de vie distincts.</p>
 <h4>Appels internes directs :</h4><p><a href="#fn-fractional_projection_cache_release" title="Libérer les caches d&#x27;ordre et de projection appartenant à model."><code>fractional_projection_cache_release</code></a></p>
-<h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Appelants internes repérés :</h4><p><a href="#fn-createModel3D" title="Allouer le modèle et ses tableaux parallèles à capacité fixe."><code>createModel3D</code></a>, <a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-destroyModel3D">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-display_model_face_ids" open><summary><code>display_model_face_ids</code><span class="muted">engine.c · ligne 6069</span></summary><div class="body"><pre><code>void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename)</code></pre>
+<details class="function" id="fn-display_model_face_ids" open><summary><code>display_model_face_ids</code><span class="muted">engine.c · ligne 5873</span></summary><div class="body"><pre><code>void display_model_face_ids(Model3D* model, ObserverParams* params, const char* filename)</code></pre>
 <h4>Rôle :</h4>
 <p>Afficher une vue graphique annotée avec les identifiants des faces visibles.</p>
 <h4>Paramètres :</h4>
@@ -303,7 +303,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>DrawString</code>, <code>endgraph</code>, <code>memcpy</code>, <code>MoveTo</code>, <code>printf</code>, <code>SetSolidPenPat</code>, <code>snprintf</code>, <code>startgraph</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-display_model_face_ids">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-DoColor" open><summary><code>DoColor</code><span class="muted">engine.c · ligne 6271</span></summary><div class="body"><pre><code>void DoColor()</code></pre>
+<details class="function" id="fn-DoColor" open><summary><code>DoColor</code><span class="muted">engine.c · ligne 6075</span></summary><div class="body"><pre><code>void DoColor()</code></pre>
 <h4>Rôle :</h4>
 <p>Afficher les seize couleurs disponibles avec leurs indices.</p>
 <h4>Paramètres :</h4>
@@ -320,7 +320,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>DrawString</code>, <code>FrameRect</code>, <code>MoveTo</code>, <code>OffsetRect</code>, <code>PaintRect</code>, <code>SetRect</code>, <code>SetSolidPenPat</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-DoColor">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-DoText" open><summary><code>DoText</code><span class="muted">engine.c · ligne 8549</span></summary><div class="body"><pre><code>void DoText()</code></pre>
+<details class="function" id="fn-DoText" open><summary><code>DoText</code><span class="muted">engine.c · ligne 8352</span></summary><div class="body"><pre><code>void DoText()</code></pre>
 <h4>Rôle :</h4>
 <p>Revenir à l&#x27;affichage texte et envoyer le caractère d&#x27;effacement écran.</p>
 <h4>Paramètres :</h4>
@@ -333,7 +333,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-display_model_face_ids" title="Afficher une vue graphique annotée avec les identifiants des faces visibles."><code>display_model_face_ids</code></a>, <a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-inspect_faces_order" title="Inspecter les faces avant ou après une cible et proposer sa correction."><code>inspect_faces_order</code></a>, <a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a>, <a href="#fn-repair_geov3" title="Inspecter et corriger l&#x27;ordre courant par les échanges proposés par GEO V3."><code>repair_geov3</code></a>, <a href="#fn-show_help_pager" title="Afficher cycliquement les pages d&#x27;aide textuelle jusqu&#x27;à Échap."><code>show_help_pager</code></a>, <a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>putchar</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-DoText">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-drawFace" open><summary><code>drawFace</code><span class="muted">engine.c · ligne 5659</span></summary><div class="body"><pre><code>void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index)</code></pre>
+<details class="function" id="fn-drawFace" open><summary><code>drawFace</code><span class="muted">engine.c · ligne 5463</span></summary><div class="body"><pre><code>void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index)</code></pre>
 <h4>Rôle :</h4>
 <p>Dessiner une face isolée pour les outils d&#x27;inspection.</p>
 <h4>Paramètres :</h4>
@@ -350,7 +350,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-display_model_face_ids" title="Afficher une vue graphique annotée avec les identifiants des faces visibles."><code>display_model_face_ids</code></a>, <a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-inspect_faces_order" title="Inspecter les faces avant ou après une cible et proposer sa correction."><code>inspect_faces_order</code></a>, <a href="#fn-repair_geov3_confirm" title="Montrer les deux faces d&#x27;un échange GEO V3 et recueillir la décision."><code>repair_geov3_confirm</code></a>, <a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>DrawString</code>, <code>FillPoly</code>, <code>FramePoly</code>, <code>GetPenPat</code>, <code>memcpy</code>, <code>MoveTo</code>, <code>QUICKDRAW_BUILD_POINTS</code>, <code>SetPenMode</code>, <code>SetSolidPenPat</code>, <code>snprintf</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-drawFace">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-drawFaceIndex" open><summary><code>drawFaceIndex</code><span class="muted">engine.c · ligne 5765</span></summary><div class="body"><pre><code>void drawFaceIndex(Model3D* model, int face_id)</code></pre>
+<details class="function" id="fn-drawFaceIndex" open><summary><code>drawFaceIndex</code><span class="muted">engine.c · ligne 5569</span></summary><div class="body"><pre><code>void drawFaceIndex(Model3D* model, int face_id)</code></pre>
 <h4>Rôle :</h4>
 <p>Écrire l&#x27;identifiant d&#x27;une face au centre de sa boîte projetée.</p>
 <h4>Paramètres :</h4>
@@ -363,7 +363,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>DrawString</code>, <code>GetPenPat</code>, <code>memcpy</code>, <code>MoveTo</code>, <code>SetPenPat</code>, <code>SetSolidPenPat</code>, <code>snprintf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-drawFaceIndex">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-drawPolygons" open><summary><code>drawPolygons</code><span class="muted">engine.c · ligne 5446</span></summary><div class="body"><pre><code>void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)</code></pre>
+<details class="function" id="fn-drawPolygons" open><summary><code>drawPolygons</code><span class="muted">engine.c · ligne 5250</span></summary><div class="body"><pre><code>void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)</code></pre>
 <h4>Rôle :</h4>
 <p>Dessiner les faces affichables dans la permutation calculée par la méthode de classement.</p>
 <h4>Paramètres :</h4>
@@ -380,7 +380,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-display_model_face_ids" title="Afficher une vue graphique annotée avec les identifiants des faces visibles."><code>display_model_face_ids</code></a>, <a href="#fn-drawPolygons_jitter" title="Dessiner une vue avec un déplacement aléatoire temporaire de chaque sommet."><code>drawPolygons_jitter</code></a>, <a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-inspect_faces_order" title="Inspecter les faces avant ou après une cible et proposer sa correction."><code>inspect_faces_order</code></a>, <a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a>, <a href="#fn-repair_geov3_confirm" title="Montrer les deux faces d&#x27;un échange GEO V3 et recueillir la décision."><code>repair_geov3_confirm</code></a>, <a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FillPoly</code>, <code>FramePoly</code>, <code>GetPenPat</code>, <code>QUICKDRAW_BUILD_POINTS</code>, <code>SetPenMode</code>, <code>SetSolidPenPat</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-drawPolygons">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-drawPolygons_jitter" open><summary><code>drawPolygons_jitter</code><span class="muted">engine.c · ligne 5593</span></summary><div class="body"><pre><code>void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)</code></pre>
+<details class="function" id="fn-drawPolygons_jitter" open><summary><code>drawPolygons_jitter</code><span class="muted">engine.c · ligne 5397</span></summary><div class="body"><pre><code>void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int vertex_count_total)</code></pre>
 <h4>Rôle :</h4>
 <p>Dessiner une vue avec un déplacement aléatoire temporaire de chaque sommet.</p>
 <h4>Paramètres :</h4>
@@ -393,7 +393,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-display_model_face_ids" title="Afficher une vue graphique annotée avec les identifiants des faces visibles."><code>display_model_face_ids</code></a>, <a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-inspect_faces_order" title="Inspecter les faces avant ou après une cible et proposer sa correction."><code>inspect_faces_order</code></a>, <a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a>, <a href="#fn-repair_geov3_confirm" title="Montrer les deux faces d&#x27;un échange GEO V3 et recueillir la décision."><code>repair_geov3_confirm</code></a>, <a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>, <code>malloc</code>, <code>rand</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-drawPolygons_jitter">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-dump_compare_results_to_file" open><summary><code>dump_compare_results_to_file</code><span class="muted">engine.c · ligne 7978</span></summary><div class="body"><pre><code>static void dump_compare_results_to_file(const CompareFacesResult *out, int f1, int f2)</code></pre>
+<details class="function" id="fn-dump_compare_results_to_file" open><summary><code>dump_compare_results_to_file</code><span class="muted">engine.c · ligne 7781</span></summary><div class="body"><pre><code>static void dump_compare_results_to_file(const CompareFacesResult *out, int f1, int f2)</code></pre>
 <h4>Rôle :</h4>
 <p>Ajouter le diagnostic textuel d&#x27;une paire dans son fichier dédié.</p>
 <h4>Paramètres :</h4>
@@ -406,7 +406,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fclose</code>, <code>fopen</code>, <code>fprintf</code>, <code>sprintf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-dump_compare_results_to_file">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-dumpFace2DCoordinates" open><summary><code>dumpFace2DCoordinates</code><span class="muted">engine.c · ligne 8357</span></summary><div class="body"><pre><code>static void dumpFace2DCoordinates(Model3D* model, const char* txt_filename)</code></pre>
+<details class="function" id="fn-dumpFace2DCoordinates" open><summary><code>dumpFace2DCoordinates</code><span class="muted">engine.c · ligne 8160</span></summary><div class="body"><pre><code>static void dumpFace2DCoordinates(Model3D* model, const char* txt_filename)</code></pre>
 <h4>Rôle :</h4>
 <p>Exporter les coordonnées écran de chaque sommet de chaque face.</p>
 <h4>Paramètres :</h4>
@@ -419,7 +419,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fclose</code>, <code>fopen</code>, <code>fprintf</code>, <code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-dumpFace2DCoordinates">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-dumpFaceEquationsCSV" open><summary><code>dumpFaceEquationsCSV</code><span class="muted">engine.c · ligne 8233</span></summary><div class="body"><pre><code>void dumpFaceEquationsCSV(Model3D* model, const char* csv_filename, int alt_format)</code></pre>
+<details class="function" id="fn-dumpFaceEquationsCSV" open><summary><code>dumpFaceEquationsCSV</code><span class="muted">engine.c · ligne 8036</span></summary><div class="body"><pre><code>void dumpFaceEquationsCSV(Model3D* model, const char* csv_filename, int alt_format)</code></pre>
 <h4>Rôle :</h4>
 <p>Exporter les plans, profondeurs et coordonnées observateur des faces.</p>
 <h4>Paramètres :</h4>
@@ -432,7 +432,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fclose</code>, <code>FIXED64_TO_FLOAT</code>, <code>FIXED_TO_FLOAT</code>, <code>fopen</code>, <code>fprintf</code>, <code>fputc</code>, <code>printf</code>, <code>PRINTF_FLOAT</code>, <code>snprintf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-dumpFaceEquationsCSV">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-dumpSortedFaceIndices" open><summary><code>dumpSortedFaceIndices</code><span class="muted">engine.c · ligne 8403</span></summary><div class="body"><pre><code>static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename)</code></pre>
+<details class="function" id="fn-dumpSortedFaceIndices" open><summary><code>dumpSortedFaceIndices</code><span class="muted">engine.c · ligne 8206</span></summary><div class="body"><pre><code>static void dumpSortedFaceIndices(Model3D* model, const char* txt_filename)</code></pre>
 <h4>Rôle :</h4>
 <p>Exporter la permutation courante dans l&#x27;ordre de dessin de la méthode de classement.</p>
 <h4>Paramètres :</h4>
@@ -445,7 +445,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fclose</code>, <code>fopen</code>, <code>fprintf</code>, <code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-dumpSortedFaceIndices">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-evaluate_pair_tests" open><summary><code>evaluate_pair_tests</code><span class="muted">engine.c · ligne 4331</span></summary><div class="body"><pre><code>static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7])</code></pre>
+<details class="function" id="fn-evaluate_pair_tests" open><summary><code>evaluate_pair_tests</code><span class="muted">engine.c · ligne 4135</span></summary><div class="body"><pre><code>static void evaluate_pair_tests(Model3D* model, int f1, int f2, int out[7])</code></pre>
 <h4>Rôle :</h4>
 <p>Exposer séparément les sept tests d&#x27;ordre d&#x27;une paire pour le diagnostic.</p>
 <h4>Paramètres :</h4>
@@ -459,7 +459,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-geometric_face_relation" title="Classer f1 par rapport à f2 en utilisant le plan de f1 dans la vue observateur."><code>geometric_face_relation</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-inspect_faces_order" title="Inspecter les faces avant ou après une cible et proposer sa correction."><code>inspect_faces_order</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-evaluate_pair_tests">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-faces_share_vertex_or_edge" open><summary><code>faces_share_vertex_or_edge</code><span class="muted">engine.c · ligne 1056</span></summary><div class="body"><pre><code>static int faces_share_vertex_or_edge(FaceArrays3D* faces, int i, int j)</code></pre>
+<details class="function" id="fn-faces_share_vertex_or_edge" open><summary><code>faces_share_vertex_or_edge</code><span class="muted">engine.c · ligne 860</span></summary><div class="body"><pre><code>static int faces_share_vertex_or_edge(FaceArrays3D* faces, int i, int j)</code></pre>
 <h4>Rôle :</h4>
 <p>Détecter un identifiant de sommet commun à deux faces.</p>
 <h4>Paramètres :</h4>
@@ -471,7 +471,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-check_intersect" title="Examiner les intersections objet et tenter des découpages avant la visualisation."><code>check_intersect</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-faces_share_vertex_or_edge">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-fixed_mul32_fast" open><summary><code>fixed_mul32_fast</code><span class="muted">engine.c · ligne 2565</span></summary><div class="body"><pre><code>static Fixed32 fixed_mul32_fast(Fixed32 a,Fixed32 b)</code></pre>
+<details class="function" id="fn-fixed_mul32_fast" open><summary><code>fixed_mul32_fast</code><span class="muted">engine.c · ligne 2369</span></summary><div class="body"><pre><code>static Fixed32 fixed_mul32_fast(Fixed32 a,Fixed32 b)</code></pre>
 <h4>Rôle :</h4>
 <p>Multiplier deux valeurs 16.16 et conserver les bits 16..47 du produit.</p>
 <h4>Paramètres :</h4>
@@ -484,7 +484,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-compute_auto_fit" title="Calculer la distance et l&#x27;échelle suggérées pour la vue initiale."><code>compute_auto_fit</code></a>, <a href="#fn-processModelFast" title="Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie."><code>processModelFast</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>memcpy</code>, <code>return</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-fixed_mul32_fast">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-fixed_product32_fast" open><summary><code>fixed_product32_fast</code><span class="muted">engine.c · ligne 2600</span></summary><div class="body"><pre><code>static Fixed64 fixed_product32_fast(Fixed32 a,Fixed32 b)</code></pre>
+<details class="function" id="fn-fixed_product32_fast" open><summary><code>fixed_product32_fast</code><span class="muted">engine.c · ligne 2404</span></summary><div class="body"><pre><code>static Fixed64 fixed_product32_fast(Fixed32 a,Fixed32 b)</code></pre>
 <h4>Rôle :</h4>
 <p>Calculer le produit signé brut 32x32 vers 64 bits.</p>
 <h4>Paramètres :</h4>
@@ -497,7 +497,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-calculateFaceDepths" title="Recalculer les métriques et plans observateur des faces de la vue courante."><code>calculateFaceDepths</code></a>, <a href="#fn-fixed_product64x32_fast" title="Calculer un produit brut coefficient 64 bits par coordonnée 32 bits."><code>fixed_product64x32_fast</code></a>, <a href="#fn-orient_ll" title="Calculer l&#x27;orientation signée de trois points entiers A, B et C."><code>orient_ll</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>memcpy</code>, <code>return</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-fixed_product32_fast">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-fixed_product64x32_fast" open><summary><code>fixed_product64x32_fast</code><span class="muted">engine.c · ligne 2634</span></summary><div class="body"><pre><code>static Fixed64 fixed_product64x32_fast(Fixed64 a,Fixed32 b)</code></pre>
+<details class="function" id="fn-fixed_product64x32_fast" open><summary><code>fixed_product64x32_fast</code><span class="muted">engine.c · ligne 2438</span></summary><div class="body"><pre><code>static Fixed64 fixed_product64x32_fast(Fixed64 a,Fixed32 b)</code></pre>
 <h4>Rôle :</h4>
 <p>Calculer un produit brut coefficient 64 bits par coordonnée 32 bits.</p>
 <h4>Paramètres :</h4>
@@ -509,7 +509,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-fixed_product32_fast" title="Calculer le produit signé brut 32x32 vers 64 bits."><code>fixed_product32_fast</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-calculateFaceDepths" title="Recalculer les métriques et plans observateur des faces de la vue courante."><code>calculateFaceDepths</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-fixed_product64x32_fast">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-frameInconclusivePairs" open><summary><code>frameInconclusivePairs</code><span class="muted">engine.c · ligne 5836</span></summary><div class="body"><pre><code>void frameInconclusivePairs(Model3D* model)</code></pre>
+<details class="function" id="fn-frameInconclusivePairs" open><summary><code>frameInconclusivePairs</code><span class="muted">engine.c · ligne 5640</span></summary><div class="body"><pre><code>void frameInconclusivePairs(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Surligner les faces des paires inconclusives conservées par les méthodes de classement.</p>
 <h4>Paramètres :</h4>
@@ -524,7 +524,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FillPoly</code>, <code>FramePoly</code>, <code>GetPenPat</code>, <code>QUICKDRAW_BUILD_POINTS</code>, <code>SetSolidPenPat</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-frameInconclusivePairs">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-generate_random_colors" open><summary><code>generate_random_colors</code><span class="muted">engine.c · ligne 5925</span></summary><div class="body"><pre><code>void generate_random_colors(int face_count)</code></pre>
+<details class="function" id="fn-generate_random_colors" open><summary><code>generate_random_colors</code><span class="muted">engine.c · ligne 5729</span></summary><div class="body"><pre><code>void generate_random_colors(int face_count)</code></pre>
 <h4>Rôle :</h4>
 <p>Générer deux tableaux de couleurs non noires pour les faces.</p>
 <h4>Paramètres :</h4>
@@ -541,7 +541,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>rand</code>, <code>realloc</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-generate_random_colors">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-geo_face_order" open><summary><code>geo_face_order</code><span class="muted">engine.c · ligne 7298</span></summary><div class="body"><pre><code>static int geo_face_order(Model3D* model, int f1, int f2)</code></pre>
+<details class="function" id="fn-geo_face_order" open><summary><code>geo_face_order</code><span class="muted">engine.c · ligne 7102</span></summary><div class="body"><pre><code>static int geo_face_order(Model3D* model, int f1, int f2)</code></pre>
 <h4>Rôle :</h4>
 <p>Fournir une préférence d&#x27;ordre en utilisant le noyau géométrique optimisé.</p>
 <h4>Paramètres :</h4>
@@ -555,7 +555,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-geometric_face_relation" title="Classer f1 par rapport à f2 en utilisant le plan de f1 dans la vue observateur."><code>geometric_face_relation</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-compare_faces_diagnostic" title="Comparer plusieurs méthodes d&#x27;ordre et conserver leurs résultats séparés."><code>compare_faces_diagnostic</code></a>, <a href="#fn-painter_correct" title="Exécuter CORRECT ou CORRECT V2 à partir de la même préparation FAST."><code>painter_correct</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-geo_face_order">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-geometric_face_relation" open><summary><code>geometric_face_relation</code><span class="muted">engine.c · ligne 2723</span></summary><div class="body"><pre><code>static int geometric_face_relation(Model3D* model, int f1, int f2)</code></pre>
+<details class="function" id="fn-geometric_face_relation" open><summary><code>geometric_face_relation</code><span class="muted">engine.c · ligne 2527</span></summary><div class="body"><pre><code>static int geometric_face_relation(Model3D* model, int f1, int f2)</code></pre>
 <h4>Rôle :</h4>
 <p>Classer f1 par rapport à f2 en utilisant le plan de f1 dans la vue observateur.</p>
 <h4>Paramètres :</h4>
@@ -571,7 +571,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-evaluate_pair_tests" title="Exposer séparément les sept tests d&#x27;ordre d&#x27;une paire pour le diagnostic."><code>evaluate_pair_tests</code></a>, <a href="#fn-geo_face_order" title="Fournir une préférence d&#x27;ordre en utilisant le noyau géométrique optimisé."><code>geo_face_order</code></a>, <a href="#fn-geov3_run" title="Partager le parcours GEO V3 entre le classement et le repair interactif."><code>geov3_run</code></a>, <a href="#fn-painter_bubble_sort" title="Corriger l&#x27;ordre FAST par échanges de voisins avec tests géométriques."><code>painter_bubble_sort</code></a>, <a href="#fn-painter_geoV2" title="Corriger l&#x27;ordre FAST par passes de voisins et cache de paires borné."><code>painter_geoV2</code></a>, <a href="#fn-painter_newell_sancha" title="Corriger l&#x27;ordre FAST à partir des paires dont les intervalles Z se recouvrent."><code>painter_newell_sancha</code></a>, <a href="#fn-pair_order_relation" title="Fournir une préférence d&#x27;ordre par profondeur, bornes puis plans."><code>pair_order_relation</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_MUL_64</code>, <code>FLOAT_TO_FIXED</code>, <code>memset</code>, <code>return</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-geometric_face_relation">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-GeoV3_Mul32x32" open><summary><code>GeoV3_Mul32x32</code><span class="muted">engine.c · ligne 2180</span></summary><div class="body"><pre><code>asm void GeoV3_Mul32x32(void)</code></pre>
+<details class="function" id="fn-GeoV3_Mul32x32" open><summary><code>GeoV3_Mul32x32</code><span class="muted">engine.c · ligne 1984</span></summary><div class="body"><pre><code>asm void GeoV3_Mul32x32(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Multiplier exactement deux entiers signés 32 bits et publier le produit 64 bits brut.</p>
 <h4>Paramètres :</h4>
@@ -593,7 +593,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-FaceDepth_ScanKernel" title="Parcourir une face pour calculer profondeurs, bornes, centroïde et normale."><code>FaceDepth_ScanKernel</code></a>, <a href="#fn-GeoRel_Classify32Kernel" title="Classer une face candidate par rapport au plan et au côté de l&#x27;observateur."><code>GeoRel_Classify32Kernel</code></a>, <a href="#fn-GeoV3_Mul32x32SetInputs" title="Préparer les deux opérandes natifs et exécuter le multiplicateur assembleur."><code>GeoV3_Mul32x32SetInputs</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-GeoV3_Mul32x32">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-GeoV3_Mul32x32SetInputs" open><summary><code>GeoV3_Mul32x32SetInputs</code><span class="muted">engine.c · ligne 2534</span></summary><div class="body"><pre><code>static void GeoV3_Mul32x32SetInputs(Fixed32 a, Fixed32 b)</code></pre>
+<details class="function" id="fn-GeoV3_Mul32x32SetInputs" open><summary><code>GeoV3_Mul32x32SetInputs</code><span class="muted">engine.c · ligne 2338</span></summary><div class="body"><pre><code>static void GeoV3_Mul32x32SetInputs(Fixed32 a, Fixed32 b)</code></pre>
 <h4>Rôle :</h4>
 <p>Préparer les deux opérandes natifs et exécuter le multiplicateur assembleur.</p>
 <h4>Paramètres :</h4>
@@ -606,7 +606,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-fixed_mul32_fast" title="Multiplier deux valeurs 16.16 et conserver les bits 16..47 du produit."><code>fixed_mul32_fast</code></a>, <a href="#fn-fixed_product32_fast" title="Calculer le produit signé brut 32x32 vers 64 bits."><code>fixed_product32_fast</code></a>, <a href="#fn-GeoV3_MulFixed64Fixed32Shift" title="Évaluer une contribution de plan : (coefficient * coordinate) &gt;&gt; 16."><code>GeoV3_MulFixed64Fixed32Shift</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>memcpy</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-GeoV3_Mul32x32SetInputs">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-GeoV3_MulFixed64Fixed32Shift" open><summary><code>GeoV3_MulFixed64Fixed32Shift</code><span class="muted">engine.c · ligne 2663</span></summary><div class="body"><pre><code>static Fixed64 GeoV3_MulFixed64Fixed32Shift(Fixed64 coefficient, Fixed32 coordinate)</code></pre>
+<details class="function" id="fn-GeoV3_MulFixed64Fixed32Shift" open><summary><code>GeoV3_MulFixed64Fixed32Shift</code><span class="muted">engine.c · ligne 2467</span></summary><div class="body"><pre><code>static Fixed64 GeoV3_MulFixed64Fixed32Shift(Fixed64 coefficient, Fixed32 coordinate)</code></pre>
 <h4>Rôle :</h4>
 <p>Évaluer une contribution de plan : (coefficient * coordinate) &gt;&gt; 16.</p>
 <h4>Paramètres :</h4>
@@ -619,7 +619,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-geometric_face_relation" title="Classer f1 par rapport à f2 en utilisant le plan de f1 dans la vue observateur."><code>geometric_face_relation</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>memcpy</code>, <code>return</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-GeoV3_MulFixed64Fixed32Shift">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-getObserverParams" open><summary><code>getObserverParams</code><span class="muted">engine.c · ligne 5262</span></summary><div class="body"><pre><code>void getObserverParams(ObserverParams* params, Model3D* model)</code></pre>
+<details class="function" id="fn-getObserverParams" open><summary><code>getObserverParams</code><span class="muted">engine.c · ligne 5066</span></summary><div class="body"><pre><code>void getObserverParams(ObserverParams* params, Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Saisir les angles et la distance de vue en conservant les valeurs proposées.</p>
 <h4>Paramètres :</h4>
@@ -635,7 +635,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>atof</code>, <code>atoi</code>, <code>fgets</code>, <code>FIXED_TO_FLOAT</code>, <code>FLOAT_TO_FIXED</code>, <code>printf</code>, <code>strcspn</code>, <code>strlen</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-getObserverParams">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-hideFace" open><summary><code>hideFace</code><span class="muted">engine.c · ligne 7133</span></summary><div class="body"><pre><code>void hideFace(Model3D* model, int face_idx)</code></pre>
+<details class="function" id="fn-hideFace" open><summary><code>hideFace</code><span class="muted">engine.c · ligne 6937</span></summary><div class="body"><pre><code>void hideFace(Model3D* model, int face_idx)</code></pre>
 <h4>Rôle :</h4>
 <p>Masquer une face en conservant sa longueur de liste pour restauration.</p>
 <h4>Paramètres :</h4>
@@ -649,7 +649,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ordering_cache_invalidate" title="Changer la génération des caches et désigner leur modèle propriétaire."><code>ordering_cache_invalidate</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-hideFace">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-initPalettes" open><summary><code>initPalettes</code><span class="muted">engine.c · ligne 6234</span></summary><div class="body"><pre><code>void initPalettes(void)</code></pre>
+<details class="function" id="fn-initPalettes" open><summary><code>initPalettes</code><span class="muted">engine.c · ligne 6038</span></summary><div class="body"><pre><code>void initPalettes(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Construire les quinze palettes de dégradé et demander la capture de la palette zéro.</p>
 <h4>Paramètres :</h4>
@@ -663,7 +663,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-paletteGradientColor" title="Construire une entrée d&#x27;une palette de dégradé."><code>paletteGradientColor</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-initPalettes">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-inspect_face_pair_ui" open><summary><code>inspect_face_pair_ui</code><span class="muted">engine.c · ligne 7522</span></summary><div class="body"><pre><code>static void inspect_face_pair_ui(Model3D* model)</code></pre>
+<details class="function" id="fn-inspect_face_pair_ui" open><summary><code>inspect_face_pair_ui</code><span class="muted">engine.c · ligne 7325</span></summary><div class="body"><pre><code>static void inspect_face_pair_ui(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Piloter l&#x27;inspecteur graphique et textuel de deux faces.</p>
 <h4>Paramètres :</h4>
@@ -677,7 +677,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>endgraph</code>, <code>FIXED64_TO_FLOAT</code>, <code>FIXED_MUL_64</code>, <code>FIXED_TO_FLOAT</code>, <code>FLOAT_TO_FIXED</code>, <code>FrameRect</code>, <code>free</code>, <code>getchar</code>, <code>GetPenState</code>, <code>LineTo</code>, <code>malloc</code>, <code>memset</code>, <code>MoveTo</code>, <code>printf</code>, <code>scanf</code>, <code>SetPenState</code>, <code>SetRect</code>, <code>SetSolidPenPat</code>, <code>sprintf</code>, <code>startgraph</code>, <code>strcpy</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-inspect_face_pair_ui">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-inspect_faces_order" open><summary><code>inspect_faces_order</code><span class="muted">engine.c · ligne 6422</span></summary><div class="body"><pre><code>static void inspect_faces_order(Model3D* model, ObserverParams* params, int inspect_after)</code></pre>
+<details class="function" id="fn-inspect_faces_order" open><summary><code>inspect_faces_order</code><span class="muted">engine.c · ligne 6226</span></summary><div class="body"><pre><code>static void inspect_faces_order(Model3D* model, ObserverParams* params, int inspect_after)</code></pre>
 <h4>Rôle :</h4>
 <p>Inspecter les faces avant ou après une cible et proposer sa correction.</p>
 <h4>Paramètres :</h4>
@@ -693,7 +693,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>endgraph</code>, <code>free</code>, <code>getchar</code>, <code>malloc</code>, <code>MoveTo</code>, <code>printf</code>, <code>scanf</code>, <code>snprintf</code>, <code>startgraph</code>, <code>strlen</code>, <code>strncat</code>, <code>strncpy</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-inspect_faces_order">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-inspection_view_begin" open><summary><code>inspection_view_begin</code><span class="muted">engine.c · ligne 5973</span></summary><div class="body"><pre><code>static int inspection_view_begin(Model3D *model, InspectionViewState *state)</code></pre>
+<details class="function" id="fn-inspection_view_begin" open><summary><code>inspection_view_begin</code><span class="muted">engine.c · ligne 5777</span></summary><div class="body"><pre><code>static int inspection_view_begin(Model3D *model, InspectionViewState *state)</code></pre>
 <h4>Rôle :</h4>
 <p>Sauvegarder visibilité, mode filaire et culling avant une inspection.</p>
 <h4>Paramètres :</h4>
@@ -706,7 +706,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-display_model_face_ids" title="Afficher une vue graphique annotée avec les identifiants des faces visibles."><code>display_model_face_ids</code></a>, <a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-inspect_faces_order" title="Inspecter les faces avant ou après une cible et proposer sa correction."><code>inspect_faces_order</code></a>, <a href="#fn-repair_geov3" title="Inspecter et corriger l&#x27;ordre courant par les échanges proposés par GEO V3."><code>repair_geov3</code></a>, <a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>malloc</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-inspection_view_begin">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-inspection_view_end" open><summary><code>inspection_view_end</code><span class="muted">engine.c · ligne 6036</span></summary><div class="body"><pre><code>static void inspection_view_end(Model3D *model, InspectionViewState *state)</code></pre>
+<details class="function" id="fn-inspection_view_end" open><summary><code>inspection_view_end</code><span class="muted">engine.c · ligne 5840</span></summary><div class="body"><pre><code>static void inspection_view_end(Model3D *model, InspectionViewState *state)</code></pre>
 <h4>Rôle :</h4>
 <p>Restaurer la vue puis libérer sa sauvegarde.</p>
 <h4>Paramètres :</h4>
@@ -719,7 +719,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-display_model_face_ids" title="Afficher une vue graphique annotée avec les identifiants des faces visibles."><code>display_model_face_ids</code></a>, <a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-inspect_faces_order" title="Inspecter les faces avant ou après une cible et proposer sa correction."><code>inspect_faces_order</code></a>, <a href="#fn-repair_geov3" title="Inspecter et corriger l&#x27;ordre courant par les échanges proposés par GEO V3."><code>repair_geov3</code></a>, <a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-inspection_view_end">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-inspection_view_restore" open><summary><code>inspection_view_restore</code><span class="muted">engine.c · ligne 6007</span></summary><div class="body"><pre><code>static void inspection_view_restore(Model3D *model, const InspectionViewState *state)</code></pre>
+<details class="function" id="fn-inspection_view_restore" open><summary><code>inspection_view_restore</code><span class="muted">engine.c · ligne 5811</span></summary><div class="body"><pre><code>static void inspection_view_restore(Model3D *model, const InspectionViewState *state)</code></pre>
 <h4>Rôle :</h4>
 <p>Restaurer l&#x27;état sauvegardé sans libérer le buffer réutilisable.</p>
 <h4>Paramètres :</h4>
@@ -731,7 +731,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-inspection_view_end" title="Restaurer la vue puis libérer sa sauvegarde."><code>inspection_view_end</code></a>, <a href="#fn-repair_geov3_confirm" title="Montrer les deux faces d&#x27;un échange GEO V3 et recueillir la décision."><code>repair_geov3_confirm</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-inspection_view_restore">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-loadModel3D" open><summary><code>loadModel3D</code><span class="muted">engine.c · ligne 503</span></summary><div class="body"><pre><code>int loadModel3D(Model3D* model, const char* filename)</code></pre>
+<details class="function" id="fn-loadModel3D" open><summary><code>loadModel3D</code><span class="muted">engine.c · ligne 307</span></summary><div class="body"><pre><code>int loadModel3D(Model3D* model, const char* filename)</code></pre>
 <h4>Rôle :</h4>
 <p>Charger sommets et faces OBJ dans un modèle déjà alloué.</p>
 <h4>Paramètres :</h4>
@@ -746,7 +746,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-loadModel3D">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-move_element_remove_and_insert" open><summary><code>move_element_remove_and_insert</code><span class="muted">engine.c · ligne 4235</span></summary><div class="body"><pre><code>static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx)</code></pre>
+<details class="function" id="fn-move_element_remove_and_insert" open><summary><code>move_element_remove_and_insert</code><span class="muted">engine.c · ligne 4039</span></summary><div class="body"><pre><code>static int move_element_remove_and_insert(int *arr, int n, int from, int insert_idx)</code></pre>
 <h4>Rôle :</h4>
 <p>Déplacer un élément d&#x27;un tableau en conservant l&#x27;ordre des autres.</p>
 <h4>Paramètres :</h4>
@@ -760,7 +760,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-inspect_faces_order" title="Inspecter les faces avant ou après une cible et proposer sa correction."><code>inspect_faces_order</code></a>, <a href="#fn-move_element_remove_and_insert_pos" title="Déplacer un identifiant et maintenir la table inverse des positions."><code>move_element_remove_and_insert_pos</code></a>, <a href="#fn-sort_by_zmax" title="Trier les indices de faces par profondeur maximale décroissante, de façon stable."><code>sort_by_zmax</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>memmove</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-move_element_remove_and_insert">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-move_element_remove_and_insert_pos" open><summary><code>move_element_remove_and_insert_pos</code><span class="muted">engine.c · ligne 4277</span></summary><div class="body"><pre><code>static int move_element_remove_and_insert_pos(int *arr, int n, int from, int insert_idx, int *pos_of_face)</code></pre>
+<details class="function" id="fn-move_element_remove_and_insert_pos" open><summary><code>move_element_remove_and_insert_pos</code><span class="muted">engine.c · ligne 4081</span></summary><div class="body"><pre><code>static int move_element_remove_and_insert_pos(int *arr, int n, int from, int insert_idx, int *pos_of_face)</code></pre>
 <h4>Rôle :</h4>
 <p>Déplacer un identifiant et maintenir la table inverse des positions.</p>
 <h4>Paramètres :</h4>
@@ -774,7 +774,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-move_element_remove_and_insert" title="Déplacer un élément d&#x27;un tableau en conservant l&#x27;ordre des autres."><code>move_element_remove_and_insert</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-painter_correct" title="Exécuter CORRECT ou CORRECT V2 à partir de la même préparation FAST."><code>painter_correct</code></a>, <a href="#fn-painter_newell_sancha" title="Corriger l&#x27;ordre FAST à partir des paires dont les intervalles Z se recouvrent."><code>painter_newell_sancha</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-move_element_remove_and_insert_pos">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-normalizeAutoFitDistanceTo150" open><summary><code>normalizeAutoFitDistanceTo150</code><span class="muted">engine.c · ligne 5199</span></summary><div class="body"><pre><code>void normalizeAutoFitDistanceTo150(Model3D* model)</code></pre>
+<details class="function" id="fn-normalizeAutoFitDistanceTo150" open><summary><code>normalizeAutoFitDistanceTo150</code><span class="muted">engine.c · ligne 5003</span></summary><div class="body"><pre><code>void normalizeAutoFitDistanceTo150(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Appliquer la normalisation existante des suggestions de vue vers une distance de 150.</p>
 <h4>Paramètres :</h4>
@@ -789,7 +789,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_MUL_64</code>, <code>FIXED_TO_FLOAT</code>, <code>FLOAT_TO_FIXED</code>, <code>INT_TO_FIXED</code>, <code>printf</code>, <code>sqrtf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-normalizeAutoFitDistanceTo150">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-painter_bubble_sort" open><summary><code>painter_bubble_sort</code><span class="muted">engine.c · ligne 2948</span></summary><div class="body"><pre><code>void painter_bubble_sort(Model3D* model, int face_count)</code></pre>
+<details class="function" id="fn-painter_bubble_sort" open><summary><code>painter_bubble_sort</code><span class="muted">engine.c · ligne 2752</span></summary><div class="body"><pre><code>void painter_bubble_sort(Model3D* model, int face_count)</code></pre>
 <h4>Rôle :</h4>
 <p>Corriger l&#x27;ordre FAST par échanges de voisins avec tests géométriques.</p>
 <h4>Paramètres :</h4>
@@ -804,7 +804,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-processModelFast" title="Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie."><code>processModelFast</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>, <code>malloc</code>, <code>PAIR_HASH</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-painter_bubble_sort">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-painter_correct" open><summary><code>painter_correct</code><span class="muted">engine.c · ligne 3951</span></summary><div class="body"><pre><code>static int painter_correct(Model3D* model, int face_count, int use_v2)</code></pre>
+<details class="function" id="fn-painter_correct" open><summary><code>painter_correct</code><span class="muted">engine.c · ligne 3755</span></summary><div class="body"><pre><code>static int painter_correct(Model3D* model, int face_count, int use_v2)</code></pre>
 <h4>Rôle :</h4>
 <p>Exécuter CORRECT ou CORRECT V2 à partir de la même préparation FAST.</p>
 <h4>Paramètres :</h4>
@@ -823,7 +823,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-processModelFast" title="Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie."><code>processModelFast</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_TO_FLOAT</code>, <code>free</code>, <code>malloc</code>, <code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-painter_correct">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-painter_geoV2" open><summary><code>painter_geoV2</code><span class="muted">engine.c · ligne 3775</span></summary><div class="body"><pre><code>void painter_geoV2(Model3D* model, int face_count)</code></pre>
+<details class="function" id="fn-painter_geoV2" open><summary><code>painter_geoV2</code><span class="muted">engine.c · ligne 3579</span></summary><div class="body"><pre><code>void painter_geoV2(Model3D* model, int face_count)</code></pre>
 <h4>Rôle :</h4>
 <p>Corriger l&#x27;ordre FAST par passes de voisins et cache de paires borné.</p>
 <h4>Paramètres :</h4>
@@ -838,7 +838,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-processModelFast" title="Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie."><code>processModelFast</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FLOAT_TO_FIXED</code>, <code>free</code>, <code>malloc</code>, <code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-painter_geoV2">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-painter_newell_sancha" open><summary><code>painter_newell_sancha</code><span class="muted">engine.c · ligne 3143</span></summary><div class="body"><pre><code>void painter_newell_sancha(Model3D* model, int face_count)</code></pre>
+<details class="function" id="fn-painter_newell_sancha" open><summary><code>painter_newell_sancha</code><span class="muted">engine.c · ligne 2947</span></summary><div class="body"><pre><code>void painter_newell_sancha(Model3D* model, int face_count)</code></pre>
 <h4>Rôle :</h4>
 <p>Corriger l&#x27;ordre FAST à partir des paires dont les intervalles Z se recouvrent.</p>
 <h4>Paramètres :</h4>
@@ -854,7 +854,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-processModelFast" title="Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie."><code>processModelFast</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>HASH_MASK_NS</code>, <code>malloc</code>, <code>PAIR_HASH_NS</code>, <code>realloc</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-painter_newell_sancha">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-painter_newell_sancha_fast" open><summary><code>painter_newell_sancha_fast</code><span class="muted">engine.c · ligne 2889</span></summary><div class="body"><pre><code>void painter_newell_sancha_fast(Model3D* model, int face_count)</code></pre>
+<details class="function" id="fn-painter_newell_sancha_fast" open><summary><code>painter_newell_sancha_fast</code><span class="muted">engine.c · ligne 2693</span></summary><div class="body"><pre><code>void painter_newell_sancha_fast(Model3D* model, int face_count)</code></pre>
 <h4>Rôle :</h4>
 <p>Construire l&#x27;ordre FAST par profondeur moyenne décroissante.</p>
 <h4>Paramètres :</h4>
@@ -870,7 +870,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-painter_bubble_sort" title="Corriger l&#x27;ordre FAST par échanges de voisins avec tests géométriques."><code>painter_bubble_sort</code></a>, <a href="#fn-painter_correct" title="Exécuter CORRECT ou CORRECT V2 à partir de la même préparation FAST."><code>painter_correct</code></a>, <a href="#fn-painter_geoV2" title="Corriger l&#x27;ordre FAST par passes de voisins et cache de paires borné."><code>painter_geoV2</code></a>, <a href="#fn-painter_newell_sancha" title="Corriger l&#x27;ordre FAST à partir des paires dont les intervalles Z se recouvrent."><code>painter_newell_sancha</code></a>, <a href="#fn-processModelFast" title="Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie."><code>processModelFast</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>qsort</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-painter_newell_sancha_fast">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-pair_cache_create" open><summary><code>pair_cache_create</code><span class="muted">engine.c · ligne 3604</span></summary><div class="body"><pre><code>static PairCache* pair_cache_create(int capacity)</code></pre>
+<details class="function" id="fn-pair_cache_create" open><summary><code>pair_cache_create</code><span class="muted">engine.c · ligne 3408</span></summary><div class="body"><pre><code>static PairCache* pair_cache_create(int capacity)</code></pre>
 <h4>Rôle :</h4>
 <p>Allouer un cache de relations de paires avec sondage borné.</p>
 <h4>Paramètres :</h4>
@@ -883,7 +883,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-painter_geoV2" title="Corriger l&#x27;ordre FAST par passes de voisins et cache de paires borné."><code>painter_geoV2</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>calloc</code>, <code>free</code>, <code>malloc</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-pair_cache_create">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-pair_cache_destroy" open><summary><code>pair_cache_destroy</code><span class="muted">engine.c · ligne 3744</span></summary><div class="body"><pre><code>static void pair_cache_destroy(PairCache* c)</code></pre>
+<details class="function" id="fn-pair_cache_destroy" open><summary><code>pair_cache_destroy</code><span class="muted">engine.c · ligne 3548</span></summary><div class="body"><pre><code>static void pair_cache_destroy(PairCache* c)</code></pre>
 <h4>Rôle :</h4>
 <p>Libérer un cache de paires et ses slots.</p>
 <h4>Paramètres :</h4>
@@ -894,7 +894,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-painter_geoV2" title="Corriger l&#x27;ordre FAST par passes de voisins et cache de paires borné."><code>painter_geoV2</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-pair_cache_destroy">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-pair_cache_find" open><summary><code>pair_cache_find</code><span class="muted">engine.c · ligne 3665</span></summary><div class="body"><pre><code>static int pair_cache_find(PairCache* c, int f1, int f2)</code></pre>
+<details class="function" id="fn-pair_cache_find" open><summary><code>pair_cache_find</code><span class="muted">engine.c · ligne 3469</span></summary><div class="body"><pre><code>static int pair_cache_find(PairCache* c, int f1, int f2)</code></pre>
 <h4>Rôle :</h4>
 <p>Lire une relation en sondant au plus huit slots.</p>
 <h4>Paramètres :</h4>
@@ -906,7 +906,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-pair_cache_slot" title="Calculer le slot initial d&#x27;une paire non orientée."><code>pair_cache_slot</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-painter_geoV2" title="Corriger l&#x27;ordre FAST par passes de voisins et cache de paires borné."><code>painter_geoV2</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-pair_cache_find">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-pair_cache_insert" open><summary><code>pair_cache_insert</code><span class="muted">engine.c · ligne 3706</span></summary><div class="body"><pre><code>static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation)</code></pre>
+<details class="function" id="fn-pair_cache_insert" open><summary><code>pair_cache_insert</code><span class="muted">engine.c · ligne 3510</span></summary><div class="body"><pre><code>static void pair_cache_insert(PairCache* c, int f1, int f2, int8_t relation)</code></pre>
 <h4>Rôle :</h4>
 <p>Mémoriser une relation en cherchant au plus huit slots.</p>
 <h4>Paramètres :</h4>
@@ -920,7 +920,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-pair_cache_slot" title="Calculer le slot initial d&#x27;une paire non orientée."><code>pair_cache_slot</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-painter_geoV2" title="Corriger l&#x27;ordre FAST par passes de voisins et cache de paires borné."><code>painter_geoV2</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-pair_cache_insert">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-pair_cache_slot" open><summary><code>pair_cache_slot</code><span class="muted">engine.c · ligne 3636</span></summary><div class="body"><pre><code>static int pair_cache_slot(PairCache* c, int f1, int f2)</code></pre>
+<details class="function" id="fn-pair_cache_slot" open><summary><code>pair_cache_slot</code><span class="muted">engine.c · ligne 3440</span></summary><div class="body"><pre><code>static int pair_cache_slot(PairCache* c, int f1, int f2)</code></pre>
 <h4>Rôle :</h4>
 <p>Calculer le slot initial d&#x27;une paire non orientée.</p>
 <h4>Paramètres :</h4>
@@ -933,7 +933,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-pair_cache_find" title="Lire une relation en sondant au plus huit slots."><code>pair_cache_find</code></a>, <a href="#fn-pair_cache_insert" title="Mémoriser une relation en cherchant au plus huit slots."><code>pair_cache_insert</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>return</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-pair_cache_slot">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-pair_order_relation" open><summary><code>pair_order_relation</code><span class="muted">engine.c · ligne 7235</span></summary><div class="body"><pre><code>static int pair_order_relation(Model3D* model, int f1, int f2)</code></pre>
+<details class="function" id="fn-pair_order_relation" open><summary><code>pair_order_relation</code><span class="muted">engine.c · ligne 7039</span></summary><div class="body"><pre><code>static int pair_order_relation(Model3D* model, int f1, int f2)</code></pre>
 <h4>Rôle :</h4>
 <p>Fournir une préférence d&#x27;ordre par profondeur, bornes puis plans.</p>
 <h4>Paramètres :</h4>
@@ -948,7 +948,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-inspect_faces_order" title="Inspecter les faces avant ou après une cible et proposer sa correction."><code>inspect_faces_order</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FLOAT_TO_FIXED</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-pair_order_relation">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-poly_signed_area" open><summary><code>poly_signed_area</code><span class="muted">engine.c · ligne 1714</span></summary><div class="body"><pre><code>static double poly_signed_area(Model3D* model, int *list, int n, double a, double b, double c)</code></pre>
+<details class="function" id="fn-poly_signed_area" open><summary><code>poly_signed_area</code><span class="muted">engine.c · ligne 1518</span></summary><div class="body"><pre><code>static double poly_signed_area(Model3D* model, int *list, int n, double a, double b, double c)</code></pre>
 <h4>Rôle :</h4>
 <p>Mesurer l&#x27;aire orientée de la projection dominante d&#x27;un contour objet.</p>
 <h4>Paramètres :</h4>
@@ -961,7 +961,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-split_face_by_plane" title="Découper expérimentalement f1 par le plan objet de f2."><code>split_face_by_plane</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fabs</code>, <code>FIXED_TO_FLOAT</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-poly_signed_area">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-processModelFast" open><summary><code>processModelFast</code><span class="muted">engine.c · ligne 1962</span></summary><div class="body"><pre><code>void processModelFast(Model3D* model, ObserverParams* params, const char* filename)</code></pre>
+<details class="function" id="fn-processModelFast" open><summary><code>processModelFast</code><span class="muted">engine.c · ligne 1766</span></summary><div class="body"><pre><code>void processModelFast(Model3D* model, ObserverParams* params, const char* filename)</code></pre>
 <h4>Rôle :</h4>
 <p>Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie.</p>
 <h4>Paramètres :</h4>
@@ -976,7 +976,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_ADD</code>, <code>FIXED_DIV_64</code>, <code>FIXED_NEG</code>, <code>FIXED_SUB</code>, <code>INT_TO_FIXED</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-processModelFast">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ray_cast_at" open><summary><code>ray_cast_at</code><span class="muted">engine.c · ligne 4457</span></summary><div class="body"><pre><code>static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy)</code></pre>
+<details class="function" id="fn-ray_cast_at" open><summary><code>ray_cast_at</code><span class="muted">engine.c · ligne 4261</span></summary><div class="body"><pre><code>static int ray_cast_at(Model3D* model, int f1, int f2, int cx, int cy)</code></pre>
 <h4>Rôle :</h4>
 <p>Comparer deux plans au passage d&#x27;un rayon de coordonnées écran entières.</p>
 <h4>Paramètres :</h4>
@@ -988,7 +988,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ray_cast_distances" title="Calculer les paramètres d&#x27;intersection d&#x27;un rayon écran avec deux plans."><code>ray_cast_distances</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ray_cast_hierarchical_impl" title="Essayer plusieurs points représentatifs pour départager deux faces."><code>ray_cast_hierarchical_impl</code></a>, <a href="#fn-run_raycast_test" title="Adapter le résultat d&#x27;un rayon à la convention du diagnostic de paire."><code>run_raycast_test</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ray_cast_at">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ray_cast_at_fractional" open><summary><code>ray_cast_at_fractional</code><span class="muted">engine.c · ligne 4491</span></summary><div class="body"><pre><code>static int ray_cast_at_fractional(Model3D *model, int f1, int f2, double cx, double cy)</code></pre>
+<details class="function" id="fn-ray_cast_at_fractional" open><summary><code>ray_cast_at_fractional</code><span class="muted">engine.c · ligne 4295</span></summary><div class="body"><pre><code>static int ray_cast_at_fractional(Model3D *model, int f1, int f2, double cx, double cy)</code></pre>
 <h4>Rôle :</h4>
 <p>Comparer deux plans au passage d&#x27;un rayon écran subpixel en double.</p>
 <h4>Paramètres :</h4>
@@ -1003,7 +1003,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ray_cast_hierarchical" title="Départager une paire avec grossissement temporaire et cache orienté."><code>ray_cast_hierarchical</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fabs</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ray_cast_at_fractional">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ray_cast_distances" open><summary><code>ray_cast_distances</code><span class="muted">engine.c · ligne 4397</span></summary><div class="body"><pre><code>static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2)</code></pre>
+<details class="function" id="fn-ray_cast_distances" open><summary><code>ray_cast_distances</code><span class="muted">engine.c · ligne 4201</span></summary><div class="body"><pre><code>static int ray_cast_distances(Model3D* model, int f1, int f2, int cx, int cy, float *out_tf1, float *out_tf2)</code></pre>
 <h4>Rôle :</h4>
 <p>Calculer les paramètres d&#x27;intersection d&#x27;un rayon écran avec deux plans.</p>
 <h4>Paramètres :</h4>
@@ -1019,7 +1019,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-ray_cast_at" title="Comparer deux plans au passage d&#x27;un rayon de coordonnées écran entières."><code>ray_cast_at</code></a>, <a href="#fn-run_raycast_test" title="Adapter le résultat d&#x27;un rayon à la convention du diagnostic de paire."><code>run_raycast_test</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fabsf</code>, <code>FIXED_TO_FLOAT</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ray_cast_distances">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ray_cast_hierarchical" open><summary><code>ray_cast_hierarchical</code><span class="muted">engine.c · ligne 4801</span></summary><div class="body"><pre><code>static int ray_cast_hierarchical(Model3D* model, int f1, int f2)</code></pre>
+<details class="function" id="fn-ray_cast_hierarchical" open><summary><code>ray_cast_hierarchical</code><span class="muted">engine.c · ligne 4605</span></summary><div class="body"><pre><code>static int ray_cast_hierarchical(Model3D* model, int f1, int f2)</code></pre>
 <h4>Rôle :</h4>
 <p>Départager une paire avec grossissement temporaire et cache orienté.</p>
 <h4>Paramètres :</h4>
@@ -1032,7 +1032,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-geov3_run" title="Partager le parcours GEO V3 entre le classement et le repair interactif."><code>geov3_run</code></a>, <a href="#fn-painter_geoV2" title="Corriger l&#x27;ordre FAST par passes de voisins et cache de paires borné."><code>painter_geoV2</code></a>, <a href="#fn-painter_newell_sancha" title="Corriger l&#x27;ordre FAST à partir des paires dont les intervalles Z se recouvrent."><code>painter_newell_sancha</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_MUL_64</code>, <code>FLOAT_TO_FIXED</code>, <code>ORDER_COUNT</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ray_cast_hierarchical">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ray_cast_hierarchical_impl" open><summary><code>ray_cast_hierarchical_impl</code><span class="muted">engine.c · ligne 4745</span></summary><div class="body"><pre><code>static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)</code></pre>
+<details class="function" id="fn-ray_cast_hierarchical_impl" open><summary><code>ray_cast_hierarchical_impl</code><span class="muted">engine.c · ligne 4549</span></summary><div class="body"><pre><code>static int ray_cast_hierarchical_impl(Model3D* model, int f1, int f2)</code></pre>
 <h4>Rôle :</h4>
 <p>Essayer plusieurs points représentatifs pour départager deux faces.</p>
 <h4>Paramètres :</h4>
@@ -1046,7 +1046,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-compute_bbox_intersection_center" title="Retourner le centre entier du rectangle commun des boîtes de deux faces."><code>compute_bbox_intersection_center</code></a>, <a href="#fn-compute_intersection_centroid_ordered_fixed_tryboth" title="Essayer le clipping entier puis chercher un point de repli commun."><code>compute_intersection_centroid_ordered_fixed_tryboth</code></a>, <a href="#fn-compute_intersection_centroid_ordered_qd_fixed" title="Retourner le centre de bbox de l&#x27;intersection QuickDraw de deux faces."><code>compute_intersection_centroid_ordered_qd_fixed</code></a>, <a href="#fn-ray_cast_at" title="Comparer deux plans au passage d&#x27;un rayon de coordonnées écran entières."><code>ray_cast_at</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ray_cast_hierarchical" title="Départager une paire avec grossissement temporaire et cache orienté."><code>ray_cast_hierarchical</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ray_cast_hierarchical_impl">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-rch_gather_pair_vertex_indices" open><summary><code>rch_gather_pair_vertex_indices</code><span class="muted">engine.c · ligne 4555</span></summary><div class="body"><pre><code>static int rch_gather_pair_vertex_indices(FaceArrays3D* faces, int f1, int f2, int* out_idx)</code></pre>
+<details class="function" id="fn-rch_gather_pair_vertex_indices" open><summary><code>rch_gather_pair_vertex_indices</code><span class="muted">engine.c · ligne 4359</span></summary><div class="body"><pre><code>static int rch_gather_pair_vertex_indices(FaceArrays3D* faces, int f1, int f2, int* out_idx)</code></pre>
 <h4>Rôle :</h4>
 <p>Rassembler les identifiants distincts des sommets de deux faces.</p>
 <h4>Paramètres :</h4>
@@ -1060,7 +1060,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-rch_patch_pair_at_scale" title="Sauvegarder puis reprojeter temporairement les sommets de deux faces."><code>rch_patch_pair_at_scale</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-rch_gather_pair_vertex_indices">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-rch_patch_pair_at_scale" open><summary><code>rch_patch_pair_at_scale</code><span class="muted">engine.c · ligne 4645</span></summary><div class="body"><pre><code>static void rch_patch_pair_at_scale(Model3D* model, int f1, int f2, Fixed32 test_scale, RCHZoomPatch* p)</code></pre>
+<details class="function" id="fn-rch_patch_pair_at_scale" open><summary><code>rch_patch_pair_at_scale</code><span class="muted">engine.c · ligne 4449</span></summary><div class="body"><pre><code>static void rch_patch_pair_at_scale(Model3D* model, int f1, int f2, Fixed32 test_scale, RCHZoomPatch* p)</code></pre>
 <h4>Rôle :</h4>
 <p>Sauvegarder puis reprojeter temporairement les sommets de deux faces.</p>
 <h4>Paramètres :</h4>
@@ -1077,7 +1077,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-projected_polygons_overlap_raster_x10" title="Tester le chevauchement raster après un grossissement temporaire par dix."><code>projected_polygons_overlap_raster_x10</code></a>, <a href="#fn-ray_cast_hierarchical" title="Départager une paire avec grossissement temporaire et cache orienté."><code>ray_cast_hierarchical</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_ADD</code>, <code>FIXED_DIV_64</code>, <code>FIXED_MUL_64</code>, <code>FIXED_SUB</code>, <code>INT_TO_FIXED</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-rch_patch_pair_at_scale">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-rch_recompute_face_bbox_cache" open><summary><code>rch_recompute_face_bbox_cache</code><span class="muted">engine.c · ligne 4601</span></summary><div class="body"><pre><code>static void rch_recompute_face_bbox_cache(Model3D* model, int f)</code></pre>
+<details class="function" id="fn-rch_recompute_face_bbox_cache" open><summary><code>rch_recompute_face_bbox_cache</code><span class="muted">engine.c · ligne 4405</span></summary><div class="body"><pre><code>static void rch_recompute_face_bbox_cache(Model3D* model, int f)</code></pre>
 <h4>Rôle :</h4>
 <p>Recalculer la boîte projetée d&#x27;une seule face après patch de projection.</p>
 <h4>Paramètres :</h4>
@@ -1091,7 +1091,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-rch_patch_pair_at_scale" title="Sauvegarder puis reprojeter temporairement les sommets de deux faces."><code>rch_patch_pair_at_scale</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-rch_recompute_face_bbox_cache">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-rch_unpatch_pair" open><summary><code>rch_unpatch_pair</code><span class="muted">engine.c · ligne 4706</span></summary><div class="body"><pre><code>static void rch_unpatch_pair(Model3D* model, RCHZoomPatch* p, int f1, int f2)</code></pre>
+<details class="function" id="fn-rch_unpatch_pair" open><summary><code>rch_unpatch_pair</code><span class="muted">engine.c · ligne 4510</span></summary><div class="body"><pre><code>static void rch_unpatch_pair(Model3D* model, RCHZoomPatch* p, int f1, int f2)</code></pre>
 <h4>Rôle :</h4>
 <p>Restaurer l&#x27;état temporairement remplacé par rch_patch_pair_at_scale.</p>
 <h4>Paramètres :</h4>
@@ -1104,7 +1104,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-inspect_face_pair_ui" title="Piloter l&#x27;inspecteur graphique et textuel de deux faces."><code>inspect_face_pair_ui</code></a>, <a href="#fn-projected_polygons_overlap_raster_x10" title="Tester le chevauchement raster après un grossissement temporaire par dix."><code>projected_polygons_overlap_raster_x10</code></a>, <a href="#fn-ray_cast_hierarchical" title="Départager une paire avec grossissement temporaire et cache orienté."><code>ray_cast_hierarchical</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-rch_unpatch_pair">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-readFaces_model" open><summary><code>readFaces_model</code><span class="muted">engine.c · ligne 757</span></summary><div class="body"><pre><code>int readFaces_model(const char* filename, Model3D* model)</code></pre>
+<details class="function" id="fn-readFaces_model" open><summary><code>readFaces_model</code><span class="muted">engine.c · ligne 561</span></summary><div class="body"><pre><code>int readFaces_model(const char* filename, Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Lire les lignes OBJ « f » dans le buffer compact des faces.</p>
 <h4>Paramètres :</h4>
@@ -1121,7 +1121,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-loadModel3D" title="Charger sommets et faces OBJ dans un modèle déjà alloué."><code>loadModel3D</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fclose</code>, <code>fgets</code>, <code>fopen</code>, <code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-readFaces_model">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ReadPalette" open><summary><code>ReadPalette</code><span class="muted">engine.c · ligne 6158</span></summary><div class="body"><pre><code>GS_Palette ReadPalette(int palette_num)</code></pre>
+<details class="function" id="fn-ReadPalette" open><summary><code>ReadPalette</code><span class="muted">engine.c · ligne 5962</span></summary><div class="body"><pre><code>GS_Palette ReadPalette(int palette_num)</code></pre>
 <h4>Rôle :</h4>
 <p>Lire seize mots de couleur à partir de l&#x27;adresse calculée pour une palette.</p>
 <h4>Paramètres :</h4>
@@ -1133,7 +1133,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ReadPalette">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-compute_auto_fit" open><summary><code>compute_auto_fit</code><span class="muted">engine.c · ligne 558</span></summary><div class="body"><pre><code>static void compute_auto_fit(VertexArrays3D *vtx, int vertex_count, Fixed32 max_dim, Model3D *owner)</code></pre>
+<details class="function" id="fn-compute_auto_fit" open><summary><code>compute_auto_fit</code><span class="muted">engine.c · ligne 362</span></summary><div class="body"><pre><code>static void compute_auto_fit(VertexArrays3D *vtx, int vertex_count, Fixed32 max_dim, Model3D *owner)</code></pre>
 <h4>Rôle :</h4>
 <p>Calculer la distance et l&#x27;échelle suggérées pour la vue initiale.</p>
 <h4>Paramètres :</h4>
@@ -1146,7 +1146,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-readVertices" title="Lire les lignes OBJ « v x y z », centrer la géométrie et proposer une vue."><code>readVertices</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED_ADD</code>, <code>FIXED_NEG</code>, <code>FIXED_SUB</code>, <code>FLOAT_TO_FIXED</code>, <code>INT_TO_FIXED</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-compute_auto_fit">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-readVertices" open><summary><code>readVertices</code><span class="muted">engine.c · ligne 645</span></summary><div class="body"><pre><code>int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Model3D* owner)</code></pre>
+<details class="function" id="fn-readVertices" open><summary><code>readVertices</code><span class="muted">engine.c · ligne 449</span></summary><div class="body"><pre><code>int readVertices(const char* filename, VertexArrays3D* vtx, int max_vertices, Model3D* owner)</code></pre>
 <h4>Rôle :</h4>
 <p>Lire les lignes OBJ « v x y z », centrer la géométrie et proposer une vue.</p>
 <h4>Paramètres :</h4>
@@ -1162,7 +1162,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-loadModel3D" title="Charger sommets et faces OBJ dans un modèle déjà alloué."><code>loadModel3D</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fclose</code>, <code>fgets</code>, <code>FIXED_SUB</code>, <code>FLOAT_TO_FIXED</code>, <code>fopen</code>, <code>printf</code>, <code>sscanf</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-readVertices">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-remove_duplicates" open><summary><code>remove_duplicates</code><span class="muted">engine.c · ligne 1682</span></summary><div class="body"><pre><code>static void remove_duplicates(int *arr, int *n)</code></pre>
+<details class="function" id="fn-remove_duplicates" open><summary><code>remove_duplicates</code><span class="muted">engine.c · ligne 1486</span></summary><div class="body"><pre><code>static void remove_duplicates(int *arr, int *n)</code></pre>
 <h4>Rôle :</h4>
 <p>Retirer toutes les répétitions d&#x27;identifiants en conservant leur premier ordre.</p>
 <h4>Paramètres :</h4>
@@ -1174,7 +1174,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-split_face_by_plane" title="Découper expérimentalement f1 par le plan objet de f2."><code>split_face_by_plane</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-remove_duplicates">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-reorder_poly" open><summary><code>reorder_poly</code><span class="muted">engine.c · ligne 1775</span></summary><div class="body"><pre><code>static void reorder_poly(Model3D* model, int fidx, int *list, int *n)</code></pre>
+<details class="function" id="fn-reorder_poly" open><summary><code>reorder_poly</code><span class="muted">engine.c · ligne 1579</span></summary><div class="body"><pre><code>static void reorder_poly(Model3D* model, int fidx, int *list, int *n)</code></pre>
 <h4>Rôle :</h4>
 <p>Réordonner une liste de sommets par angle autour de leur centre moyen projeté.</p>
 <h4>Paramètres :</h4>
@@ -1190,7 +1190,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-split_face_by_plane" title="Découper expérimentalement f1 par le plan objet de f2."><code>split_face_by_plane</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>atan2</code>, <code>fabs</code>, <code>free</code>, <code>malloc</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-reorder_poly">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-repair_geov3" open><summary><code>repair_geov3</code><span class="muted">engine.c · ligne 7414</span></summary><div class="body"><pre><code>static void repair_geov3(Model3D* model)</code></pre>
+<details class="function" id="fn-repair_geov3" open><summary><code>repair_geov3</code><span class="muted">engine.c · ligne 7217</span></summary><div class="body"><pre><code>static void repair_geov3(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Inspecter et corriger l&#x27;ordre courant par les échanges proposés par GEO V3.</p>
 <h4>Paramètres :</h4>
@@ -1204,7 +1204,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>endgraph</code>, <code>memset</code>, <code>printf</code>, <code>startgraph</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-repair_geov3">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-repair_geov3_confirm" open><summary><code>repair_geov3_confirm</code><span class="muted">engine.c · ligne 7342</span></summary><div class="body"><pre><code>static int repair_geov3_confirm(Model3D *model, int p, int q, int pos_p, int pos_q, int reason, void *context)</code></pre>
+<details class="function" id="fn-repair_geov3_confirm" open><summary><code>repair_geov3_confirm</code><span class="muted">engine.c · ligne 7148</span></summary><div class="body"><pre><code>static int repair_geov3_confirm(Model3D *model, int p, int q, int pos_p, int pos_q, int reason, void *context)</code></pre>
 <h4>Rôle :</h4>
 <p>Montrer les deux faces d&#x27;un échange GEO V3 et recueillir la décision.</p>
 <h4>Paramètres :</h4>
@@ -1212,13 +1212,12 @@
 <h4>Retour :</h4>
 <p>-1 pour Échap, 0 pour N, 1 pour appliquer ; Retour active l&#x27;automatique.</p>
 <h4>Fonctionnement :</h4>
-<p>Dessine le modèle en fil de fer, P en vert clair et Q en orange, comme l&#x27;ancienne UI du repair. Conserve la géométrie et la permutation ; restaure visibilité et framePolyOnly avant de revenir au moteur. En automatique, valide sans ouvrir de vue graphique supplémentaire.</p>
-<p>Utilise InspectionViewState pour la sauvegarde et la restauration communes des drapeaux et options ; le cycle de vie graphique reste géré par cet outil.</p>
-<h4>Appels internes directs :</h4><p><a href="#fn-drawFace" title="Dessiner une face isolée pour les outils d&#x27;inspection."><code>drawFace</code></a>, <a href="#fn-drawPolygons" title="Dessiner les faces affichables dans la permutation calculée par la méthode de classement."><code>drawPolygons</code></a>, <a href="#fn-drawPolygons_jitter" title="Dessiner une vue avec un déplacement aléatoire temporaire de chaque sommet."><code>drawPolygons_jitter</code></a>, <a href="#fn-getkeypress" title="Attendre une frappe et retourner son code sur sept bits."><code>getkeypress</code></a>, <a href="#fn-inspection_view_restore" title="Restaurer l&#x27;état sauvegardé sans libérer le buffer réutilisable."><code>inspection_view_restore</code></a>, <a href="#fn-projected_polygons_overlap_cached" title="Mémoriser uniquement les chevauchements positifs pour la méthode de classement."><code>projected_polygons_overlap_cached</code></a>, <a href="#fn-screenClearTopLines" title="Effacer les premières lignes de pixels de l&#x27;écran SHGR 320x200."><code>screenClearTopLines</code></a></p>
+<p>Dessine le modèle en fil de fer, P en vert clair et Q en orange, comme l&#x27;ancienne UI du repair. Conserve la géométrie et la permutation ; restaure visibilité et framePolyOnly avant de revenir au moteur. En automatique, valide sans ouvrir de vue graphique supplémentaire. Le moteur a déjà validé le chevauchement avant l’appel ; le callback ne répète pas ce filtre géométrique.</p>
+<h4>Appels internes directs :</h4><p><a href="#fn-drawFace" title="Dessiner une face isolée pour les outils d&#x27;inspection."><code>drawFace</code></a>, <a href="#fn-drawPolygons" title="Dessiner les faces affichables dans la permutation calculée par la méthode de classement."><code>drawPolygons</code></a>, <a href="#fn-drawPolygons_jitter" title="Dessiner une vue avec un déplacement aléatoire temporaire de chaque sommet."><code>drawPolygons_jitter</code></a>, <a href="#fn-getkeypress" title="Attendre une frappe et retourner son code sur sept bits."><code>getkeypress</code></a>, <a href="#fn-inspection_view_restore" title="Restaurer l&#x27;état sauvegardé sans libérer le buffer réutilisable."><code>inspection_view_restore</code></a>, <a href="#fn-screenClearTopLines" title="Effacer les premières lignes de pixels de l&#x27;écran SHGR 320x200."><code>screenClearTopLines</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-geov3_run" title="Partager le parcours GEO V3 entre le classement et le repair interactif."><code>geov3_run</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>MoveTo</code>, <code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>MoveTo</code>, <code>printf</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-repair_geov3_confirm">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-restoreAllFaces" open><summary><code>restoreAllFaces</code><span class="muted">engine.c · ligne 7198</span></summary><div class="body"><pre><code>void restoreAllFaces(Model3D* model)</code></pre>
+<details class="function" id="fn-restoreAllFaces" open><summary><code>restoreAllFaces</code><span class="muted">engine.c · ligne 7002</span></summary><div class="body"><pre><code>void restoreAllFaces(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Restaurer les longueurs de toutes les faces précédemment masquées.</p>
 <h4>Paramètres :</h4>
@@ -1230,7 +1229,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ordering_cache_invalidate" title="Changer la génération des caches et désigner leur modèle propriétaire."><code>ordering_cache_invalidate</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-restoreAllFaces">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-restoreFace" open><summary><code>restoreFace</code><span class="muted">engine.c · ligne 7167</span></summary><div class="body"><pre><code>void restoreFace(Model3D* model, int face_idx)</code></pre>
+<details class="function" id="fn-restoreFace" open><summary><code>restoreFace</code><span class="muted">engine.c · ligne 6971</span></summary><div class="body"><pre><code>void restoreFace(Model3D* model, int face_idx)</code></pre>
 <h4>Rôle :</h4>
 <p>Restaurer la longueur d&#x27;une face précédemment masquée.</p>
 <h4>Paramètres :</h4>
@@ -1242,7 +1241,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ordering_cache_invalidate" title="Changer la génération des caches et désigner leur modèle propriétaire."><code>ordering_cache_invalidate</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-restoreFace">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-reverseFaceVertexOrder" open><summary><code>reverseFaceVertexOrder</code><span class="muted">engine.c · ligne 7076</span></summary><div class="body"><pre><code>static void reverseFaceVertexOrder(Model3D* model, int face_idx)</code></pre>
+<details class="function" id="fn-reverseFaceVertexOrder" open><summary><code>reverseFaceVertexOrder</code><span class="muted">engine.c · ligne 6880</span></summary><div class="body"><pre><code>static void reverseFaceVertexOrder(Model3D* model, int face_idx)</code></pre>
 <h4>Rôle :</h4>
 <p>Inverser le winding d&#x27;une face et son plan observateur.</p>
 <h4>Paramètres :</h4>
@@ -1256,7 +1255,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ordering_cache_invalidate" title="Changer la génération des caches et désigner leur modèle propriétaire."><code>ordering_cache_invalidate</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-reverseFaceVertexOrder">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-run_raycast_test" open><summary><code>run_raycast_test</code><span class="muted">engine.c · ligne 7488</span></summary><div class="body"><pre><code>static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py)</code></pre>
+<details class="function" id="fn-run_raycast_test" open><summary><code>run_raycast_test</code><span class="muted">engine.c · ligne 7291</span></summary><div class="body"><pre><code>static int run_raycast_test(Model3D* model, int f1, int f2, int px, int py)</code></pre>
 <h4>Rôle :</h4>
 <p>Adapter le résultat d&#x27;un rayon à la convention du diagnostic de paire.</p>
 <h4>Paramètres :</h4>
@@ -1268,7 +1267,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-ray_cast_at" title="Comparer deux plans au passage d&#x27;un rayon de coordonnées écran entières."><code>ray_cast_at</code></a>, <a href="#fn-ray_cast_distances" title="Calculer les paramètres d&#x27;intersection d&#x27;un rayon écran avec deux plans."><code>ray_cast_distances</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-compare_faces_diagnostic" title="Comparer plusieurs méthodes d&#x27;ordre et conserver leurs résultats séparés."><code>compare_faces_diagnostic</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-run_raycast_test">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-saveNextScreenshot" open><summary><code>saveNextScreenshot</code><span class="muted">engine.c · ligne 8659</span></summary><div class="body"><pre><code>void saveNextScreenshot(void)</code></pre>
+<details class="function" id="fn-saveNextScreenshot" open><summary><code>saveNextScreenshot</code><span class="muted">engine.c · ligne 8462</span></summary><div class="body"><pre><code>void saveNextScreenshot(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Choisir le premier nom screen000.PIC à screen999.PIC qui ne peut être ouvert en lecture.</p>
 <h4>Paramètres :</h4>
@@ -1281,7 +1280,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fclose</code>, <code>fopen</code>, <code>printf</code>, <code>sprintf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-saveNextScreenshot">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-saveSHGRAsRawPic" open><summary><code>saveSHGRAsRawPic</code><span class="muted">engine.c · ligne 8613</span></summary><div class="body"><pre><code>void saveSHGRAsRawPic(const char *filename)</code></pre>
+<details class="function" id="fn-saveSHGRAsRawPic" open><summary><code>saveSHGRAsRawPic</code><span class="muted">engine.c · ligne 8416</span></summary><div class="body"><pre><code>void saveSHGRAsRawPic(const char *filename)</code></pre>
 <h4>Rôle :</h4>
 <p>Écrire la zone SHGR brute dans un fichier PIC non compressé.</p>
 <h4>Paramètres :</h4>
@@ -1294,7 +1293,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-saveNextScreenshot" title="Choisir le premier nom screen000.PIC à screen999.PIC qui ne peut être ouvert en lecture."><code>saveNextScreenshot</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fclose</code>, <code>fopen</code>, <code>fputc</code>, <code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-saveSHGRAsRawPic">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-screen2Black" open><summary><code>screen2Black</code><span class="muted">engine.c · ligne 6323</span></summary><div class="body"><pre><code>void screen2Black()</code></pre>
+<details class="function" id="fn-screen2Black" open><summary><code>screen2Black</code><span class="muted">engine.c · ligne 6127</span></summary><div class="body"><pre><code>void screen2Black()</code></pre>
 <h4>Rôle :</h4>
 <p>Mettre à zéro les mots SHGR parcourus par la boucle d&#x27;effacement.</p>
 <h4>Paramètres :</h4>
@@ -1308,7 +1307,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-screen2Black">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-setProDOSFileType" open><summary><code>setProDOSFileType</code><span class="muted">engine.c · ligne 8575</span></summary><div class="body"><pre><code>void setProDOSFileType(const char* filename, int fileType, long auxType)</code></pre>
+<details class="function" id="fn-setProDOSFileType" open><summary><code>setProDOSFileType</code><span class="muted">engine.c · ligne 8378</span></summary><div class="body"><pre><code>void setProDOSFileType(const char* filename, int fileType, long auxType)</code></pre>
 <h4>Rôle :</h4>
 <p>Affecter les métadonnées GS/OS d&#x27;un fichier existant.</p>
 <h4>Paramètres :</h4>
@@ -1321,7 +1320,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-saveSHGRAsRawPic" title="Écrire la zone SHGR brute dans un fichier PIC non compressé."><code>saveSHGRAsRawPic</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>SetFileInfoGS</code>, <code>strlen</code>, <code>strncpy</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-setProDOSFileType">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-show_face_normal" open><summary><code>show_face_normal</code><span class="muted">engine.c · ligne 6699</span></summary><div class="body"><pre><code>static void show_face_normal(Model3D* model, int target_face)</code></pre>
+<details class="function" id="fn-show_face_normal" open><summary><code>show_face_normal</code><span class="muted">engine.c · ligne 6503</span></summary><div class="body"><pre><code>static void show_face_normal(Model3D* model, int target_face)</code></pre>
 <h4>Rôle :</h4>
 <p>Dessiner en jaune la normale de la face sélectionnée dans l&#x27;inspecteur.</p>
 <h4>Paramètres :</h4>
@@ -1336,7 +1335,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-showFace" title="Explorer une face, sa normale et ses données détaillées dans une vue interactive."><code>showFace</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>FIXED64_TO_FLOAT</code>, <code>FIXED_ADD</code>, <code>FIXED_DIV_64</code>, <code>FIXED_MUL_64</code>, <code>FIXED_SUB</code>, <code>FIXED_TO_FLOAT</code>, <code>FLOAT_TO_FIXED</code>, <code>INT_TO_FIXED</code>, <code>LineTo</code>, <code>MoveTo</code>, <code>SetSolidPenPat</code>, <code>sqrt</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-show_face_normal">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-show_help_pager" open><summary><code>show_help_pager</code><span class="muted">engine.c · ligne 8449</span></summary><div class="body"><pre><code>static void show_help_pager(void)</code></pre>
+<details class="function" id="fn-show_help_pager" open><summary><code>show_help_pager</code><span class="muted">engine.c · ligne 8252</span></summary><div class="body"><pre><code>static void show_help_pager(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Afficher cycliquement les pages d&#x27;aide textuelle jusqu&#x27;à Échap.</p>
 <h4>Paramètres :</h4>
@@ -1351,7 +1350,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>printf</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-show_help_pager">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-showFace" open><summary><code>showFace</code><span class="muted">engine.c · ligne 6784</span></summary><div class="body"><pre><code>void showFace(Model3D* model, ObserverParams* params, const char* filename)</code></pre>
+<details class="function" id="fn-showFace" open><summary><code>showFace</code><span class="muted">engine.c · ligne 6588</span></summary><div class="body"><pre><code>void showFace(Model3D* model, ObserverParams* params, const char* filename)</code></pre>
 <h4>Rôle :</h4>
 <p>Explorer une face, sa normale et ses données détaillées dans une vue interactive.</p>
 <h4>Paramètres :</h4>
@@ -1365,7 +1364,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-main" title="Piloter le chargement, les vues graphiques et les commandes de l&#x27;explorateur."><code>main</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>endgraph</code>, <code>fclose</code>, <code>fflush</code>, <code>FIXED64_TO_FLOAT</code>, <code>FIXED_TO_FLOAT</code>, <code>fopen</code>, <code>fprintf</code>, <code>getchar</code>, <code>MoveTo</code>, <code>printf</code>, <code>scanf</code>, <code>sprintf</code>, <code>startgraph</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-showFace">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-split_face_by_plane" open><summary><code>split_face_by_plane</code><span class="muted">engine.c · ligne 1357</span></summary><div class="body"><pre><code>static int split_face_by_plane(Model3D* model, int f1, int f2, int *out_newverts, int *out_n, int *constraint_verts, int constraint_n, int force_one_edge)</code></pre>
+<details class="function" id="fn-split_face_by_plane" open><summary><code>split_face_by_plane</code><span class="muted">engine.c · ligne 1161</span></summary><div class="body"><pre><code>static int split_face_by_plane(Model3D* model, int f1, int f2, int *out_newverts, int *out_n, int *constraint_verts, int constraint_n, int force_one_edge)</code></pre>
 <h4>Rôle :</h4>
 <p>Découper expérimentalement f1 par le plan objet de f2.</p>
 <h4>Paramètres :</h4>
@@ -1381,7 +1380,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-check_intersect" title="Examiner les intersections objet et tenter des découpages avant la visualisation."><code>check_intersect</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fabs</code>, <code>FIXED_TO_FLOAT</code>, <code>FLOAT_TO_FIXED</code>, <code>free</code>, <code>malloc</code>, <code>sqrt</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-split_face_by_plane">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-strict_inside" open><summary><code>strict_inside</code><span class="muted">engine.c · ligne 1185</span></summary><div class="body"><pre><code>static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_local)</code></pre>
+<details class="function" id="fn-strict_inside" open><summary><code>strict_inside</code><span class="muted">engine.c · ligne 989</span></summary><div class="body"><pre><code>static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_local)</code></pre>
 <h4>Rôle :</h4>
 <p>Tester l&#x27;appartenance stricte d&#x27;un point à un polygone entier.</p>
 <h4>Paramètres :</h4>
@@ -1393,7 +1392,7 @@
 <h4>Appels internes directs :</h4><p><a href="#fn-point_in_poly_arrays_int" title="Tester un point entier par parité des traversées d&#x27;un rayon horizontal."><code>point_in_poly_arrays_int</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-evaluate_face_crossings" title="Compter les traversées d’une face et signaler une traversée strictement intérieure, avec un seul plan et un seul contour projeté temporaires."><code>evaluate_face_crossings</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-strict_inside">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-updateFace2DBounds" open><summary><code>updateFace2DBounds</code><span class="muted">engine.c · ligne 5135</span></summary><div class="body"><pre><code>static void updateFace2DBounds(Model3D* model)</code></pre>
+<details class="function" id="fn-updateFace2DBounds" open><summary><code>updateFace2DBounds</code><span class="muted">engine.c · ligne 4939</span></summary><div class="body"><pre><code>static void updateFace2DBounds(Model3D* model)</code></pre>
 <h4>Rôle :</h4>
 <p>Recalculer les boîtes écran des faces après reprojection.</p>
 <h4>Paramètres :</h4>
@@ -1406,7 +1405,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-compute2DFromObserver" title="Reprojeter une vue observateur existante après changement d&#x27;échelle."><code>compute2DFromObserver</code></a></p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-updateFace2DBounds">Contrat dans le dictionnaire</a></p></div></details>
 
-<details class="function" id="fn-evaluate_face_crossings" open><summary><code>evaluate_face_crossings</code><span class="muted">engine.c · ligne 1240</span></summary><div class="body"><pre><code>static int evaluate_face_crossings(Model3D* model, int ei, int fj, int *interior)</code></pre>
+<details class="function" id="fn-evaluate_face_crossings" open><summary><code>evaluate_face_crossings</code><span class="muted">engine.c · ligne 1044</span></summary><div class="body"><pre><code>static int evaluate_face_crossings(Model3D* model, int ei, int fj, int *interior)</code></pre>
 <h4>Rôle :</h4>
 <p>Compter les traversées d’une face et signaler une traversée strictement intérieure, avec un seul plan et un seul contour projeté temporaires.</p>
 <h4>Paramètres :</h4>
@@ -1419,7 +1418,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-check_intersect" title="Examiner les intersections objet et tenter des découpages avant la visualisation."><code>check_intersect</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>fabs</code>, <code>FIXED_TO_INT</code>, <code>free</code>, <code>malloc</code>. Cette liste peut inclure des macros.</p>
 <p><a href="engine.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-evaluate_face_crossings">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-quickdraw_polygon_handle" open><summary><code>quickdraw_polygon_handle</code><span class="muted">engine.c · ligne 5368</span></summary><div class="body"><pre><code>static Handle quickdraw_polygon_handle(void)</code></pre>
+<details class="function" id="fn-quickdraw_polygon_handle" open><summary><code>quickdraw_polygon_handle</code><span class="muted">engine.c · ligne 5172</span></summary><div class="body"><pre><code>static Handle quickdraw_polygon_handle(void)</code></pre>
 <h4>Rôle :</h4>
 <p>Réserver puis verrouiller le polygone QuickDraw commun aux rendus.</p>
 <h4>Paramètres :</h4>
@@ -1616,7 +1615,7 @@
 <p><a href="ordering_cache.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ordering_workspace">Contrat dans le dictionnaire</a></p></div></details>
 </section>
 <section class="module"><h3>dony.c <span class="tag">6 fonctions</span></h3><p class="muted">Construire un ordre arrière-vers-avant selon une stratégie inspirée de Robert Dony : sélectionner une face, comparer les candidates et reprendre la sélection après permutation. Le repair réutilise ce parcours depuis la permutation courante.</p>
-<details class="function" id="fn-dony_ray_pair_record" open><summary><code>dony_ray_pair_record</code><span class="muted">dony.c · ligne 154</span></summary><div class="body"><pre><code>static void dony_ray_pair_record(DonyRayPairs *cache, int p, int q, unsigned int generation)</code></pre>
+<details class="function" id="fn-dony_ray_pair_record" open><summary><code>dony_ray_pair_record</code><span class="muted">dony.c · ligne 156</span></summary><div class="body"><pre><code>static void dony_ray_pair_record(DonyRayPairs *cache, int p, int q, unsigned int generation)</code></pre>
 <h4>Rôle :</h4>
 <p>Enregistrer une paire non orientée échangée pendant la passe courante.</p>
 <h4>Paramètres :</h4>
@@ -1630,7 +1629,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-geov3_run" title="Partager le parcours GEO V3 entre le classement et le repair interactif."><code>geov3_run</code></a></p>
 <p><a href="dony.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-dony_ray_pair_record">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-dony_ray_pair_seen" open><summary><code>dony_ray_pair_seen</code><span class="muted">dony.c · ligne 111</span></summary><div class="body"><pre><code>static int dony_ray_pair_seen(DonyRayPairs *cache, int p, int q, unsigned int generation)</code></pre>
+<details class="function" id="fn-dony_ray_pair_seen" open><summary><code>dony_ray_pair_seen</code><span class="muted">dony.c · ligne 113</span></summary><div class="body"><pre><code>static int dony_ray_pair_seen(DonyRayPairs *cache, int p, int q, unsigned int generation)</code></pre>
 <h4>Rôle :</h4>
 <p>Tester si une paire non orientée a déjà provoqué un échange dans cette passe.</p>
 <h4>Paramètres :</h4>
@@ -1642,7 +1641,7 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-geov3_run" title="Partager le parcours GEO V3 entre le classement et le repair interactif."><code>geov3_run</code></a></p>
 <p><a href="dony.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-dony_ray_pair_seen">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-dony_ray_pairs_reserve" open><summary><code>dony_ray_pairs_reserve</code><span class="muted">dony.c · ligne 64</span></summary><div class="body"><pre><code>static int dony_ray_pairs_reserve(DonyRayPairs *cache, int nf)</code></pre>
+<details class="function" id="fn-dony_ray_pairs_reserve" open><summary><code>dony_ray_pairs_reserve</code><span class="muted">dony.c · ligne 66</span></summary><div class="body"><pre><code>static int dony_ray_pairs_reserve(DonyRayPairs *cache, int nf)</code></pre>
 <h4>Rôle :</h4>
 <p>Réserver les listes de paires utilisées pour empêcher les cycles de ray casting.</p>
 <h4>Paramètres :</h4>
@@ -1655,7 +1654,7 @@
 <h4>Appelants internes repérés :</h4><p><a href="#fn-geov3_run" title="Partager le parcours GEO V3 entre le classement et le repair interactif."><code>geov3_run</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>free</code>, <code>malloc</code>, <code>memset</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="dony.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-dony_ray_pairs_reserve">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-geov3_run" open><summary><code>geov3_run</code><span class="muted">dony.c · ligne 251</span></summary><div class="body"><pre><code>static int geov3_run(Model3D* model, int face_count, int preserve_order, GeoV3ExchangeCallback on_exchange, void *context)</code></pre>
+<details class="function" id="fn-geov3_run" open><summary><code>geov3_run</code><span class="muted">dony.c · ligne 255</span></summary><div class="body"><pre><code>static int geov3_run(Model3D* model, int face_count, int preserve_order, GeoV3ExchangeCallback on_exchange, void *context)</code></pre>
 <h4>Rôle :</h4>
 <p>Partager le parcours GEO V3 entre le classement et le repair interactif.</p>
 <h4>Paramètres :</h4>
@@ -1663,13 +1662,12 @@
 <h4>Retour :</h4>
 <p>Nombre d&#x27;échanges appliqués, y compris avant un arrêt demandé ; -1 en cas d&#x27;échec d&#x27;allocation du repair. Le classement conserve son erreur fatale historique d&#x27;allocation.</p>
 <h4>Fonctionnement :</h4>
-<p>Réutilise sans duplication le filtrage C/assembleur, les deux tests de plans, les stamps anti-cycle, le chevauchement et le rayon hiérarchique GEO V3. Le callback intervient avant chaque échange, sans modifier la géométrie ni la permutation. Un refus avance au candidat suivant. Les limites de permutations et les cas non résolus restent ceux de GEO V3. Les buffers persistants sont partagés : ce parcours n&#x27;est pas réentrant.</p>
+<p>Réutilise sans duplication le filtrage C/assembleur, les deux tests de plans, les stamps anti-cycle, le chevauchement et le rayon hiérarchique GEO V3. Le callback intervient avant chaque échange, sans modifier la géométrie ni la permutation. Un refus avance au candidat suivant. Les échanges par plans comme par rayon exigent le chevauchement projeté configuré avant de consommer la limite de permutations ou les stamps. Les limites de permutations et les cas non résolus restent ceux de GEO V3. Les buffers persistants sont partagés : ce parcours n&#x27;est pas réentrant.</p>
 <h4>Appels internes directs :</h4><p><a href="#fn-dony_ray_pair_record" title="Enregistrer une paire non orientée échangée pendant la passe courante."><code>dony_ray_pair_record</code></a>, <a href="#fn-dony_ray_pair_seen" title="Tester si une paire non orientée a déjà provoqué un échange dans cette passe."><code>dony_ray_pair_seen</code></a>, <a href="#fn-dony_ray_pairs_reserve" title="Réserver les listes de paires utilisées pour empêcher les cycles de ray casting."><code>dony_ray_pairs_reserve</code></a>, <a href="#fn-geometric_face_relation" title="Classer f1 par rapport à f2 en utilisant le plan de f1 dans la vue observateur."><code>geometric_face_relation</code></a>, <a href="#fn-GeoV3_FindCandidate" title="Rechercher une position candidate en réutilisant les bornes de la face P."><code>GeoV3_FindCandidate</code></a>, <a href="#fn-GeoV3_ScanSetup" title="Préparer les pointeurs invariants du filtrage pour un appel à la méthode de classement."><code>GeoV3_ScanSetup</code></a>, <a href="#fn-projected_polygons_overlap_cached" title="Mémoriser uniquement les chevauchements positifs pour la méthode de classement."><code>projected_polygons_overlap_cached</code></a>, <a href="#fn-ray_cast_hierarchical" title="Départager une paire avec grossissement temporaire et cache orienté."><code>ray_cast_hierarchical</code></a>, <a href="#fn-sort_by_zmax" title="Trier les indices de faces par profondeur maximale décroissante, de façon stable."><code>sort_by_zmax</code></a></p>
-<h4>Références indirectes connues :</h4><p><a href="#fn-repair_geov3_confirm" title="Montrer les deux faces d&#x27;un échange GEO V3 et recueillir la décision."><code>repair_geov3_confirm</code></a> via <code>qsort</code>.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-painter_geoV3" title="Construire l&#x27;ordre arrière-vers-avant par sélection et reprise des comparaisons."><code>painter_geoV3</code></a>, <a href="#fn-repair_geov3" title="Inspecter et corriger l&#x27;ordre courant par les échanges proposés par GEO V3."><code>repair_geov3</code></a></p>
-<h4>Autres appels syntaxiques :</h4><p class="muted"><code>calloc</code>, <code>exit</code>, <code>fprintf</code>, <code>free</code>, <code>memset</code>, <code>on_exchange</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
+<h4>Autres appels syntaxiques :</h4><p class="muted"><code>calloc</code>, <code>exit</code>, <code>fprintf</code>, <code>free</code>, <code>memset</code>, <code>on_exchange</code>. Cette liste peut inclure des macros.</p>
 <p><a href="dony.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-geov3_run">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-painter_geoV3" open><summary><code>painter_geoV3</code><span class="muted">dony.c · ligne 529</span></summary><div class="body"><pre><code>void painter_geoV3(Model3D* model, int face_count)</code></pre>
+<details class="function" id="fn-painter_geoV3" open><summary><code>painter_geoV3</code><span class="muted">dony.c · ligne 541</span></summary><div class="body"><pre><code>void painter_geoV3(Model3D* model, int face_count)</code></pre>
 <h4>Rôle :</h4>
 <p>Construire l&#x27;ordre arrière-vers-avant par sélection et reprise des comparaisons.</p>
 <h4>Paramètres :</h4>
@@ -1679,11 +1677,11 @@
 <h4>Sorties et effets de bord :</h4>
 <p>model-&gt;faces.sorted_face_indices</p>
 <h4>Fonctionnement :</h4>
-<p>Initialise l&#x27;ordre canonique, trie par zmax, rejette les intervalles disjoints, puis teste les plans dans les deux sens. Une face devant précéder P est permutée en tête de la passe, qui reprend avec ce nouveau P. En cas d&#x27;ambiguïté ou de cycle, utilise le chevauchement projeté et le ray casting hiérarchique. Aucun découpage : des cycles peuvent rester insolubles. État statique conservé entre appels ; arrêt du processus si la réserve échoue.</p>
+<p>Initialise l&#x27;ordre canonique, trie par zmax, rejette les intervalles disjoints, puis teste les plans dans les deux sens. Une face devant précéder P est permutée en tête de la passe, qui reprend avec ce nouveau P. En cas d&#x27;ambiguïté ou de cycle, utilise le chevauchement projeté et le ray casting hiérarchique. Aucun découpage : des cycles peuvent rester insolubles. État statique conservé entre appels ; arrêt du processus si la réserve échoue. Un échange par plans sans chevauchement projeté est écarté : les fragments adjacents issus d’un découpage ne doivent pas créer un faux cycle.</p>
 <h4>Appels internes directs :</h4><p><a href="#fn-geov3_run" title="Partager le parcours GEO V3 entre le classement et le repair interactif."><code>geov3_run</code></a></p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-processModelFast" title="Transformer les sommets, projeter, calculer les faces et exécuter la méthode de classement choisie."><code>processModelFast</code></a></p>
 <p><a href="dony.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-painter_geoV3">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-sort_by_zmax" open><summary><code>sort_by_zmax</code><span class="muted">dony.c · ligne 197</span></summary><div class="body"><pre><code>static void sort_by_zmax(int *sorted,Fixed32 *z_max,int nf)</code></pre>
+<details class="function" id="fn-sort_by_zmax" open><summary><code>sort_by_zmax</code><span class="muted">dony.c · ligne 199</span></summary><div class="body"><pre><code>static void sort_by_zmax(int *sorted,Fixed32 *z_max,int nf)</code></pre>
 <h4>Rôle :</h4>
 <p>Trier les indices de faces par profondeur maximale décroissante, de façon stable.</p>
 <h4>Paramètres :</h4>
@@ -2266,7 +2264,7 @@
 <h4>Fonctionnement :</h4>
 <p>Clé : vue, paire, projection et méthode runtime. Un résultat nul peut être un échec de ressource ou de garde, donc n&#x27;est pas conservé.</p>
 <h4>Appels internes directs :</h4><p><a href="#fn-ordering_pair_hit" title="Vérifier toutes les composantes de la clé d&#x27;une paire mémorisée."><code>ordering_pair_hit</code></a>, <a href="#fn-ordering_pair_slot" title="Obtenir le slot de hash d&#x27;une paire orientée."><code>ordering_pair_slot</code></a>, <a href="#fn-ordering_pair_store" title="Remplacer un slot de paire par le résultat de la vue courante."><code>ordering_pair_store</code></a>, <a href="#fn-projected_polygons_overlap" title="Choisir la méthode de chevauchement configurée à l&#x27;exécution."><code>projected_polygons_overlap</code></a></p>
-<h4>Appelants internes repérés :</h4><p><a href="#fn-geov3_run" title="Partager le parcours GEO V3 entre le classement et le repair interactif."><code>geov3_run</code></a>, <a href="#fn-repair_geov3_confirm" title="Montrer les deux faces d&#x27;un échange GEO V3 et recueillir la décision."><code>repair_geov3_confirm</code></a></p>
+<h4>Appelants internes repérés :</h4><p><a href="#fn-geov3_run" title="Partager le parcours GEO V3 entre le classement et le repair interactif."><code>geov3_run</code></a></p>
 <h4>Autres appels syntaxiques :</h4><p class="muted"><code>ORDER_COUNT</code>. Cette liste peut inclure des macros ; elle n’est pas un inventaire exhaustif des interfaces système après prétraitement.</p>
 <p><a href="overlap_raster.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-projected_polygons_overlap_cached">Contrat dans le dictionnaire</a></p></div></details>
 <details class="function" id="fn-projected_polygons_overlap_raster" open><summary><code>projected_polygons_overlap_raster</code><span class="muted">overlap_raster.c · ligne 2586</span></summary><div class="body"><pre><code>static int projected_polygons_overlap_raster( Model3D* model, int f1, int f2)</code></pre>

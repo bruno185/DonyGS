@@ -16,6 +16,8 @@
  *    casting hiérarchique. Des stamps et un cache de paires limitent les
  *    cycles. Le callback facultatif du repair confirme chaque échange,
  *    sans dupliquer les décisions de classement.
+ *    Tout échange exige le chevauchement validé par la méthode configurée,
+ *    y compris lorsqu’il découle directement des tests de plans.
  *
  *  Dépendances et contraintes :
  *    Inclus par engine.c ; dony_scan_asm.c fournit le filtrage par défaut.
@@ -243,6 +245,8 @@ static void sort_by_zmax(int *sorted,Fixed32 *z_max,int nf)
  *    plans, les stamps anti-cycle, le chevauchement et le rayon hiérarchique
  *    GEO V3. Le callback intervient avant chaque échange, sans modifier la
  *    géométrie ni la permutation. Un refus avance au candidat suivant.
+ *    Les échanges par plans comme par rayon exigent le chevauchement projeté
+ *    configuré avant de consommer la limite de permutations ou les stamps.
  *    Les limites de permutations et les cas non résolus restent ceux de GEO V3.
  *    Les buffers persistants sont partagés : ce parcours n'est pas réentrant.
  *
@@ -414,7 +418,13 @@ static int geov3_run(Model3D* model, int face_count, int preserve_order,
  * nouveau P.
  */
 do_permute:
-
+            /* Des fragments coplanaires peuvent être classés de part et
+             * d’autre après quantification. Ne pas échanger des contours
+             * sans aire commune : cet échange consommerait inutilement les
+             * protections anti-cycle et pourrait bloquer une vraie correction.
+             * Le repair applique désormais exactement le même filtre ici. */
+            if (!projected_polygons_overlap_cached(model, p, q))
+                goto skip_q;
 
             if (++permutes_this_pass > face_count)
                 goto do_split_giveup;
@@ -523,6 +533,8 @@ skip_q:
  *    projeté et le ray casting hiérarchique. Aucun découpage : des cycles
  *    peuvent rester insolubles. État statique conservé entre appels ; arrêt
  *    du processus si la réserve échoue.
+ *    Un échange par plans sans chevauchement projeté est écarté : les fragments
+ *    adjacents issus d’un découpage ne doivent pas créer un faux cycle.
  *
  * ----------------------------------------------------------------------------
  */
