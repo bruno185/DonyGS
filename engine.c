@@ -18,8 +18,8 @@
  *    Inclus par ObjExplorer.cc après les pragmas ORCA/C. Les caches et
  *    paquets assembleur sont partagés et non réentrants. Les interfaces de
  *    plans, de rayons et de caches n'emploient pas toutes les mêmes signes,
- *    échelles et tolérances ; leurs contrats font foi. Aucun algorithme
- *    n'est fusionné dans cette révision.
+ *    échelles et tolérances ; leurs contrats font foi. Les préparations
+ *    partagées conservent les conventions propres aux tests et aux rendus.
  *
  * ============================================================================
  */
@@ -865,6 +865,9 @@ int readFaces_model(const char* filename, Model3D* model) {
     printf("\nReading faces finished : %d faces read.\n", face_count);
     return face_count;
 }
+static int evaluate_face_crossings(Model3D* model, int ei, int fj,
+                                    int *interior);
+
 /*
  * ----------------------------------------------------------------------------
  *  check_intersect
@@ -976,19 +979,16 @@ static void check_intersect(Model3D* model) {
                             /* Tester les arêtes seulement pour les paires non reconnues coplanaires. */
                             if (!coplanar) {
 
-                                int interior = edge_crosses_interior(model, i, j) ||
-                                               edge_crosses_interior(model, j, i);
-                                if (interior) {
-                                    ++ip_count;
-                                } else {
-                                }
+                                int interior_i_j, interior_j_i;
+                                /* Les deux directions sont nécessaires au choix
+                                 * du découpage ; chacune prépare son contour une fois. */
+                                int cross_i_j = evaluate_face_crossings(model, i, j, &interior_i_j);
+                                int cross_j_i = evaluate_face_crossings(model, j, i, &interior_j_i);
+                                if (interior_i_j || interior_j_i) ++ip_count;
 
-                            /* Choisir la face à découper d'après les nombres
+                            /* Choisir la face à découper d’après les nombres
                              * de traversées dans chaque sens.
                              */
-                            int cross_i_j = count_edge_crossings(model, i, j);
-                            int cross_j_i = count_edge_crossings(model, j, i);
-
                             if (cross_i_j == 2 && cross_j_i == 0) {
 
                                 if (split_face_by_plane(model, i, j, NULL, NULL, NULL, 0, 0)) {
@@ -1069,91 +1069,7 @@ static int faces_share_vertex_or_edge(FaceArrays3D* faces, int i, int j) {
     }
     return 0;
 }
-/*
- * ----------------------------------------------------------------------------
- *  edge_crosses_interior
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Détecter une arête de ei qui traverse strictement l'intérieur de fj.
- *
- *  Paramètres :
- *    [entrée] model, ei et fj, identifiants de faces à base zéro.
- *
- *  Retour :
- *    1 au premier franchissement intérieur, 0 sinon.
- *
- *  Fonctionnement :
- *    Aucun changement de géométrie. Calcule le plan objet de fj sur les
- *    entiers 16.16 bruts, choisit sa projection dominante puis quantifie les
- *    tests d'appartenance en coordonnées entières.
- *
- *  Limites :
- *    seuil 0,02 appliqué à une évaluation non normalisée du plan ; pertes
- *    subpixel et allocations vx/vy non vérifiées. Ne constitue pas un test
- *    exact 3D.
- *
- * ----------------------------------------------------------------------------
- */
-static int edge_crosses_interior(Model3D* model, int ei, int fj) {
-    double a, b, c, d;
-    /* Construire le plan et rejeter le cas dégénéré. */
-    compute_face_plane(model, fj, &a, &b, &c, &d, FACE_PLANE_RAW_FIXED);
-    if (a == 0.0 && b == 0.0 && c == 0.0) return 0;
-    FaceArrays3D* faces = &model->faces;
-    VertexArrays3D* vtx = &model->vertices;
-    int cnt = faces->vertex_count[ei]; if (cnt < 2) return 0;
 
-    double abs_a = fabs(a), abs_b = fabs(b), abs_c = fabs(c);
-    int proj = (abs_a >= abs_b && abs_a >= abs_c) ? 0
-            : (abs_b >= abs_a && abs_b >= abs_c) ? 1 : 2;
-
-    int nfj = faces->vertex_count[fj];
-    /* Projeter le contour de fj sur l'axe dominant ; cette routine suppose
-     * les allocations réussies.
-     */
-    int *vx = (int*)malloc(sizeof(int) * nfj);
-    int *vy = (int*)malloc(sizeof(int) * nfj);
-    for (int m = 0; m < nfj; ++m) {
-        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
-        Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
-        int ix, iy;
-        if (proj == 0) { ix = FIXED_TO_INT(Y); iy = FIXED_TO_INT(Z); }
-        else if (proj == 1) { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Z); }
-        else { ix = FIXED_TO_INT(X); iy = FIXED_TO_INT(Y); }
-        vx[m] = ix; vy[m] = iy;
-    }
-
-    int result = 0;
-    /* Parcourir les segments de ei, évaluer les côtés et projeter leurs
-     * intersections avec le plan.
-     */
-    for (int k = 0; k < cnt && !result; ++k) {
-        int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + k] - 1;
-        int vj = faces->vertex_indices_buffer[faces->vertex_indices_ptr[ei] + ((k+1)%cnt)] - 1;
-        double Ax = (double)vtx->x[vi], Ay = (double)vtx->y[vi], Az = (double)vtx->z[vi];
-        double Bx = (double)vtx->x[vj], By = (double)vtx->y[vj], Bz = (double)vtx->z[vj];
-        const double plane_eps = 0.02;
-        double sdA = a*Ax + b*Ay + c*Az + d;
-        double sdB = a*Bx + b*By + c*Bz + d;
-        if (fabs(sdA) < plane_eps) sdA = 0.0;
-        if (fabs(sdB) < plane_eps) sdB = 0.0;
-        if (sdA * sdB < 0.0) {
-            double t = -sdA / (sdB - sdA);
-            double Px = Ax + t*(Bx - Ax);
-            double Py = Ay + t*(By - Ay);
-            double Pz = Az + t*(Bz - Az);
-            int px, py;
-            if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
-            else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
-            else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
-            if (strict_inside(px, py, nfj, vx, vy)) result = 1;
-        }
-    }
-    /* Libérer les deux contours temporaires avant de rendre le résultat. */
-    free(vx); free(vy);
-    return result;
-}
 /*
  * ----------------------------------------------------------------------------
  *  compute_face_plane
@@ -1295,33 +1211,36 @@ static int strict_inside(int px, int py, int nfj_local, int *vx_local, int *vy_l
 }
 /*
  * ----------------------------------------------------------------------------
- *  count_edge_crossings
+ *  evaluate_face_crossings
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Compter les arêtes de ei qui traversent fj ou y possèdent une extrémité
- *    coplanaire intérieure.
+ *    Compter les traversées d’une face et signaler une traversée strictement
+ *    intérieure, avec un seul plan et un seul contour projeté temporaires.
  *
  *  Paramètres :
- *    [entrée] model, ei et fj, identifiants de faces à base zéro.
+ *    [entrée] model, ei : face portant les arêtes ; fj : face cible.
+ *    [sortie] interior : 1 si une arête traverse strictement l’intérieur,
+ *    0 sinon ; pointeur valide requis.
  *
  *  Retour :
- *    Nombre de traversées comptées.
+ *    Nombre de traversées au sens inclusif historique ; 0 si le plan est
+ *    dégénéré, ei trop courte ou la réserve temporaire indisponible.
  *
  *  Fonctionnement :
- *    Aucun changement de géométrie. Calcule le plan objet de fj sur les
- *    entiers 16.16 bruts, choisit sa projection dominante puis quantifie les
- *    tests d'appartenance en coordonnées entières.
- *
- *  Limites :
- *    seuil 0,02 appliqué à une évaluation non normalisée du plan ; pertes
- *    subpixel et allocations vx/vy non vérifiées. Ne constitue pas un test
- *    exact 3D.
+ *    Prépare le plan objet brut et projette fj sur son axe dominant une fois.
+ *    Parcourt toutes les arêtes pour le compteur, en conservant les contacts
+ *    coplanaires et de bord. Le verdict strict ignore ces contacts et cesse
+ *    ses tests d’inclusion après le premier succès. Conserve les conversions
+ *    16.16, l’ordre des calculs d’intersection et le seuil non normalisé 0,02.
+ *    Libère les deux tableaux projetés avant de rendre les résultats.
  *
  * ----------------------------------------------------------------------------
  */
-static int count_edge_crossings(Model3D* model, int ei, int fj) {
+static int evaluate_face_crossings(Model3D* model, int ei, int fj,
+                                    int *interior) {
     int count = 0;
+    *interior = 0;
     double a, b, c, d;
     /* Construire le plan et rejeter le cas dégénéré. */
     compute_face_plane(model, fj, &a, &b, &c, &d, FACE_PLANE_RAW_FIXED);
@@ -1336,11 +1255,11 @@ static int count_edge_crossings(Model3D* model, int ei, int fj) {
     else if (abs_b >= abs_a && abs_b >= abs_c) proj = 1;
     else proj = 2;
     int nfj = faces->vertex_count[fj];
-    /* Projeter le contour de fj sur l'axe dominant ; cette routine suppose
-     * les allocations réussies.
-     */
+    /* Réserver le contour projeté commun aux deux résultats, puis projeter
+     * fj sur son axe dominant. Un échec de réserve laisse deux résultats nuls. */
     int *vx = (int*)malloc(sizeof(int) * nfj);
     int *vy = (int*)malloc(sizeof(int) * nfj);
+    if (!vx || !vy) { free(vx); free(vy); return 0; }
     for (int m = 0; m < nfj; ++m) {
         int vi = faces->vertex_indices_buffer[faces->vertex_indices_ptr[fj] + m] - 1;
         Fixed32 X = vtx->x[vi], Y = vtx->y[vi], Z = vtx->z[vi];
@@ -1387,6 +1306,9 @@ static int count_edge_crossings(Model3D* model, int ei, int fj) {
             if (proj == 0) { px = FIXED_TO_INT((Fixed32)Py); py = FIXED_TO_INT((Fixed32)Pz); }
             else if (proj == 1) { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Pz); }
             else { px = FIXED_TO_INT((Fixed32)Px); py = FIXED_TO_INT((Fixed32)Py); }
+            /* Le compteur conserve les contacts de bord ; le verdict strict
+             * exclut ces contacts et ne refait plus ce test après un succès. */
+            if (!*interior && strict_inside(px, py, nfj, vx, vy)) *interior = 1;
             if (point_in_poly_arrays_int(px, py, nfj, vx, vy)) {
                 count++;
             }
@@ -5423,6 +5345,73 @@ void getObserverParams(ObserverParams* params, Model3D* model) {
 segment "rendering";
 /*
  * ----------------------------------------------------------------------------
+ *  quickdraw_polygon_handle
+ * ----------------------------------------------------------------------------
+ *
+ *  Rôle :
+ *    Réserver puis verrouiller le polygone QuickDraw commun aux rendus.
+ *
+ *  Paramètres :
+ *    Aucun ; utilise globalPolyHandle et poly_handle_locked.
+ *
+ *  Retour :
+ *    Handle verrouillé, ou NULL après le message d’échec historique.
+ *
+ *  Fonctionnement :
+ *    Réserve MAX_FACE_VERTICES points, y compris pour une première face
+ *    isolée. Conserve la séquence de déverrouillage/verrouillage ; ne change
+ *    ni le crayon, ni le port, ni le contenu du polygone. Appelé une seule
+ *    fois par entrée de rendu, jamais dans le parcours des sommets.
+ *
+ * ----------------------------------------------------------------------------
+ */
+static Handle quickdraw_polygon_handle(void)
+{
+    /* Toutes les utilisations partagent la capacité maximale des faces. */
+    if (globalPolyHandle == NULL) {
+        globalPolyHandle = NewHandle((long)(2 + 8 + MAX_FACE_VERTICES * 4),
+                                     userid(), 0xC014, 0L);
+        if (globalPolyHandle == NULL) {
+            printf("Error: Unable to allocate global polygon handle\n");
+            return NULL;
+        }
+    }
+    /* Reprendre exactement le protocole du handle global réutilisé. */
+    if (poly_handle_locked) { HUnlock(globalPolyHandle); poly_handle_locked = 0; }
+    HLock(globalPolyHandle);
+    poly_handle_locked = 1;
+    return globalPolyHandle;
+}
+
+/* Construction commune développée à la compilation : aucun appel par face
+ * ni par sommet. Rôle : assembler les points avec pan et étendre les bornes
+ * brutes. Entrées : pointeurs, indices validés, nombre >= 3 et échelle ;
+ * sorties : polySize, polyPoints et les quatre bornes fournies en lvalues.
+ * Chaque appelant garde sa convention propre pour polyBBox et le rejet.
+ * Les arguments sont des variables simples, sans effets de bord.
+ */
+#define QUICKDRAW_BUILD_POINTS(poly_, vtx_, ids_, count_, scale_, minx_, maxx_, miny_, maxy_) do { \
+    int *_qd_xs = (vtx_)->x2d, *_qd_ys = (vtx_)->y2d; \
+    int _qd_vi = (ids_)[0] - 1; \
+    int _qd_x = _qd_xs[_qd_vi], _qd_y = _qd_ys[_qd_vi], _qd_j; \
+    (poly_)->polySize = 2 + 8 + ((count_) * 4); \
+    (poly_)->polyPoints[0].h = (scale_) * (_qd_x + pan_dx); \
+    (poly_)->polyPoints[0].v = _qd_y + pan_dy; \
+    (minx_) = (maxx_) = _qd_x; (miny_) = (maxy_) = _qd_y; \
+    for (_qd_j = 1; _qd_j < (count_); ++_qd_j) { \
+        _qd_vi = (ids_)[_qd_j] - 1; \
+        _qd_x = _qd_xs[_qd_vi]; _qd_y = _qd_ys[_qd_vi]; \
+        (poly_)->polyPoints[_qd_j].h = (scale_) * (_qd_x + pan_dx); \
+        (poly_)->polyPoints[_qd_j].v = _qd_y + pan_dy; \
+        if (_qd_x < (minx_)) (minx_) = _qd_x; \
+        if (_qd_x > (maxx_)) (maxx_) = _qd_x; \
+        if (_qd_y < (miny_)) (miny_) = _qd_y; \
+        if (_qd_y > (maxy_)) (maxy_) = _qd_y; \
+    } \
+} while (0)
+
+/*
+ * ----------------------------------------------------------------------------
  *  drawPolygons
  * ----------------------------------------------------------------------------
  *
@@ -5445,6 +5434,8 @@ segment "rendering";
  *    boîtes hors écran, puis remplit et encadre, ou encadre seulement en
  *    mode filaire. La priorité du remplissage est shading, aléatoire, choix
  *    utilisateur, défaut.
+ *    Partage le handle et la construction des points avec les diagnostics ;
+ *    cette construction est développée à la compilation dans la boucle.
  *
  *  Préconditions :
  *    QuickDraw actif ; au plus MAX_FACE_VERTICES points par face. Ne calcule
@@ -5469,26 +5460,9 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
     int screenW = screenScale * (CENTRE_X * 2);
     int screenH = screenScale * (CENTRE_Y * 2);
 
-    /* Réserver une fois un polygone de taille maximale puis verrouiller son
-     * handle.
-     */
-    if (globalPolyHandle == NULL) {
-        int max_polySize = 2 + 8 + (MAX_FACE_VERTICES * 4);
-        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
-        if (globalPolyHandle == NULL) {
-            printf("Error: Unable to allocate global polygon handle\n");
-            return;
-        }
-    }
-
-    polyHandle = globalPolyHandle;
-
-    if (poly_handle_locked) {
-        HUnlock(polyHandle);
-        poly_handle_locked = 0;
-    }
-    HLock(polyHandle);
-    poly_handle_locked = 1;
+    /* Prendre une seule fois le handle commun pour tout le rendu. */
+    polyHandle = quickdraw_polygon_handle();
+    if (polyHandle == NULL) return;
     SetPenMode(0);
 
     SetSolidPenPat(COL_FILL_DEFAULT);
@@ -5512,33 +5486,10 @@ void drawPolygons(Model3D* model, int* vertex_count, int face_count, int vertex_
             }
             if (!all_valid) { invalid_faces_skipped++; continue; }
 
-            /* Écrire points et bornes QuickDraw avec les décalages écran. */
-            int polySize = 2 + 8 + (vcount_face * 4);
+            /* Construire les points sans appel supplémentaire par face. */
             poly = (DynamicPolygon *)*polyHandle;
-            poly->polySize = polySize;
-
-            int *x2d = vtx->x2d;
-            int *y2d = vtx->y2d;
-
-            int first_vi = indices_base[0] - 1;
-            int x = x2d[first_vi];
-            int y = y2d[first_vi];
-            poly->polyPoints[0].h = screenScale * (x + pan_dx);
-            poly->polyPoints[0].v = y + pan_dy;
-            min_x = max_x = x;
-            min_y = max_y = y;
-
-            for (j = 1; j < vcount_face; ++j) {
-                int vi = indices_base[j] - 1;
-                x = x2d[vi];
-                y = y2d[vi];
-                poly->polyPoints[j].h = screenScale * (x + pan_dx);
-                poly->polyPoints[j].v = y + pan_dy;
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
-            }
+            QUICKDRAW_BUILD_POINTS(poly, vtx, indices_base, vcount_face,
+                                   screenScale, min_x, max_x, min_y, max_y);
             poly->polyBBox.h1 = min_x + pan_dx;
             poly->polyBBox.v1 = min_y + pan_dy;
             poly->polyBBox.h2 = max_x + pan_dx;
@@ -5697,14 +5648,11 @@ void drawPolygons_jitter(Model3D* model, int* vertex_count, int face_count, int 
  *
  *  Fonctionnement :
  *    Vérifie visibilité, longueur et indices, puis dessine avec pan.
+ *    Utilise le handle commun dimensionné pour MAX_FACE_VERTICES points
+ *    et la même construction de points que le rendu complet.
  *
  *  Préconditions :
  *    QuickDraw actif.
- *
- *  Limites :
- *    si cette fonction alloue elle-même le handle global, la réserve est
- *    dimensionnée pour quatre sommets seulement ; elle n'est pas agrandie
- *    ici.
  *
  * ----------------------------------------------------------------------------
  */
@@ -5725,49 +5673,18 @@ void drawFace(Model3D* model, int face_id, int fillPenPat, int show_index) {
         if (vi < 0 || vi >= vtx->vertex_count) return;
     }
 
-    /* Réutiliser le handle global ; la réserve locale initiale ne couvre que
-     * quatre points.
-     */
-    if (globalPolyHandle == NULL) {
-        int max_polySize = 2 + 8 + (4 * 4);
-        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
-        if (globalPolyHandle == NULL) {
-            printf("Error: Unable to allocate global polygon handle\n");
-            return;
-        }
-    }
-    Handle polyHandle = globalPolyHandle;
-    if (poly_handle_locked) { HUnlock(polyHandle); poly_handle_locked = 0; }
-    HLock(polyHandle); poly_handle_locked = 1;
+    /* Réutiliser la même réserve que le rendu complet. */
+    Handle polyHandle = quickdraw_polygon_handle();
+    if (polyHandle == NULL) return;
     DynamicPolygon *poly = (DynamicPolygon *)*polyHandle;
-    int polySize = 2 + 8 + (vcount_face * 4);
-    poly->polySize = polySize;
-    /* Assembler points et boîte de la face dans le port graphique. */
-    int *x2d = vtx->x2d;
-    int *y2d = vtx->y2d;
-
-    int first_vi = indices_base[0] - 1;
-    int px = x2d[first_vi];
-    int py = y2d[first_vi];
-    poly->polyPoints[0].h = mode / 320 * (px + pan_dx);
-    poly->polyPoints[0].v = py + pan_dy;
-    int min_x = px, max_x = px, min_y = py, max_y = py;
-    for (int j = 1; j < vcount_face; ++j) {
-        int vi = indices_base[j] - 1;
-        px = x2d[vi];
-        py = y2d[vi];
-        poly->polyPoints[j].h = mode / 320 * (px + pan_dx);
-        poly->polyPoints[j].v = py + pan_dy;
-        if (px < min_x) min_x = px;
-        if (px > max_x) max_x = px;
-        if (py < min_y) min_y = py;
-        if (py > max_y) max_y = py;
-    }
+    int min_x, max_x, min_y, max_y;
+    int screenScale = mode / 320;
+    QUICKDRAW_BUILD_POINTS(poly, vtx, indices_base, vcount_face,
+                           screenScale, min_x, max_x, min_y, max_y);
     poly->polyBBox.h1 = min_x + pan_dx;
     poly->polyBBox.v1 = min_y + pan_dy;
     poly->polyBBox.h2 = max_x + pan_dx;
     poly->polyBBox.v2 = max_y + pan_dy;
-    int screenScale = mode / 320;
     int screenW = screenScale * (CENTRE_X * 2);
     int screenH = screenScale * (CENTRE_Y * 2);
     int sc_min_x = screenScale * (min_x + pan_dx);
@@ -5909,6 +5826,7 @@ void drawFaceIndex(Model3D* model, int face_id) {
  *  Fonctionnement :
  *    Malgré son nom, remplit les faces en vert clair et les encadre en
  *    jaune.
+ *    Réutilise le handle et la construction des points du rendu complet.
  *
  *    Les tests de boîte de ce diagnostic ne traitent pas le pan de façon
  *    identique au dessin des points.
@@ -5922,17 +5840,8 @@ void frameInconclusivePairs(Model3D* model) {
     /* Ignorer un diagnostic vide et assurer le handle de polygone partagé. */
     if (inconclusive_pairs == NULL || inconclusive_pairs_count == 0) return;
 
-    if (globalPolyHandle == NULL) {
-        int max_polySize = 2 + 8 + (MAX_FACE_VERTICES * 4);
-        globalPolyHandle = NewHandle((long)max_polySize, userid(), 0xC014, 0L);
-        if (globalPolyHandle == NULL) {
-            printf("Error: Unable to allocate global polygon handle\n");
-            return;
-        }
-    }
-    Handle polyHandle = globalPolyHandle;
-    if (poly_handle_locked) { HUnlock(polyHandle); poly_handle_locked = 0; }
-    HLock(polyHandle); poly_handle_locked = 1;
+    Handle polyHandle = quickdraw_polygon_handle();
+    if (polyHandle == NULL) return;
     DynamicPolygon *poly = (DynamicPolygon *)*polyHandle;
 
     /* Parcourir les deux faces de chaque paire en contrôlant tailles et indices. */
@@ -5954,27 +5863,11 @@ void frameInconclusivePairs(Model3D* model) {
             }
             if (!all_valid) continue;
 
-            /* Assembler les points de surlignage et leur boîte de rejet. */
+            /* Garder les bornes brutes propres au diagnostic de surlignage. */
             int screenScale = mode / 320;
-            int polySize = 2 + 8 + (vcount_face * 4);
-            poly->polySize = polySize;
-            int first_vi = indices_base[0] - 1;
-            int px = vtx->x2d[first_vi];
-            int py = vtx->y2d[first_vi];
-            poly->polyPoints[0].h = screenScale * (px + pan_dx);
-            poly->polyPoints[0].v = py + pan_dy;
-            int min_x = px, max_x = px, min_y = py, max_y = py;
-            for (int j = 1; j < vcount_face; ++j) {
-                int vi = indices_base[j] - 1;
-                px = vtx->x2d[vi];
-                py = vtx->y2d[vi];
-                poly->polyPoints[j].h = screenScale * (px + pan_dx);
-                poly->polyPoints[j].v = py + pan_dy;
-                if (px < min_x) min_x = px;
-                if (px > max_x) max_x = px;
-                if (py < min_y) min_y = py;
-                if (py > max_y) max_y = py;
-            }
+            int min_x, max_x, min_y, max_y;
+            QUICKDRAW_BUILD_POINTS(poly, vtx, indices_base, vcount_face,
+                                   screenScale, min_x, max_x, min_y, max_y);
             poly->polyBBox.h1 = min_x;
             poly->polyBBox.v1 = min_y;
             poly->polyBBox.h2 = max_x;
@@ -5999,6 +5892,9 @@ void frameInconclusivePairs(Model3D* model) {
     }
 
 }
+
+#undef QUICKDRAW_BUILD_POINTS
+
 /*
  * ----------------------------------------------------------------------------
  *  generate_random_colors

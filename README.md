@@ -231,7 +231,7 @@ The batch CSV benchmark of the ten rendering methods has been archived as disabl
 1. **Launch Application**: Run `3D Explorer` from your Apple IIGS
 2. **Enter Filename**: Type the OBJ filename when prompted (or press ENTER to exit)
 3. **Model Loads**: The application parses vertices and faces, applies auto-fit if available
-4. **Intersection Check**: Asks whether to perform an intersection check. Answering yes runs a validation pass that check 3D intersections and attempt limited in-memory splitting before rendering. This experimental pass does not solve every intersection and is separate from projected-overlap tests used by sorting and inspection.
+4. **Intersection Check**: Asks whether to perform an intersection check. Answering yes runs a validation pass that check 3D intersections and attempt limited in-memory splitting before rendering. This experimental pass does not solve every intersection and is separate from projected-overlap tests used by sorting and inspection. The crossing count and strict-interior verdict now share one plane/projection and edge scan per direction, retaining their separate boundary rules.
 5. **Set Camera Parameters**: Confirm or modify observer settings:
    - **Horizontal Angle**: Rotation around vertical axis in degrees (ENTER for default 30°)
    - **Vertical Angle**: Rotation around horizontal axis in degrees (ENTER for default 20°)
@@ -509,7 +509,7 @@ python DEPLOY.py
 ### Memory Management
 
 - **Model Storage**: Current constants allow 6,000 vertices, 6,000 faces, and 16 vertices per face. Allocation and index-buffer limits also apply; these constants do not guarantee that every combination fits.
-- **Handle-Based Graphics**: QuickDraw polygons and inspection tools reuse handles and saved screen/view state.
+- **Handle-Based Graphics**: QuickDraw polygons and inspection tools share a maximum-capacity polygon handle and point construction expanded at compile time, while retaining their existing bounding-box, clipping and pen-state rules. Saved screen/view state is shared by inspection tools.
 - **Z-Buffer Scratch Storage**: Common reservation/free helpers manage prepared vertices and faces; renderer-specific buffers retain their own storage requirements and allocation checks.
 - **Memory Model**: `#pragma memorymodel 1` selects the target's large memory model with far pointers. Available RAM remains a practical limit.
 
