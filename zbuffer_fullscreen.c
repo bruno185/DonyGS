@@ -381,6 +381,8 @@ typedef struct {
     long gx, gy;
     long x, y;
     UWORD16 z;
+    /* Plan évalué en x écran nul sur la prochaine ligne de remplissage. */
+    unsigned long scan_raw;
 } ZbPlane;
 
 /* Inverse de projection commun à tous les plans de la vue courante. */
@@ -657,6 +659,7 @@ static UWORD16 ZBuffer_PlaneCode(unsigned long z)
  *
  *  Paramètres :
  *    [entrée] x0/x1 inclus sans pan, screenY avec pan, fillColor et plane.
+ *    row_raw : plan évalué en x écran nul sur cette ligne.
  *
  *  Retour :
  *    Aucun ; écrit profondeur et écran via ZBuffer_SpanRun.
@@ -664,18 +667,21 @@ static UWORD16 ZBuffer_PlaneCode(unsigned long z)
  *  Préconditions :
  *    coordonnées déjà clippées et lignes valides. Prépare codes exacts aux
  *    extrémités et pas 16.16 depuis le gradient à douze fractions.
+ *    Le plan de ligne avance par addition de gy dans le noyau de rendu ;
+ *    une seule multiplication par gx localise ici le début du span.
  *
  * ----------------------------------------------------------------------------
  */
 static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY,
-                               int fillColor, ZbPlane *plane)
+                               int fillColor, ZbPlane *plane,
+                               unsigned long row_raw)
 {
     int sx0, nsteps;
     unsigned long raw;
     if (x0 > x1) return;
     /* Appliquer pan horizontal et calculer les adresses du premier pixel. */
     sx0 = x0 + pan_dx;
-    raw = ZBuffer_PlaneAt(plane, (long)sx0, (long)screenY);
+    raw = row_raw + (unsigned long)plane->gx * (unsigned long)sx0;
     zspan_p_zptr = (unsigned long)(zbuf_row[screenY] + sx0);
     zspan_p_pptr = ZB_SHGR_BASE + (unsigned long)screenY * 160UL +
                 (unsigned long)(sx0 >> 1);
@@ -1088,6 +1094,9 @@ static void ZBuffer_EdgeRun(void)
  *    pour ZBuffer_EdgeRun ; aucun appel C par pixel ni allocation. Les règles
  *    de tie de Bresenham
  *    peuvent différer de FramePoly et du remplissage demi-ouvert.
+ *    Sans clipping initial sur l’axe majeur, les restes de départ sont connus
+ *    directement. Le quotient et le reste de profondeur utilisent des mots
+ *    non signés de 16 bits ; le chemin clippé conserve ses calculs long.
  *
  * ----------------------------------------------------------------------------
  */
@@ -1139,10 +1148,17 @@ static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0,
     last = major;
     if (u0 + last > ulimit) last = ulimit - u0;
     if (first > last) return;
-    numerator = (unsigned long)first * (unsigned long)minor +
-                (unsigned long)(major / 2L);
-    v = v0 + vstep * (long)(numerator / (unsigned long)major);
-    rem = (long)(numerator % (unsigned long)major);
+    /* Cas usuel : le premier point n’est pas clippé sur l’axe majeur.
+     * Le reste initial est alors connu, sans multiplication ni division. */
+    if (first == 0L) {
+        v = v0;
+        rem = major / 2L;
+    } else {
+        numerator = (unsigned long)first * (unsigned long)minor +
+                    (unsigned long)(major / 2L);
+        v = v0 + vstep * (long)(numerator / (unsigned long)major);
+        rem = (long)(numerator % (unsigned long)major);
+    }
     raw = steep ? ZBuffer_PlaneAt(plane, v, u0 + first) :
                   ZBuffer_PlaneAt(plane, u0 + first, v);
     zmajor = (unsigned long)(steep ? plane->gy : plane->gx);
@@ -1152,11 +1168,18 @@ static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0,
     delta = (long)edge_z1 - (long)edge_z0;
     esign = (delta < 0L) ? -1L : 1L;
     magnitude = (unsigned long)((delta < 0L) ? -delta : delta);
-    ewhole = (long)(magnitude / (unsigned long)major);
-    epart = (long)(magnitude % (unsigned long)major);
-    numerator = (unsigned long)first * magnitude + (unsigned long)(major / 2L);
-    ez = (long)edge_z0 + esign * (long)(numerator / (unsigned long)major);
-    erem = (long)(numerator % (unsigned long)major);
+    /* Ces deux opérandes tiennent dans un mot, même pour une arête clippée.
+     * Employer les divisions natives 16 bits plutôt que leurs variantes long. */
+    ewhole = (long)((unsigned int)magnitude / (unsigned int)major);
+    epart = (long)((unsigned int)magnitude % (unsigned int)major);
+    if (first == 0L) {
+        ez = (long)edge_z0;
+        erem = major / 2L;
+    } else {
+        numerator = (unsigned long)first * magnitude + (unsigned long)(major / 2L);
+        ez = (long)edge_z0 + esign * (long)(numerator / (unsigned long)major);
+        erem = (long)(numerator % (unsigned long)major);
+    }
 prepare_packet:
     /* Les extrémités sont des int 16 bits ; major/minor/restes tiennent donc
      * dans un mot non signé. Le parcours visible compte au plus 320 pixels.
@@ -1220,6 +1243,8 @@ prepare_packet:
  *    uniquement les faces actives. Plan Z commun au remplissage et aux
  *    contours ; arrondi intérieur ceil/floor, puis côtés originaux par
  *    Bresenham et masque facultatif.
+ *    Pendant le remplissage, le plan de chaque face avance de gy par ligne,
+ *    y compris sans intersection ; aucune approximation supplémentaire.
  *
  *    Le clipping du viewport est appliqué aux spans ; pas de clipping 3D
  *    général. Les réserves et le comportement d'échec restent propres à
@@ -1315,6 +1340,10 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         ZBuffer_SetPlane(&zbfs_face_plane[f], vtx, faces, f, zsrc,
                          zbfs_faces.face_nudge[f],
                          (biased && faces->plane_d[f] > 0) ? frame_code_bias : 0.0f);
+        /* Le premier numéro de ligne est déjà exprimé en coordonnées écran.
+         * Les lignes suivantes avanceront le plan par une seule addition. */
+        zbfs_face_plane[f].scan_raw = ZBuffer_PlaneAt(&zbfs_face_plane[f],
+                                            0L, (long)zbfs_faces.face_start[f]);
         ed = zbfs_edge_buf + offt;
 
         for (k = 0; k < n; k++, ed++) {
@@ -1376,10 +1405,15 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         for (ai = 0; ai < active_count; ai++) {
             int n, offt, hit_count;
             int fillColor;
+            unsigned long row_raw;
 
             f = zbfs_faces.face_active[ai];
             if (faces->maxy[f] < y) continue;
             zbfs_faces.face_active[keep++] = f;
+            /* Avancer même pour une ligne sans span : ne jamais décaler le
+             * plan lors du passage d’un sommet ou d’un contour dégénéré. */
+            row_raw = zbfs_face_plane[f].scan_raw;
+            zbfs_face_plane[f].scan_raw += (unsigned long)zbfs_face_plane[f].gy;
 
             n = faces->vertex_count[f];
             offt = faces->vertex_indices_ptr[f];
@@ -1441,7 +1475,8 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
                         xa > (long)clip_x_max) continue;
                     x0 = (xa < (long)clip_x_min) ? clip_x_min : (int)xa;
                     x1 = (xb > (long)clip_x_max) ? clip_x_max : (int)xb;
-                    ZBuffer_PaintSpanZ(x0, x1, screenY, fillColor, &zbfs_face_plane[f]);
+                    ZBuffer_PaintSpanZ(x0, x1, screenY, fillColor,
+                                      &zbfs_face_plane[f], row_raw);
                 }
             }
         }

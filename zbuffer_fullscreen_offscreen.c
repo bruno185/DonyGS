@@ -18,8 +18,8 @@
  *
  *  Dépendances et contraintes :
  *    Inclus par engine.c après le module plein écran. Le handle verrouillé
- *    ne doit pas traverser de banque. Les MVN sont patchés à l'exécution,
- *    donc non réentrants et inscriptibles. Init doit être appelé une seule
+ *    ne doit pas traverser de banque. La copie MVN est patchée à l'exécution,
+ *    donc non réentrante et inscriptible. Init doit être appelé une seule
  *    fois ; Shutdown ne libère pas les réserves statiques de préparation du
  *    rendu.
  *
@@ -128,7 +128,7 @@ void Offscreen_Shutdown(void)
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Effacer le framebuffer en propageant un octet zéro avec MVN.
+ *    Effacer le framebuffer par blocs de seize mots de 16 bits.
  *
  *  Paramètres :
  *    Aucun paramètre explicite.
@@ -140,45 +140,58 @@ void Offscreen_Shutdown(void)
  *    Aucun.
  *
  *  Fonctionnement :
- *    Écrit le premier zéro en C puis copie OFF_PIXELS-1 octets depuis p vers
- *    p+1. Le chevauchement volontaire propage le zéro dans le sens
- *    croissant. Code auto-modifiant : patch des banques source et
- *    destination.
+ *    Le handle attrNoCross garantit un bloc de 32000 octets dans une banque.
+ *    Écrit seize mots par tour en adressage absolu indexé, sans lecture ni
+ *    copie chevauchante. Le contenu final reste entièrement nul.
  *
  *  Registres et indicateurs :
- *    Préserve P/DBR, modifie A/X/Y ; le buffer doit rester dans une banque
- *    et le code être inscriptible.
+ *    Préserve P/DBR, modifie A/X/Y ; le buffer doit rester dans une banque.
+ *    OFF_PIXELS doit être un multiple de 32.
  *
  * ----------------------------------------------------------------------------
  */
 void Offscreen_Clear(void)
 {
-    unsigned char *p;
     if (offscreen_handle == NULL) return;
-    p = (unsigned char *)*offscreen_handle;
-    /* Amorcer le premier octet avant la propagation par copie chevauchante. */
-    *p = 0;
     asm {
-
-
+        /* Installer temporairement la banque du framebuffer dans DBR. */
         php
         phb
         sep #0x20
-        lda offscreen_bank
-        /* Patcher les deux banques MVN avec celle du framebuffer. */
-        sta >clear_mvn+1
-        sta >clear_mvn+2
-
-
+        lda >offscreen_bank
+        pha
+        plb
         rep #0x30
-        lda offscreen_offset
+        lda >offscreen_offset
         tax
-        tay
-        iny
-        lda #OFF_PIXELS-2
-    /* Transférer de p vers p+1 pour propager le zéro puis rétablir DBR/P. */
-    clear_mvn:
-        mvn 0x00,0x00
+        ldy #1000
+        lda #0
+    off_clear_words:
+        /* Le dernier mot écrit est toujours dans le bloc réservé. */
+        sta |0,x
+        sta |2,x
+        sta |4,x
+        sta |6,x
+        sta |8,x
+        sta |10,x
+        sta |12,x
+        sta |14,x
+        sta |16,x
+        sta |18,x
+        sta |20,x
+        sta |22,x
+        sta |24,x
+        sta |26,x
+        sta |28,x
+        sta |30,x
+        txa
+        clc
+        adc #32
+        tax
+        lda #0
+        dey
+        bne off_clear_words
+        /* Restaurer la banque de données et les largeurs de l’appelant. */
         plb
         plp
     }
@@ -245,40 +258,6 @@ void Offscreen_FlushToScreen(void)
 }
 
 
-/*
- * ----------------------------------------------------------------------------
- *  Offscreen_DrawPixel
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Écrire un pixel couleur dans le framebuffer RAM initialisé.
- *
- *  Paramètres :
- *    [entrée] x/y écran et color, quatre bits utiles
- *
- *  Retour :
- *    Aucun.
- *
- *  Fonctionnement :
- *    Rejette hors viewport. x pair emploie le nibble haut, x impair le bas ;
- *    préserve le pixel voisin. Aucun test Z n'est réalisé par cette
- *    primitive.
- *
- * ----------------------------------------------------------------------------
- */
-static inline void Offscreen_DrawPixel(int x, int y, int color)
-{
-    unsigned char *pp;
-    if ((unsigned)x >= (unsigned)SCREEN_WIDTH || (unsigned)y >= (unsigned)SCREEN_HEIGHT) return;
-    /* Localiser l'octet puis remplacer seulement le nibble correspondant à x. */
-    pp = off_row[y] + (x >> 1);
-    if ((x & 1) == 0)
-        *pp = (unsigned char)((*pp & 0x0F) | ((color & 0x0F) << 4));
-    else
-        *pp = (unsigned char)((*pp & 0xF0) | (color & 0x0F));
-}
-
-
 typedef struct {
     int valid;
     int y;
@@ -306,6 +285,8 @@ typedef struct {
  *    selon les différences int natives. N'introduit pas une surface plus
  *    proche dans Z. Le test de visibilité diffère de celui des contours du
  *    rendu direct.
+ *    Écrit directement le nibble accepté dans le framebuffer : un seul test
+ *    de coordonnées et aucun second appel par pixel de liaison.
  *
  * ----------------------------------------------------------------------------
  */
@@ -313,15 +294,20 @@ static void Off_PlotBridge(int sx, int sy, UWORD16 zq, int color)
 {
     FarWordPtr row;
     UWORD16 cur;
+    unsigned char *pp;
     if ((unsigned)sx >= (unsigned)ZBUF_WIDTH || (unsigned)sy >= (unsigned)ZBUF_HEIGHT) return;
     /* Comparer à la surface existante sans écrire de profondeur. */
     row = zbuf_row[sy];
     cur = row[sx];
     /* Dessiner seulement pour égalité ou tolérance d'un code telle qu'implémentée. */
-    if (zq == cur)
-        Offscreen_DrawPixel(sx, sy, color);
-    else if (zq > cur && (int)zq - (int)cur <= 1)
-        Offscreen_DrawPixel(sx, sy, color);
+    if (zq != cur && !(zq > cur && (int)zq - (int)cur <= 1)) return;
+    /* Préserver le pixel voisin, sans repasser par une primitive qui
+     * vérifierait une seconde fois les mêmes coordonnées. */
+    pp = off_row[sy] + (sx >> 1);
+    if ((sx & 1) == 0)
+        *pp = (unsigned char)((*pp & 0x0F) | ((color & 0x0F) << 4));
+    else
+        *pp = (unsigned char)((*pp & 0xF0) | (color & 0x0F));
 }
 
 /*
@@ -425,6 +411,8 @@ typedef ZBufferScanEdge OffEdge;
  *    sans sous-dépassement, prépare le paquet et trace les liaisons entre
  *    spans consécutifs. Diffère du remplissage sur plan Z du rendu direct
  *    actuel.
+ *    Pour deux pixels, le noyau n’utilise pas de pas intérieur ; pour un span
+ *    de profondeur constante, ce pas vaut zéro sans division.
  *
  * ----------------------------------------------------------------------------
  */
@@ -467,7 +455,11 @@ static void Off_PaintSpanZ(int x0, int x1, int y, int screenY,
         nsteps    = x1 - x0;
 
 
-        z_step_16 = (((long)zq_end - (long)zq0) << 16) / nsteps;
+        /* Un span de deux pixels n’a pas d’intérieur : ses extrémités
+         * utilisent leurs codes exacts. Une profondeur constante n’exige
+         * pas non plus de division pour préparer l’intérieur. */
+        z_step_16 = (nsteps > 1 && zq_end != zq0) ?
+                   (((long)zq_end - (long)zq0) << 16) / nsteps : 0L;
         z_acc     = ((long)zq0 << 16) + 0x8000L;
 
 

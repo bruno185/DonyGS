@@ -62,7 +62,7 @@ Les contrats ci-dessous sont reconstruits depuis les en-têtes français des dé
 | `FaceDepthScanResult` | Résultat du noyau de métriques : profondeurs, bornes, sommes du centroïde et normale ; division et d restent en C. |
 | `RCHZoomPatch` | Sauvegarde des sommets distincts de deux faces, de leurs bbox et de l’échelle pendant un grossissement temporaire. |
 | `ZbEdgePacket` | Paquet de 50 octets : plan, profondeurs, pointeurs far et état Bresenham ; copié dans le cadre direct du noyau de contours. |
-| `ZbPlane` | Origine et gradients du code Z avec douze fractions pour le rendu plein écran direct. |
+| `ZbPlane` | Origine et gradients du code Z avec douze fractions, plus accumulateur de ligne scan_raw pour le remplissage plein écran direct. |
 | États graphiques | Couleurs, palette, shading, pan, jitter et culling sont partagés. Les fonctions de dessin ne préservent pas toutes le motif de crayon. |
 
 ## Conventions à ne pas confondre
@@ -335,8 +335,7 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [Off_PaintSpanZ](#fn-Off_PaintSpanZ) — `zbuffer_fullscreen_offscreen.c` : Dessiner un span offscreen avec extrémités et liaisons de contour.
 - [Off_PlotBridge](#fn-Off_PlotBridge) — `zbuffer_fullscreen_offscreen.c` : Renforcer un pixel de liaison de contour sans modifier la profondeur.
 - [Off_RenderCore](#fn-Off_RenderCore) — `zbuffer_fullscreen_offscreen.c` : Rendre les surfaces par balayage plein écran offscreen.
-- [Offscreen_Clear](#fn-Offscreen_Clear) — `zbuffer_fullscreen_offscreen.c` : Effacer le framebuffer en propageant un octet zéro avec MVN.
-- [Offscreen_DrawPixel](#fn-Offscreen_DrawPixel) — `zbuffer_fullscreen_offscreen.c` : Écrire un pixel couleur dans le framebuffer RAM initialisé.
+- [Offscreen_Clear](#fn-Offscreen_Clear) — `zbuffer_fullscreen_offscreen.c` : Effacer le framebuffer par blocs de seize mots de 16 bits.
 - [Offscreen_FlushToScreen](#fn-Offscreen_FlushToScreen) — `zbuffer_fullscreen_offscreen.c` : Copier le framebuffer RAM vers les 32000 octets de pixels SHGR.
 - [Offscreen_Init](#fn-Offscreen_Init) — `zbuffer_fullscreen_offscreen.c` : Allouer le framebuffer de 32000 octets en RAM sans franchissement de banque.
 - [Offscreen_Shutdown](#fn-Offscreen_Shutdown) — `zbuffer_fullscreen_offscreen.c` : Libérer le framebuffer offscreen détenu par le module.
@@ -3546,7 +3545,7 @@ Appels internes directs : aucun repéré.
 
 ### Off_BridgeBorderZQ
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 349.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 335.
 
 ```c
 static void Off_BridgeBorderZQ(int x0, int y0, UWORD16 zq0, int x1, int y1, UWORD16 zq1, int color)
@@ -3574,7 +3573,7 @@ Appels internes directs : [Off_PlotBridge](arbre_appels.html#fn-Off_PlotBridge).
 
 ### Off_PaintSpanZ
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 431.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 419.
 
 ```c
 static void Off_PaintSpanZ(int x0, int x1, int y, int screenY, UWORD16 zq0, UWORD16 zq_end, int fillColor, int frameColor, int whole_span_is_border, OffZBufSpanPrev *prev, int z_nudge_lsbs)
@@ -3586,9 +3585,7 @@ Dessiner un span offscreen avec extrémités et liaisons de contour.
 
 **Paramètres :**
 
-[entrée] x0/x1 inclus et y sans pan, screenY avec pan ; zq0/zq_end, codes ; fillColor/frameColor ; whole_span_is_border, ligne haute/basse ; z_nudge_lsbs.
-
-[entrée-sortie] prev, span précédent facultatif de la face.
+[entrée] x0/x1 inclus et y sans pan, screenY avec pan ; zq0/zq_end, codes ; fillColor/frameColor ; whole_span_is_border, ligne haute/basse ; z_nudge_lsbs. [entrée-sortie] prev, span précédent facultatif de la face.
 
 **Retour :**
 
@@ -3596,7 +3593,7 @@ Aucun.
 
 **Préconditions :**
 
-span préclippé et Z/framebuffer initialisés. Réduit les codes par nudge sans sous-dépassement, prépare le paquet et trace les liaisons entre spans consécutifs. Diffère du remplissage sur plan Z du rendu direct actuel.
+span préclippé et Z/framebuffer initialisés. Réduit les codes par nudge sans sous-dépassement, prépare le paquet et trace les liaisons entre spans consécutifs. Diffère du remplissage sur plan Z du rendu direct actuel. Pour deux pixels, le noyau n’utilise pas de pas intérieur ; pour un span de profondeur constante, ce pas vaut zéro sans division.
 
 Appels internes directs : [Off_BridgeBorderZQ](arbre_appels.html#fn-Off_BridgeBorderZQ), [ZBuffer_SpanRun](arbre_appels.html#fn-ZBuffer_SpanRun).
 
@@ -3604,7 +3601,7 @@ Appels internes directs : [Off_BridgeBorderZQ](arbre_appels.html#fn-Off_BridgeBo
 
 ### Off_PlotBridge
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 312.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 293.
 
 ```c
 static void Off_PlotBridge(int sx, int sy, UWORD16 zq, int color)
@@ -3624,15 +3621,15 @@ Aucun.
 
 **Fonctionnement :**
 
-Accepte une profondeur égale à Z ou plus lointaine d'au plus un code selon les différences int natives. N'introduit pas une surface plus proche dans Z. Le test de visibilité diffère de celui des contours du rendu direct.
+Accepte une profondeur égale à Z ou plus lointaine d'au plus un code selon les différences int natives. N'introduit pas une surface plus proche dans Z. Le test de visibilité diffère de celui des contours du rendu direct. Écrit directement le nibble accepté dans le framebuffer : un seul test de coordonnées et aucun second appel par pixel de liaison.
 
-Appels internes directs : [Offscreen_DrawPixel](arbre_appels.html#fn-Offscreen_DrawPixel).
+Appels internes directs : aucun repéré.
 
 <a id="fn-Off_RenderCore"></a>
 
 ### Off_RenderCore
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 554.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 546.
 
 ```c
 static void Off_RenderCore(Model3D* model, int biased)
@@ -3668,7 +3665,7 @@ Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [Of
 
 ### Offscreen_Clear
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 154.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 153.
 
 ```c
 void Offscreen_Clear(void)
@@ -3676,7 +3673,7 @@ void Offscreen_Clear(void)
 
 **Rôle :**
 
-Effacer le framebuffer en propageant un octet zéro avec MVN.
+Effacer le framebuffer par blocs de seize mots de 16 bits.
 
 **Paramètres :**
 
@@ -3692,39 +3689,11 @@ Aucun.
 
 **Fonctionnement :**
 
-Écrit le premier zéro en C puis copie OFF_PIXELS-1 octets depuis p vers p+1. Le chevauchement volontaire propage le zéro dans le sens croissant. Code auto-modifiant : patch des banques source et destination.
+Le handle attrNoCross garantit un bloc de 32000 octets dans une banque. Écrit seize mots par tour en adressage absolu indexé, sans lecture ni copie chevauchante. Le contenu final reste entièrement nul.
 
 **Registres et indicateurs :**
 
-Préserve P/DBR, modifie A/X/Y ; le buffer doit rester dans une banque et le code être inscriptible.
-
-Appels internes directs : aucun repéré.
-
-<a id="fn-Offscreen_DrawPixel"></a>
-
-### Offscreen_DrawPixel
-
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 269.
-
-```c
-static inline void Offscreen_DrawPixel(int x, int y, int color)
-```
-
-**Rôle :**
-
-Écrire un pixel couleur dans le framebuffer RAM initialisé.
-
-**Paramètres :**
-
-[entrée] x/y écran et color, quatre bits utiles
-
-**Retour :**
-
-Aucun.
-
-**Fonctionnement :**
-
-Rejette hors viewport. x pair emploie le nibble haut, x impair le bas ; préserve le pixel voisin. Aucun test Z n'est réalisé par cette primitive.
+Préserve P/DBR, modifie A/X/Y ; le buffer doit rester dans une banque. OFF_PIXELS doit être un multiple de 32.
 
 Appels internes directs : aucun repéré.
 
@@ -3732,7 +3701,7 @@ Appels internes directs : aucun repéré.
 
 ### Offscreen_FlushToScreen
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 215.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 228.
 
 ```c
 void Offscreen_FlushToScreen(void)
@@ -6006,7 +5975,7 @@ Appels internes directs : aucun repéré.
 
 ### renderModelFullscreenZBuffer
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1561.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1596.
 
 ```c
 void renderModelFullscreenZBuffer(Model3D* model)
@@ -6034,7 +6003,7 @@ Appels internes directs : [renderModelFullscreenZBuffer_biasedV2](arbre_appels.h
 
 ### renderModelFullscreenZBuffer_biasedV2
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1534.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1569.
 
 ```c
 void renderModelFullscreenZBuffer_biasedV2(Model3D* model)
@@ -6062,7 +6031,7 @@ Appels internes directs : [ZBuffer_RenderCore](arbre_appels.html#fn-ZBuffer_Rend
 
 ### renderModelFullscreenZBuffer_fastV2
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1508.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1543.
 
 ```c
 void renderModelFullscreenZBuffer_fastV2(Model3D* model)
@@ -6090,7 +6059,7 @@ Appels internes directs : [ZBuffer_RenderCore](arbre_appels.html#fn-ZBuffer_Rend
 
 ### renderModelFullscreenZBuffer_offscreen
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 823.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 815.
 
 ```c
 void renderModelFullscreenZBuffer_offscreen(Model3D* model)
@@ -6118,7 +6087,7 @@ Appels internes directs : [renderModelFullscreenZBuffer_offscreen_biasedV2](arbr
 
 ### renderModelFullscreenZBuffer_offscreen_biasedV2
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 796.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 788.
 
 ```c
 void renderModelFullscreenZBuffer_offscreen_biasedV2(Model3D* model)
@@ -6146,7 +6115,7 @@ Appels internes directs : [Off_RenderCore](arbre_appels.html#fn-Off_RenderCore).
 
 ### renderModelFullscreenZBuffer_offscreen_fastV2
 
-Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 770.
+Définition : [zbuffer_fullscreen_offscreen.c](zbuffer_fullscreen_offscreen.c), ligne 762.
 
 ```c
 void renderModelFullscreenZBuffer_offscreen_fastV2(Model3D* model)
@@ -7174,7 +7143,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBFS_FreeEdges
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 471.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 473.
 
 ```c
 static void ZBFS_FreeEdges(void)
@@ -7202,7 +7171,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBFS_FreeFaces
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 417.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 419.
 
 ```c
 static void ZBFS_FreeFaces(void)
@@ -7230,7 +7199,7 @@ Appels internes directs : [ZBuffer_FreeFaces](arbre_appels.html#fn-ZBuffer_FreeF
 
 ### ZBFS_FreeScratch
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 500.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 502.
 
 ```c
 static void ZBFS_FreeScratch(void)
@@ -7258,7 +7227,7 @@ Appels internes directs : [ZBFS_FreeEdges](arbre_appels.html#fn-ZBFS_FreeEdges),
 
 ### ZBFS_FreeVertices
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 445.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 447.
 
 ```c
 static void ZBFS_FreeVertices(void)
@@ -7286,7 +7255,7 @@ Appels internes directs : [ZBuffer_FreeVertices](arbre_appels.html#fn-ZBuffer_Fr
 
 ### ZBuffer_ActivateFaces
 
-Définition : [zbuffer_common.c](zbuffer_common.c), ligne 422.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 431.
 
 ```c
 static int ZBuffer_ActivateFaces(int row, const int *bucket, const int *sorted, int *active, int count)
@@ -7346,7 +7315,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_DrawEdge
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1094.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1103.
 
 ```c
 static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0, int x1, int y1, UWORD16 edge_z1, int color, ZbPlane *plane)
@@ -7366,7 +7335,7 @@ Aucun.
 
 **Fonctionnement :**
 
-Trie les extrémités selon l'axe majeur, clippe son parcours et avance à la fois le plan Z et la profondeur d'arête. Prépare un paquet par côté pour ZBuffer_EdgeRun ; aucun appel C par pixel ni allocation. Les règles de tie de Bresenham peuvent différer de FramePoly et du remplissage demi-ouvert.
+Trie les extrémités selon l'axe majeur, clippe son parcours et avance à la fois le plan Z et la profondeur d'arête. Prépare un paquet par côté pour ZBuffer_EdgeRun ; aucun appel C par pixel ni allocation. Les règles de tie de Bresenham peuvent différer de FramePoly et du remplissage demi-ouvert. Sans clipping initial sur l’axe majeur, les restes de départ sont connus directement. Le quotient et le reste de profondeur utilisent des mots non signés de 16 bits ; le chemin clippé conserve ses calculs long.
 
 Appels internes directs : [ZBuffer_EdgeRun](arbre_appels.html#fn-ZBuffer_EdgeRun), [ZBuffer_PlaneAt](arbre_appels.html#fn-ZBuffer_PlaneAt).
 
@@ -7490,10 +7459,10 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PaintSpanZ
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 670.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 675.
 
 ```c
-static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY, int fillColor, ZbPlane *plane)
+static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY, int fillColor, ZbPlane *plane, unsigned long row_raw)
 ```
 
 **Rôle :**
@@ -7512,13 +7481,17 @@ Aucun ; écrit profondeur et écran via ZBuffer_SpanRun.
 
 coordonnées déjà clippées et lignes valides. Prépare codes exacts aux extrémités et pas 16.16 depuis le gradient à douze fractions.
 
-Appels internes directs : [ZBuffer_PlaneAt](arbre_appels.html#fn-ZBuffer_PlaneAt), [ZBuffer_PlaneCode](arbre_appels.html#fn-ZBuffer_PlaneCode), [ZBuffer_SpanRun](arbre_appels.html#fn-ZBuffer_SpanRun).
+**Optimisation :**
+
+Le plan de ligne row_raw est fourni en x écran nul et avancé de gy par ligne ; une seule multiplication par gx localise le début du span, sans changer les codes Z.
+
+Appels internes directs : [ZBuffer_PlaneCode](arbre_appels.html#fn-ZBuffer_PlaneCode), [ZBuffer_SpanRun](arbre_appels.html#fn-ZBuffer_SpanRun).
 
 <a id="fn-ZBuffer_PlaneAt"></a>
 
 ### ZBuffer_PlaneAt
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 609.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 611.
 
 ```c
 static unsigned long ZBuffer_PlaneAt(ZbPlane *p, long x, long y)
@@ -7546,7 +7519,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PlaneCode
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 639.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 641.
 
 ```c
 static UWORD16 ZBuffer_PlaneCode(unsigned long z)
@@ -7574,7 +7547,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_EdgeRun
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 776.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 782.
 
 ```c
 static void ZBuffer_EdgeRun(void)
@@ -7606,7 +7579,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PrepareFaces
 
-Définition : [zbuffer_common.c](zbuffer_common.c), ligne 339.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 348.
 
 ```c
 static void ZBuffer_PrepareFaces(FaceArrays3D *faces, int count, int y_lo, int y_hi, int height, int biased, int *start, unsigned char *fill, unsigned char *frame, unsigned char *nudge, int *bucket)
@@ -7638,7 +7611,7 @@ Appels internes directs : [getFaceFillColor](arbre_appels.html#fn-getFaceFillCol
 
 ### ZBuffer_PrepareInvZ
 
-Définition : [zbuffer_common.c](zbuffer_common.c), ligne 302.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 303.
 
 ```c
 static float ZBuffer_PrepareInvZ(VertexArrays3D *vtx, int count, float *inv_z)
@@ -7658,7 +7631,7 @@ Maximum des profondeurs inverses, ou zéro.
 
 **Fonctionnement :**
 
-Convertit zo par FIXED_TO_FLOAT, calcule 1/z pour les profondeurs positives et écrit zéro sinon. Le maximum sert à la politique d’échelle propre à chaque moteur.
+Calcule directement 65536/(float)zo pour les profondeurs 16.16 positives et écrit zéro sinon. La simplification par une puissance de deux garde les mêmes arrondis. La plus petite profondeur fixe positive fournit le maximum des inverses sans comparaison flottante supplémentaire.
 
 Appels internes directs : aucun repéré.
 
@@ -7666,7 +7639,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PrepareScanEdges
 
-Définition : [zbuffer_common.c](zbuffer_common.c), ligne 461.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 470.
 
 ```c
 static void ZBuffer_PrepareScanEdges(VertexArrays3D *vtx, FaceArrays3D *faces, int face, const UWORD16 *zsrc, int y_lo, long rounding, ZBufferScanEdge *ed)
@@ -7750,7 +7723,7 @@ Appels internes directs : [ZBuffer_QuantizeAtScale](arbre_appels.html#fn-ZBuffer
 
 ### ZBuffer_RenderCore
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1230.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1255.
 
 ```c
 static void ZBuffer_RenderCore(Model3D* model, int biased)
@@ -7780,7 +7753,11 @@ Le clipping du viewport est appliqué aux spans ; pas de clipping 3D général. 
 
 Les réserves, inverses de profondeur, filtres de faces, histogrammes et listes actives passent par les primitives communes. Le plan de profondeur et les contours du rendu direct restent distincts.
 
-Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [screenClearTopLines](arbre_appels.html#fn-screenClearTopLines), [ZBFS_FreeEdges](arbre_appels.html#fn-ZBFS_FreeEdges), [ZBFS_FreeFaces](arbre_appels.html#fn-ZBFS_FreeFaces), [ZBuffer_ActivateFaces](arbre_appels.html#fn-ZBuffer_ActivateFaces), [ZBuffer_Clear](arbre_appels.html#fn-ZBuffer_Clear), [ZBuffer_DrawEdge](arbre_appels.html#fn-ZBuffer_DrawEdge), [ZBuffer_PaintSpanZ](arbre_appels.html#fn-ZBuffer_PaintSpanZ), [ZBuffer_PrepareFaces](arbre_appels.html#fn-ZBuffer_PrepareFaces), [ZBuffer_PrepareInvZ](arbre_appels.html#fn-ZBuffer_PrepareInvZ), [ZBuffer_QuantizeInvZ](arbre_appels.html#fn-ZBuffer_QuantizeInvZ), [ZBuffer_ReserveFaces](arbre_appels.html#fn-ZBuffer_ReserveFaces), [ZBuffer_ReserveVertices](arbre_appels.html#fn-ZBuffer_ReserveVertices), [ZBuffer_SetPlane](arbre_appels.html#fn-ZBuffer_SetPlane), [ZBuffer_SetScaleForFrame](arbre_appels.html#fn-ZBuffer_SetScaleForFrame), [ZBuffer_SizeFits](arbre_appels.html#fn-ZBuffer_SizeFits), [ZBuffer_SortFaceStarts](arbre_appels.html#fn-ZBuffer_SortFaceStarts).
+**Optimisation :**
+
+Le remplissage avance le plan de chaque face par addition de gy à chaque ligne, y compris sans span ; les contours conservent leur calcul initial.
+
+Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [screenClearTopLines](arbre_appels.html#fn-screenClearTopLines), [ZBFS_FreeEdges](arbre_appels.html#fn-ZBFS_FreeEdges), [ZBFS_FreeFaces](arbre_appels.html#fn-ZBFS_FreeFaces), [ZBuffer_ActivateFaces](arbre_appels.html#fn-ZBuffer_ActivateFaces), [ZBuffer_Clear](arbre_appels.html#fn-ZBuffer_Clear), [ZBuffer_DrawEdge](arbre_appels.html#fn-ZBuffer_DrawEdge), [ZBuffer_PaintSpanZ](arbre_appels.html#fn-ZBuffer_PaintSpanZ), [ZBuffer_PlaneAt](arbre_appels.html#fn-ZBuffer_PlaneAt), [ZBuffer_PrepareFaces](arbre_appels.html#fn-ZBuffer_PrepareFaces), [ZBuffer_PrepareInvZ](arbre_appels.html#fn-ZBuffer_PrepareInvZ), [ZBuffer_QuantizeInvZ](arbre_appels.html#fn-ZBuffer_QuantizeInvZ), [ZBuffer_ReserveFaces](arbre_appels.html#fn-ZBuffer_ReserveFaces), [ZBuffer_ReserveVertices](arbre_appels.html#fn-ZBuffer_ReserveVertices), [ZBuffer_SetPlane](arbre_appels.html#fn-ZBuffer_SetPlane), [ZBuffer_SetScaleForFrame](arbre_appels.html#fn-ZBuffer_SetScaleForFrame), [ZBuffer_SizeFits](arbre_appels.html#fn-ZBuffer_SizeFits), [ZBuffer_SortFaceStarts](arbre_appels.html#fn-ZBuffer_SortFaceStarts).
 
 <a id="fn-ZBuffer_ReserveFaces"></a>
 
@@ -7842,7 +7819,7 @@ Appels internes directs : [ZBuffer_FreeVertices](arbre_appels.html#fn-ZBuffer_Fr
 
 ### ZBuffer_SetEdgeFlags
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 727.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 733.
 
 ```c
 void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count)
@@ -7870,7 +7847,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_SetPlane
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 540.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 542.
 
 ```c
 static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge, float code_bias)
@@ -7982,7 +7959,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_SortFaceStarts
 
-Définition : [zbuffer_common.c](zbuffer_common.c), ligne 387.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 396.
 
 ```c
 static void ZBuffer_SortFaceStarts(int count, int height, const int *start, int *bucket, int *cursor, int *sorted)
@@ -8014,7 +7991,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_SortScanHits
 
-Définition : [zbuffer_common.c](zbuffer_common.c), ligne 528.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 537.
 
 ```c
 static void ZBuffer_SortScanHits(ZBufferScanHit *hits, int hit_count)
@@ -8042,7 +8019,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_SpanRun
 
-Définition : [zbuffer_common.c](zbuffer_common.c), ligne 595.
+Définition : [zbuffer_common.c](zbuffer_common.c), ligne 606.
 
 ```c
 static void ZBuffer_SpanRun(void)
@@ -8067,5 +8044,9 @@ Aucun ; écrit Z et les nibbles de couleur.
 **Registres et indicateurs :**
 
 Préserve P et D ; A/X/Y modifiés, DBR inchangé. Mode décimal supposé désactivé. Cadre D de 32 octets : zacc à 0/2, zstep à 4/6, zptr à 8/10, pptr à 12/14, compte à 16, couleur basse/haute à 18/20, parité à 22, masque/valeur à 24/26. Les profondeurs [8],Y peuvent franchir une banque ; le pointeur de pixels n'est incrémenté que sur 16 bits et doit rester dans sa banque. Traite les extrémités exactement et l'intérieur par paires pair/impair. Les pixels de même code Z ne sont pas remplacés. Non réentrant.
+
+**Optimisation :**
+
+Quand les deux pixels intérieurs passent le test Z strict, leur octet couleur est écrit en une fois ; sinon seul le nibble visible change. Le mot 28 du cadre direct contient la couleur des deux pixels.
 
 Appels internes directs : aucun repéré.

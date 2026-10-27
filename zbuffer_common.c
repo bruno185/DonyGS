@@ -293,20 +293,29 @@ static UWORD16 ZBuffer_QuantizeAtScale(float inv_z, float scale)
  *    Maximum des profondeurs inverses, ou zéro.
  *
  *  Fonctionnement :
- *    Convertit zo par FIXED_TO_FLOAT, calcule 1/z pour les profondeurs
- *    positives et écrit zéro sinon. Le maximum sert à la politique d’échelle
- *    propre à chaque moteur.
+ *    Calcule directement 65536/(float)zo pour les profondeurs 16.16 positives
+ *    et écrit zéro sinon. La simplification par une puissance de deux garde
+ *    les mêmes arrondis. La plus petite profondeur fixe positive fournit
+ *    le maximum des inverses sans comparaison flottante supplémentaire.
  *
  * ----------------------------------------------------------------------------
  */
 static float ZBuffer_PrepareInvZ(VertexArrays3D *vtx, int count, float *inv_z)
 {
     float maximum = 0.0f;
-    /* Garder exactement le format et les comparaisons des trois moteurs. */
+    Fixed32 nearest = 0;
+    /* Garder les valeurs quantifiées et le maximum des trois moteurs. */
     for (int i = 0; i < count; ++i) {
-        float zo_f = FIXED_TO_FLOAT(vtx->zo[i]);
-        inv_z[i] = (zo_f > 0.0f) ? (1.0f / zo_f) : 0.0f;
-        if (inv_z[i] > maximum) maximum = inv_z[i];
+        /* Annuler le facteur 16.16 avant la division. La mise à l’échelle
+         * par 2^16 est exacte : mêmes flottants, une division de moins. */
+        Fixed32 zo = vtx->zo[i];
+        inv_z[i] = (zo > 0) ? (65536.0f / (float)zo) : 0.0f;
+        /* L’inverse est monotone : trouver le maximum par comparaison des
+         * profondeurs fixes évite une comparaison flottante par sommet. */
+        if (zo > 0 && (nearest == 0 || zo < nearest)) {
+            nearest = zo;
+            maximum = inv_z[i];
+        }
     }
     return maximum;
 }
@@ -584,11 +593,13 @@ unsigned int zspan_p_zl, zspan_p_zr;
  *    Préserve P et D ; A/X/Y modifiés, DBR inchangé. Mode décimal supposé
  *    désactivé. Cadre D de 32 octets : zacc à 0/2, zstep à 4/6, zptr à 8/10,
  *    pptr à 12/14, compte à 16, couleur basse/haute à 18/20, parité à 22,
- *    masque/valeur à 24/26. Les profondeurs [8],Y peuvent franchir une
+ *    masque/valeur à 24/26, couleur des deux pixels à 28. Les profondeurs
+ *    [8],Y peuvent franchir une
  *    banque ; le pointeur de pixels n'est incrémenté que sur 16 bits et doit
  *    rester dans sa banque. Traite les extrémités exactement et l'intérieur
- *    par paires pair/impair. Les pixels de même code Z ne sont pas
- *    remplacés. Non réentrant.
+ *    par paires pair/impair. Si les deux pixels passent Z, écrit leur octet
+ *    couleur en une fois ; sinon, préserve le nibble du pixel caché. Les
+ *    pixels de même code Z ne sont pas remplacés. Non réentrant.
  *
  * ----------------------------------------------------------------------------
  */
@@ -639,6 +650,8 @@ static void ZBuffer_SpanRun(void)
         asl a
         asl a
         sta 20
+        ora 18
+        sta 28
 
         lda >zspan_p_odd
         eor #1
@@ -743,15 +756,10 @@ static void ZBuffer_SpanRun(void)
         adc 6
         sta 2
         cmp [8],y
-        bcs zbp_e1
+        bcs zbp_pair_left_hidden
         sta [8],y
-        sep #0x20
-        lda [12]
-        and #0x0F
-        ora 20
-        sta [12]
-        rep #0x20
-    zbp_e1:
+        /* Si les deux pixels passent Z, écrire directement l’octet complet
+         * sans lire ni modifier séparément ses deux nibbles. */
         iny
         iny
         clc
@@ -762,7 +770,33 @@ static void ZBuffer_SpanRun(void)
         adc 6
         sta 2
         cmp [8],y
-        bcs zbp_o2
+        bcs zbp_pair_left_only
+        sta [8],y
+        sep #0x20
+        lda 28
+        sta [12]
+        rep #0x20
+        bra zbp_pair_next
+    zbp_pair_left_only:
+        sep #0x20
+        lda [12]
+        and #0x0F
+        ora 20
+        sta [12]
+        rep #0x20
+        bra zbp_pair_next
+    zbp_pair_left_hidden:
+        iny
+        iny
+        clc
+        lda 0
+        adc 4
+        sta 0
+        lda 2
+        adc 6
+        sta 2
+        cmp [8],y
+        bcs zbp_pair_next
         sta [8],y
         sep #0x20
         lda [12]
@@ -770,12 +804,13 @@ static void ZBuffer_SpanRun(void)
         ora 18
         sta [12]
         rep #0x20
-    zbp_o2:
+    zbp_pair_next:
         iny
         iny
         inc 12
         dex
-        bne zbp_pair
+        beq zbp_tail
+        brl zbp_pair
 
     /* Traiter l'éventuel pixel pair résiduel après les paires. */
     zbp_tail:
