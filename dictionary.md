@@ -61,6 +61,7 @@ Les contrats ci-dessous sont reconstruits depuis les en-têtes français des dé
 | `DonyRayPairs` | Paires non orientées de permutations par rayon pendant une passe ; chaînes de hash avec clés exactes. |
 | `FaceDepthScanResult` | Résultat du noyau de métriques : profondeurs, bornes, sommes du centroïde et normale ; division et d restent en C. |
 | `RCHZoomPatch` | Sauvegarde des sommets distincts de deux faces, de leurs bbox et de l’échelle pendant un grossissement temporaire. |
+| `ZbEdgePacket` | Paquet de 50 octets : plan, profondeurs, pointeurs far et état Bresenham ; copié dans le cadre direct du noyau de contours. |
 | `ZbPlane` | Origine et gradients du code Z avec douze fractions pour le rendu plein écran direct. |
 | États graphiques | Couleurs, palette, shading, pan, jitter et culling sont partagés. Les fonctions de dessin ne préservent pas toutes le motif de crayon. |
 
@@ -203,7 +204,7 @@ Inclus par engine.c avant les moteurs Z-buffer. Sur ORCA/C, UWORD16 et unsigned 
 
 Résoudre la visibilité par pixel avec une seule ligne de profondeur réutilisée, à partir des coordonnées projetées et des métriques déjà préparées par le moteur.
 
-Le dispatch public sélectionne le moteur V3, qui prépare les codes 16 bits de profondeur inverse, les arêtes et les faces actives, puis dessine chaque span par un noyau assembleur. Le fichier fournit aussi les couleurs effectives et drawPixel.
+Le dispatch public sélectionne le moteur V3, qui prépare les codes 16 bits de profondeur inverse, les arêtes et les faces actives, puis dessine chaque span par un noyau assembleur. Le fichier fournit aussi les couleurs effectives.
 
 Inclus par engine.c ; écran SHGR 320x200, deux pixels par octet. Sans culling, la variante active emploie un biais. Les buffers statiques et paquets de spans sont non réentrants ; la mémoire Z seule ne résume pas leur consommation totale.
 
@@ -213,7 +214,7 @@ Gérer la table de profondeur plein écran et dessiner directement en SHGR les s
 
 L'allocation aligne deux banques utilisables et construit les pointeurs de lignes. Le rendu prépare sommets, plans et arêtes, remplit les spans avec arrondi intérieur, puis trace les côtés originaux par Bresenham. Une garde compare aussi la profondeur géométrique des arêtes.
 
-Inclus par engine.c et utilise zbuffer_fullscreen.h ainsi que drawPixel. Init est idempotent ; Shutdown libère les buffers propres à ce rendu. Les codes plus petits sont plus proches et $FFFF représente le vide. Les règles de contour diffèrent du rendu offscreen. Paquets assembleur partagés et non réentrants.
+Inclus par engine.c et utilise zbuffer_fullscreen.h. Son noyau de contours est autonome. Init est idempotent ; Shutdown libère les buffers propres à ce rendu. Les codes plus petits sont plus proches et $FFFF représente le vide. Les règles de contour diffèrent du rendu offscreen. Paquets assembleur partagés et non réentrants.
 
 ### zbuffer_fullscreen_offscreen.c
 
@@ -269,7 +270,6 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [drawFaceIndex](#fn-drawFaceIndex) — `engine.c` : Écrire l'identifiant d'une face au centre de sa boîte projetée.
 - [drawInstructions](#fn-drawInstructions) — `color.c` : Afficher les deux lignes de commandes du sélecteur.
 - [drawPaletteNumber](#fn-drawPaletteNumber) — `color.c` : Afficher le type de couleur modifié et le numéro de palette.
-- [drawPixel](#fn-drawPixel) — `zbuffer_scanline.c` : Écrire directement un pixel SHGR 320x200 en préservant son voisin.
 - [drawPolygons](#fn-drawPolygons) — `engine.c` : Dessiner les faces affichables dans la permutation calculée par la méthode de classement.
 - [drawPolygons_jitter](#fn-drawPolygons_jitter) — `engine.c` : Dessiner une vue avec un déplacement aléatoire temporaire de chaque sommet.
 - [drawSelectionBorder](#fn-drawSelectionBorder) — `color.c` : Dessiner ou effacer le cadre de sélection d'une case.
@@ -464,7 +464,7 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [ZBuffer_PaintSpanZ](#fn-ZBuffer_PaintSpanZ) — `zbuffer_fullscreen.c` : Préparer un span de surface évalué sur le plan Z commun de la face.
 - [ZBuffer_PlaneAt](#fn-ZBuffer_PlaneAt) — `zbuffer_fullscreen.c` : Évaluer le plan Z à un pixel écran sans encore réduire ses fractions.
 - [ZBuffer_PlaneCode](#fn-ZBuffer_PlaneCode) — `zbuffer_fullscreen.c` : Arrondir et borner un accumulateur Z à douze bits fractionnaires.
-- [ZBuffer_PlotEdge](#fn-ZBuffer_PlotEdge) — `zbuffer_fullscreen.c` : Dessiner un pixel de contour si les profondeurs de plan et d'arête le permettent.
+- [ZBuffer_EdgeRun](#fn-ZBuffer_EdgeRun) — `zbuffer_fullscreen.c` : Parcourir une arête préparée et écrire ses pixels visibles en SHGR.
 - [ZBuffer_PrepareFaces](#fn-ZBuffer_PrepareFaces) — `zbuffer_common.c` : Filtrer les faces et préparer leurs premières lignes et couleurs.
 - [ZBuffer_PrepareInvZ](#fn-ZBuffer_PrepareInvZ) — `zbuffer_common.c` : Préparer les profondeurs inverses des sommets d’une vue.
 - [ZBuffer_PrepareScanEdges](#fn-ZBuffer_PrepareScanEdges) — `zbuffer_common.c` : Préparer les arêtes quantifiées communes à scanline et offscreen.
@@ -1611,34 +1611,6 @@ Aucun.
 **Sorties et effets de bord :**
 
 texte centré avec CStringWidth sur le port actif.
-
-Appels internes directs : aucun repéré.
-
-<a id="fn-drawPixel"></a>
-
-### drawPixel
-
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 122.
-
-```c
-void drawPixel(int x, int y, int color)
-```
-
-**Rôle :**
-
-Écrire directement un pixel SHGR 320x200 en préservant son voisin.
-
-**Paramètres :**
-
-[entrée] x dans [0,319], y dans [0,199], color masqué sur quatre bits.
-
-**Retour :**
-
-Aucun.
-
-**Fonctionnement :**
-
-Aucun clipping ni test Z. Adresse $E12000+y*160+x/2. L'assembleur passe A en 8 bits, laisse X sur 16 bits et termine A sur 16 bits. A/X et indicateurs modifiés ; DBR ignoré par l'adressage long. Pixel pair dans le nibble haut, impair dans le nibble bas.
 
 Appels internes directs : aucun repéré.
 
@@ -6000,7 +5972,7 @@ Appels internes directs : aucun repéré.
 
 ### renderModelFullscreenZBuffer
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1222.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1561.
 
 ```c
 void renderModelFullscreenZBuffer(Model3D* model)
@@ -6028,7 +6000,7 @@ Appels internes directs : [renderModelFullscreenZBuffer_biasedV2](arbre_appels.h
 
 ### renderModelFullscreenZBuffer_biasedV2
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1195.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1534.
 
 ```c
 void renderModelFullscreenZBuffer_biasedV2(Model3D* model)
@@ -6056,7 +6028,7 @@ Appels internes directs : [ZBuffer_RenderCore](arbre_appels.html#fn-ZBuffer_Rend
 
 ### renderModelFullscreenZBuffer_fastV2
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1169.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1508.
 
 ```c
 void renderModelFullscreenZBuffer_fastV2(Model3D* model)
@@ -6168,7 +6140,7 @@ Appels internes directs : [Off_RenderCore](arbre_appels.html#fn-Off_RenderCore).
 
 ### renderModelScanlineZBuffer
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 609.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 532.
 
 ```c
 void renderModelScanlineZBuffer(Model3D* model)
@@ -6196,7 +6168,7 @@ Appels internes directs : [renderModelScanlineZBuffer_biasedV3](arbre_appels.htm
 
 ### renderModelScanlineZBuffer_biasedV3
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 583.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 506.
 
 ```c
 void renderModelScanlineZBuffer_biasedV3(Model3D* model)
@@ -6224,7 +6196,7 @@ Appels internes directs : [renderModelScanlineZBuffer_coreV3](arbre_appels.html#
 
 ### renderModelScanlineZBuffer_coreV3
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 366.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 289.
 
 ```c
 static void renderModelScanlineZBuffer_coreV3(Model3D* model, int biased)
@@ -6260,7 +6232,7 @@ Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [sc
 
 ### renderModelScanlineZBuffer_fastV3
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 556.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 479.
 
 ```c
 void renderModelScanlineZBuffer_fastV3(Model3D* model)
@@ -6956,7 +6928,7 @@ Appels internes directs : aucun repéré.
 
 ### SL_ClearLine
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 210.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 133.
 
 ```c
 static void SL_ClearLine(void)
@@ -6988,7 +6960,7 @@ Appels internes directs : aucun repéré.
 
 ### SL_PaintSpan
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 292.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 215.
 
 ```c
 static void SL_PaintSpan(int x0, int x1, int screenY, SLZWord z0, SLZWord z1, int fillColor, int frameColor, int nudge)
@@ -7016,7 +6988,7 @@ Appels internes directs : [ZBuffer_SpanRun](arbre_appels.html#fn-ZBuffer_SpanRun
 
 ### SL_SetScale
 
-Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 254.
+Définition : [zbuffer_scanline.c](zbuffer_scanline.c), ligne 177.
 
 ```c
 static void SL_SetScale(float max_inv_z)
@@ -7168,7 +7140,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBFS_FreeEdges
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 468.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 471.
 
 ```c
 static void ZBFS_FreeEdges(void)
@@ -7196,7 +7168,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBFS_FreeFaces
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 414.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 417.
 
 ```c
 static void ZBFS_FreeFaces(void)
@@ -7224,7 +7196,7 @@ Appels internes directs : [ZBuffer_FreeFaces](arbre_appels.html#fn-ZBuffer_FreeF
 
 ### ZBFS_FreeScratch
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 497.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 500.
 
 ```c
 static void ZBFS_FreeScratch(void)
@@ -7252,7 +7224,7 @@ Appels internes directs : [ZBFS_FreeEdges](arbre_appels.html#fn-ZBFS_FreeEdges),
 
 ### ZBFS_FreeVertices
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 442.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 445.
 
 ```c
 static void ZBFS_FreeVertices(void)
@@ -7340,7 +7312,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_DrawEdge
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 788.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1094.
 
 ```c
 static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0, int x1, int y1, UWORD16 edge_z1, int color, ZbPlane *plane)
@@ -7360,9 +7332,9 @@ Aucun.
 
 **Fonctionnement :**
 
-Trie les extrémités selon l'axe majeur, clippe son parcours et avance à la fois le plan Z et la profondeur d'arête. Dessine via ZBuffer_PlotEdge ; pas d'allocation. Les règles de tie de Bresenham peuvent différer de FramePoly et du remplissage demi-ouvert.
+Trie les extrémités selon l'axe majeur, clippe son parcours et avance à la fois le plan Z et la profondeur d'arête. Prépare un paquet par côté pour ZBuffer_EdgeRun ; aucun appel C par pixel ni allocation. Les règles de tie de Bresenham peuvent différer de FramePoly et du remplissage demi-ouvert.
 
-Appels internes directs : [ZBuffer_PlaneAt](arbre_appels.html#fn-ZBuffer_PlaneAt), [ZBuffer_PlaneCode](arbre_appels.html#fn-ZBuffer_PlaneCode), [ZBuffer_PlotEdge](arbre_appels.html#fn-ZBuffer_PlotEdge).
+Appels internes directs : [ZBuffer_EdgeRun](arbre_appels.html#fn-ZBuffer_EdgeRun), [ZBuffer_PlaneAt](arbre_appels.html#fn-ZBuffer_PlaneAt).
 
 <a id="fn-ZBuffer_FreeFaces"></a>
 
@@ -7484,7 +7456,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PaintSpanZ
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 656.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 670.
 
 ```c
 static void ZBuffer_PaintSpanZ(int x0, int x1, int screenY, int fillColor, ZbPlane *plane)
@@ -7512,7 +7484,7 @@ Appels internes directs : [ZBuffer_PlaneAt](arbre_appels.html#fn-ZBuffer_PlaneAt
 
 ### ZBuffer_PlaneAt
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 595.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 609.
 
 ```c
 static unsigned long ZBuffer_PlaneAt(ZbPlane *p, long x, long y)
@@ -7540,7 +7512,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_PlaneCode
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 625.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 639.
 
 ```c
 static UWORD16 ZBuffer_PlaneCode(unsigned long z)
@@ -7564,33 +7536,37 @@ Aucun effet de bord.
 
 Appels internes directs : aucun repéré.
 
-<a id="fn-ZBuffer_PlotEdge"></a>
+<a id="fn-ZBuffer_EdgeRun"></a>
 
-### ZBuffer_PlotEdge
+### ZBuffer_EdgeRun
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 743.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 776.
 
 ```c
-static void ZBuffer_PlotEdge(int x, int y, UWORD16 zq, UWORD16 edge_zq, int color)
+static void ZBuffer_EdgeRun(void)
 ```
 
 **Rôle :**
 
-Dessiner un pixel de contour si les profondeurs de plan et d'arête le permettent.
+Parcourir une arête préparée et écrire ses pixels visibles en SHGR.
 
 **Paramètres :**
 
-[entrée] x/y écran, zq du plan, edge_zq interpolé sur l'arête et color.
+Aucun paramètre explicite ; lit zbfs_edge_packet, préparé par DrawEdge.
 
 **Retour :**
 
-Aucun.
+Aucun ; met à jour les profondeurs et les nibbles des pixels acceptés.
 
 **Fonctionnement :**
 
-Rejette hors écran et code vide ; permet l'égalité avec le Z stocké. Si le plan est plus proche qu'une surface existante, exige aussi que l'arête géométrique ne soit pas derrière cette surface. Met Z à jour seulement pour un code strictement plus petit, puis écrit le pixel.
+Copie le paquet de 50 octets dans un cadre direct de 52 octets, puis avance Bresenham, les profondeurs et les pointeurs sans appel C par pixel. Les profondeurs égales restent dessinables ; un contour strictement plus proche doit aussi passer le test de profondeur géométrique de l'arête. Vérifie les coordonnées avant tout accès mémoire. Les sommes de restes propagent la retenue pour les arêtes dont l'axe majeur dépasse 32767.
 
-Appels internes directs : [drawPixel](arbre_appels.html#fn-drawPixel).
+**Registres et contraintes :**
+
+Préserve P et D ; DBR inchangé, A/X/Y volatils. Accumulateur 16 bits sauf pendant l'écriture du nibble. Offsets 0..49 : paquet ; 50 : code Z local. Pointeurs far avancés sur 32 bits pour franchir les banques du Z-buffer. Appel synchrone et non réentrant ; count positif, major/minor <= 65535.
+
+Appels internes directs : aucun repéré.
 
 <a id="fn-ZBuffer_PrepareFaces"></a>
 
@@ -7740,7 +7716,7 @@ Appels internes directs : [ZBuffer_QuantizeAtScale](arbre_appels.html#fn-ZBuffer
 
 ### ZBuffer_RenderCore
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 897.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 1230.
 
 ```c
 static void ZBuffer_RenderCore(Model3D* model, int biased)
@@ -7832,7 +7808,7 @@ Appels internes directs : [ZBuffer_FreeVertices](arbre_appels.html#fn-ZBuffer_Fr
 
 ### ZBuffer_SetEdgeFlags
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 713.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 727.
 
 ```c
 void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count)
@@ -7860,7 +7836,7 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_SetPlane
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 534.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 540.
 
 ```c
 static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge, float code_bias)

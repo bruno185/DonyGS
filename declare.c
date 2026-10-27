@@ -726,7 +726,6 @@ int getFaceFillColor(int face_id);
 int getFaceFrameColor(int face_id, int fill_color);
 
 void renderModelScanlineZBuffer(Model3D* model);
-void drawPixel(int x, int y, int color);
 
 void DoColor(void);
 void DoText(void);

@@ -16,8 +16,8 @@
  *    Une garde compare aussi la profondeur géométrique des arêtes.
  *
  *  Dépendances et contraintes :
- *    Inclus par engine.c et utilise zbuffer_fullscreen.h ainsi que
- *    drawPixel. Init est idempotent ; Shutdown libère les buffers propres à
+ *    Inclus par engine.c et utilise zbuffer_fullscreen.h. Le noyau de contours
+ *    est autonome. Init est idempotent ; Shutdown libère les buffers propres à
  *    ce rendu. Les codes plus petits sont plus proches et $FFFF représente
  *    le vide. Les règles de contour diffèrent du rendu offscreen. Paquets
  *    assembleur partagés et non réentrants.
@@ -731,48 +731,339 @@ void ZBuffer_SetEdgeFlags(const unsigned char *flags, unsigned long count)
     zb_edge_flag_count = count;
 }
 
+/* Paquet non réentrant copié en page directe : cinq valeurs 32 bits puis
+ * quinze mots 16 bits. Les offsets du noyau suivent exactement cet ordre.
+ */
+typedef struct {
+    unsigned long raw, zmajor, zminor, zptr, pptr;
+    unsigned int x, y, major, minor, rem, ez, ezstep, epart, erem, esign;
+    unsigned int count, steep, vstep, color_lo, color_hi;
+} ZbEdgePacket;
+/* Le cadre assembleur exige exactement les offsets documentés ci-dessous. */
+typedef char ZbEdgePacketSizeCheck[(sizeof(ZbEdgePacket) == 50) ? 1 : -1];
+static ZbEdgePacket zbfs_edge_packet;
+
 /*
  * ----------------------------------------------------------------------------
- *  ZBuffer_PlotEdge
+ *  ZBuffer_EdgeRun
  * ----------------------------------------------------------------------------
  *
  *  Rôle :
- *    Dessiner un pixel de contour si les profondeurs de plan et d'arête le
- *    permettent.
+ *    Parcourir une arête préparée et écrire ses pixels visibles en SHGR.
  *
  *  Paramètres :
- *    [entrée] x/y écran, zq du plan, edge_zq interpolé sur l'arête et color.
+ *    Aucun paramètre explicite ; lit zbfs_edge_packet, préparé par DrawEdge.
  *
  *  Retour :
- *    Aucun.
+ *    Aucun ; met à jour les profondeurs et les nibbles des pixels acceptés.
  *
  *  Fonctionnement :
- *    Rejette hors écran et code vide ; permet l'égalité avec le Z stocké. Si
- *    le plan est plus proche qu'une surface existante, exige aussi que
- *    l'arête géométrique ne soit pas derrière cette surface. Met Z à jour
- *    seulement pour un code strictement plus petit, puis écrit le pixel.
+ *    Copie le paquet de 50 octets dans un cadre direct de 52 octets, puis
+ *    avance Bresenham, les profondeurs et les pointeurs sans appel C par pixel.
+ *    Les profondeurs égales restent dessinables ; un contour strictement plus
+ *    proche doit aussi passer le test de profondeur géométrique de l'arête.
+ *    Vérifie les coordonnées avant tout accès mémoire. Les sommes de restes
+ *    propagent la retenue pour les arêtes dont l'axe majeur dépasse 32767.
+ *
+ *  Registres et contraintes :
+ *    Préserve P et D ; DBR inchangé, A/X/Y volatils. Accumulateur 16 bits sauf
+ *    pendant l'écriture du nibble. Offsets 0..49 : paquet ; 50 : code Z local.
+ *    Pointeurs far avancés sur 32 bits pour franchir les banques du Z-buffer.
+ *    Appel synchrone et non réentrant ; count positif, major/minor <= 65535.
  *
  * ----------------------------------------------------------------------------
  */
-static void ZBuffer_PlotEdge(int x, int y, UWORD16 zq,
-                              UWORD16 edge_zq, int color)
+static void ZBuffer_EdgeRun(void)
 {
-    FarWordPtr row;
-    UWORD16 cur;
-    /* Contrôler les limites et la valeur vide avant de lire le Z-buffer. */
-    if ((unsigned)x >= (unsigned)ZBUF_WIDTH ||
-        (unsigned)y >= (unsigned)ZBUF_HEIGHT || zq == ZBUF_FAR_VALUE)
-        return;
-    row = zbuf_row[y];
-    cur = row[x];
-    if (zq > cur) return;
+    asm {
+        /* Sauver le contexte, réserver le cadre puis recopier le paquet. */
+        php
+        phd
+        rep #0x30
+        tsc
+        sec
+        sbc #52
+        tcs
+        inc a
+        tcd
+        ldx #48
+    zer_copy:
+        lda >zbfs_edge_packet,x
+        sta 0,x
+        dex
+        dex
+        bpl zer_copy
 
-    /* Éviter de faire passer un contour arrière au travers d'une surface à
-     * cause du seul échantillon de plan.
-     */
-    if (cur != ZBUF_FAR_VALUE && zq < cur && edge_zq > cur) return;
-    if (zq < cur) row[x] = zq;
-    drawPixel(x, y, color);
+    zer_pixel:
+        /* Les pointeurs peuvent être hors viewport ; ne jamais les lire
+         * avant les tests non signés des deux coordonnées.
+         */
+        lda 20
+        cmp #320
+        bcc zer_check_y
+        brl zer_next
+    zer_check_y:
+        lda 22
+        cmp #200
+        bcc zer_code
+        brl zer_next
+    zer_code:
+        /* Arrondir raw modulo 2^32, saturer et extraire ses seize bits utiles. */
+        clc
+        lda 0
+        adc #0x0800
+        tax
+        lda 2
+        adc #0
+        bmi zer_zero
+        cmp #0x1000
+        bcc zer_extract
+        brl zer_next
+    zer_extract:
+        asl a
+        asl a
+        asl a
+        asl a
+        sta 50
+        txa
+        xba
+        and #0x00FF
+        lsr a
+        lsr a
+        lsr a
+        lsr a
+        ora 50
+        cmp #0xFFFF
+        bne zer_depth
+        brl zer_next
+    zer_zero:
+        lda #0
+    zer_depth:
+        sta 50
+        ldy #0
+        cmp [12],y
+        bcc zer_closer
+        beq zer_color
+        brl zer_next
+    zer_closer:
+        /* Le plan seul ne doit pas faire ressortir une arête située derrière. */
+        lda [12],y
+        cmp #0xFFFF
+        beq zer_store
+        cmp 30
+        bcs zer_store
+        brl zer_next
+    zer_store:
+        lda 50
+        sta [12],y
+    zer_color:
+        /* Modifier uniquement le nibble correspondant à la parité de x. */
+        lda 20
+        and #1
+        bne zer_odd
+        sep #0x20
+        lda [16]
+        and #0x0F
+        ora 48
+        sta [16]
+        rep #0x20
+        bra zer_next
+    zer_odd:
+        sep #0x20
+        lda [16]
+        and #0xF0
+        ora 46
+        sta [16]
+        rep #0x20
+
+    zer_next:
+        dec 40
+        bne zer_advance
+        brl zer_done
+    zer_advance:
+        /* Avancer le plan Z sur l'axe majeur et la profondeur d'arête. */
+        clc
+        lda 0
+        adc 4
+        sta 0
+        lda 2
+        adc 6
+        sta 2
+        clc
+        lda 30
+        adc 32
+        sta 30
+        clc
+        lda 36
+        adc 34
+        bcs zer_er_sub
+        cmp 24
+        bcc zer_er_save
+    zer_er_sub:
+        sec
+        sbc 24
+        sta 36
+        clc
+        lda 30
+        adc 38
+        sta 30
+        bra zer_major
+    zer_er_save:
+        sta 36
+
+    zer_major:
+        /* L'axe majeur avance toujours de +1 ; propager les retenues des
+         * pointeurs sans dépendre de la banque courante du processeur.
+         */
+        lda 42
+        beq zer_major_x
+        inc 22
+        clc
+        lda 12
+        adc #640
+        sta 12
+        lda 14
+        adc #0
+        sta 14
+        clc
+        lda 16
+        adc #160
+        sta 16
+        lda 18
+        adc #0
+        sta 18
+        bra zer_remainder
+    zer_major_x:
+        inc 20
+        clc
+        lda 12
+        adc #2
+        sta 12
+        lda 14
+        adc #0
+        sta 14
+        lda 20
+        and #1
+        bne zer_remainder
+        inc 16
+        bne zer_remainder
+        inc 18
+
+    zer_remainder:
+        /* Les restes sont non signés : un débordement 16 bits implique lui
+         * aussi le franchissement du seuil major.
+         */
+        clc
+        lda 28
+        adc 26
+        bcs zer_minor_sub
+        cmp 24
+        bcs zer_minor_sub
+        sta 28
+        brl zer_pixel
+    zer_minor_sub:
+        sec
+        sbc 24
+        sta 28
+        clc
+        lda 0
+        adc 8
+        sta 0
+        lda 2
+        adc 10
+        sta 2
+        lda 42
+        beq zer_minor_y
+        /* L'axe mineur est x : un octet écran pour deux pas horizontaux. */
+        clc
+        lda 20
+        adc 44
+        sta 20
+        lda 44
+        bmi zer_minor_x_neg
+        clc
+        lda 12
+        adc #2
+        sta 12
+        lda 14
+        adc #0
+        sta 14
+        lda 20
+        and #1
+        bne zer_xpos_done
+        inc 16
+        bne zer_xpos_done
+        inc 18
+    zer_xpos_done:
+        brl zer_pixel
+    zer_minor_x_neg:
+        sec
+        lda 12
+        sbc #2
+        sta 12
+        lda 14
+        sbc #0
+        sta 14
+        lda 20
+        and #1
+        beq zer_xneg_done
+        lda 16
+        bne zer_xneg_low
+        dec 18
+    zer_xneg_low:
+        dec 16
+    zer_xneg_done:
+        brl zer_pixel
+
+    zer_minor_y:
+        /* L'axe mineur est y : déplacer les deux pointeurs d'une ligne. */
+        clc
+        lda 22
+        adc 44
+        sta 22
+        lda 44
+        bmi zer_minor_y_neg
+        clc
+        lda 12
+        adc #640
+        sta 12
+        lda 14
+        adc #0
+        sta 14
+        clc
+        lda 16
+        adc #160
+        sta 16
+        lda 18
+        adc #0
+        sta 18
+        brl zer_pixel
+    zer_minor_y_neg:
+        sec
+        lda 12
+        sbc #640
+        sta 12
+        lda 14
+        sbc #0
+        sta 14
+        sec
+        lda 16
+        sbc #160
+        sta 16
+        lda 18
+        sbc #0
+        sta 18
+        brl zer_pixel
+
+    zer_done:
+        /* Libérer exactement le cadre avant de restaurer D et P. */
+        tsc
+        clc
+        adc #52
+        tcs
+        pld
+        plp
+    }
 }
 
 /*
@@ -793,8 +1084,9 @@ static void ZBuffer_PlotEdge(int x, int y, UWORD16 zq,
  *
  *  Fonctionnement :
  *    Trie les extrémités selon l'axe majeur, clippe son parcours et avance à
- *    la fois le plan Z et la profondeur d'arête. Dessine via
- *    ZBuffer_PlotEdge ; pas d'allocation. Les règles de tie de Bresenham
+ *    la fois le plan Z et la profondeur d'arête. Prépare un paquet par côté
+ *    pour ZBuffer_EdgeRun ; aucun appel C par pixel ni allocation. Les règles
+ *    de tie de Bresenham
  *    peuvent différer de FramePoly et du remplissage demi-ouvert.
  *
  * ----------------------------------------------------------------------------
@@ -803,10 +1095,11 @@ static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0,
                              int x1, int y1, UWORD16 edge_z1,
                              int color, ZbPlane *plane)
 {
-    long dx, dy, major, minor, first, last, i;
+    long dx, dy, major, minor, first, last;
     long u0, v0, v, ulimit, vstep, rem;
     unsigned long numerator, raw, zmajor, zminor, magnitude;
     long ez, erem, ewhole, epart, esign, delta;
+    int start_x, start_y;
     UWORD16 ztmp;
     int steep, tmp;
     /* Choisir l'axe majeur et normaliser le sens de parcours en échangeant
@@ -832,10 +1125,15 @@ static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0,
     ulimit = steep ? ZBUF_HEIGHT - 1L : ZBUF_WIDTH - 1L;
     vstep = ((steep ? x1 : y1) < v0) ? -1L : 1L;
     if (major == 0L) {
-        ZBuffer_PlotEdge(x0, y0,
-                         ZBuffer_PlaneCode(ZBuffer_PlaneAt(plane, x0, y0)),
-                         (edge_z0 < edge_z1) ? edge_z0 : edge_z1, color);
-        return;
+        /* Un point unique emprunte le même noyau ; aucun incrément ne sera lu. */
+        first = last = 0L;
+        v = v0;
+        raw = ZBuffer_PlaneAt(plane, x0, y0);
+        ez = (edge_z0 < edge_z1) ? edge_z0 : edge_z1;
+        zmajor = zminor = 0UL;
+        rem = erem = ewhole = epart = 0L;
+        esign = 1L;
+        goto prepare_packet;
     }
     first = (u0 < 0L) ? -u0 : 0L;
     last = major;
@@ -859,18 +1157,39 @@ static void ZBuffer_DrawEdge(int x0, int y0, UWORD16 edge_z0,
     numerator = (unsigned long)first * magnitude + (unsigned long)(major / 2L);
     ez = (long)edge_z0 + esign * (long)(numerator / (unsigned long)major);
     erem = (long)(numerator % (unsigned long)major);
-    for (i = first; i <= last; i++) {
-        if (steep)
-            ZBuffer_PlotEdge((int)v, (int)(u0 + i), ZBuffer_PlaneCode(raw), (UWORD16)ez, color);
-        else
-            ZBuffer_PlotEdge((int)(u0 + i), (int)v, ZBuffer_PlaneCode(raw), (UWORD16)ez, color);
-        ez += esign * ewhole;
-        erem += epart;
-        if (erem >= major) { erem -= major; ez += esign; }
-        raw += zmajor;
-        rem += minor;
-        if (rem >= major) { rem -= major; v += vstep; raw += zminor; }
-    }
+prepare_packet:
+    /* Les extrémités sont des int 16 bits ; major/minor/restes tiennent donc
+     * dans un mot non signé. Le parcours visible compte au plus 320 pixels.
+     * Même hors viewport, construire les adresses par arithmétique sans lire
+     * de ligne invalide ; le noyau filtre les coordonnées avant tout accès.
+     */
+    start_x = steep ? (int)v : (int)(u0 + first);
+    start_y = steep ? (int)(u0 + first) : (int)v;
+    zbfs_edge_packet.raw = raw;
+    zbfs_edge_packet.zmajor = zmajor;
+    zbfs_edge_packet.zminor = zminor;
+    zbfs_edge_packet.zptr = (unsigned long)zbuf_row[0] +
+                           (unsigned long)((long)start_y * ZBUF_ROW_BYTES +
+                                           (long)start_x * 2L);
+    zbfs_edge_packet.pptr = ZB_SHGR_BASE +
+                           (unsigned long)((long)start_y * 160L +
+                                           ((long)start_x >> 1));
+    zbfs_edge_packet.x = (unsigned int)start_x;
+    zbfs_edge_packet.y = (unsigned int)start_y;
+    zbfs_edge_packet.major = (unsigned int)major;
+    zbfs_edge_packet.minor = (unsigned int)minor;
+    zbfs_edge_packet.rem = (unsigned int)rem;
+    zbfs_edge_packet.ez = (unsigned int)ez;
+    zbfs_edge_packet.ezstep = (unsigned int)(esign * ewhole);
+    zbfs_edge_packet.epart = (unsigned int)epart;
+    zbfs_edge_packet.erem = (unsigned int)erem;
+    zbfs_edge_packet.esign = (unsigned int)esign;
+    zbfs_edge_packet.count = (unsigned int)(last - first + 1L);
+    zbfs_edge_packet.steep = (unsigned int)steep;
+    zbfs_edge_packet.vstep = (unsigned int)vstep;
+    zbfs_edge_packet.color_lo = color & 15;
+    zbfs_edge_packet.color_hi = (color & 15) << 4;
+    ZBuffer_EdgeRun();
 }
 
 /*

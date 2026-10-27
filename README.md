@@ -149,7 +149,7 @@ This image couldn't have been generated with painters as they are implemented he
 - Rasterizes polygons scanline by scanline and uses even-odd span pairing, so concave faces are handled without special-casing
 - Uses a **single 320-entry 16-bit depth buffer**, reused for every scanline (about 640 bytes of depth-buffer storage)
 - Reciprocal depth (`1/z`) is prepared and quantized to a 16-bit depth representation; the hot span loop avoids per-pixel floating-point operations
-- Edge/span interpolation and the Z-test are optimized for the 65C816; span rendering performs depth testing, Z-buffer updates and direct SHGR pixel writes without calling `drawPixel()` once per visible pixel
+- Edge/span interpolation and the Z-test are optimized for the 65C816; span rendering performs depth testing, Z-buffer updates and direct SHGR pixel writes without a C call for each visible pixel
 - Prepared vertices/faces, reciprocal-depth quantization, and scanline/offscreen edge helpers are shared where their contracts match
 - Face fill and border colors follow the same user settings as the painter renderer (default/manual colors, orientation shading and random colors)
 - Back-face culling is honored; when culling is disabled, the renderer uses the corresponding biased path to reduce coplanar Z-fighting
@@ -164,6 +164,7 @@ This image couldn't have been generated with painters as they are implemented he
 - **`U`**: clears the offscreen framebuffer, calls `renderModelFullscreenZBuffer_offscreen(model)`, then copies the completed image to SHGR with `Offscreen_FlushToScreen()`
 - **`Open-Apple + U`**: calls `renderModelFullscreenZBuffer(model)` and renders directly to the SHGR screen instead of using the offscreen framebuffer
 - Direct rendering derives reciprocal-depth gradients from the existing observer-space Newell plane, rather than fitting quantized depths to rounded screen vertices. This avoids unstable depth slopes on thin projected faces; surfaces and outlines use the same plane. Common coefficient scaling cancels in the plane ratios; projection reciprocals and depth bias are prepared once per frame, leaving one floating-point division per face
+- Direct-renderer outlines use `ZBuffer_EdgeRun`, a 65C816 kernel that advances Bresenham, depth values, and far pixel/depth pointers without per-pixel C calls. The original clipping, depth-equality, and geometric edge-visibility rules are retained
 - **Memory**: the full depth buffer requires 128,000 bytes; offscreen output adds a 32,000-byte pixel buffer, in addition to preparation and scratch storage. Rendering speed must be measured on the target machine
 - All three renderers use `ZBuffer_SpanRun` in `zbuffer_common.c` for the depth test and packed-pixel output. Preparation, storage, edge handling, and output destination still differ; equal-depth fragments do not replace the existing pixel
 

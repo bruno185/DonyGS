@@ -13,7 +13,7 @@
  *    16 bits de
  *    profondeur inverse, les arêtes et les faces actives, puis dessine
  *    chaque span par un noyau assembleur. Le fichier fournit aussi les
- *    couleurs effectives et drawPixel.
+ *    couleurs effectives.
  *
  *  Dépendances et contraintes :
  *    Inclus par engine.c ; écran SHGR 320x200, deux pixels par octet.
@@ -95,83 +95,6 @@ int getFaceFrameColor(int face_id, int fill_color) {
         frame_color = COL_FRAME;
     }
     return frame_color;
-}
-
-/*
- * ----------------------------------------------------------------------------
- *  drawPixel
- * ----------------------------------------------------------------------------
- *
- *  Rôle :
- *    Écrire directement un pixel SHGR 320x200 en préservant son voisin.
- *
- *  Paramètres :
- *    [entrée] x dans [0,319], y dans [0,199], color masqué sur quatre bits.
- *
- *  Retour :
- *    Aucun.
- *
- *  Fonctionnement :
- *    Aucun clipping ni test Z. Adresse $E12000+y*160+x/2. L'assembleur passe
- *    A en 8 bits, laisse X sur 16 bits et termine A sur 16 bits. A/X et
- *    indicateurs modifiés ; DBR ignoré par l'adressage long. Pixel pair dans
- *    le nibble haut, impair dans le nibble bas.
- *
- * ----------------------------------------------------------------------------
- */
-void drawPixel(int x, int y, int color)
-{
-    int offset;
-    unsigned char value;
-
-    color &= 0x0F;
-
-    /* Calculer l'offset d'octet dans la banque SHGR. */
-    offset = y * 160 + (x >> 1);
-
-    asm {
-        /* Lire l'octet en mode A 8 bits et sauver sa valeur avant le choix de parité. */
-        sep     #0x20
-
-        ldx     offset
-        lda     0xE12000,x
-
-        pha
-
-        lda     x
-        and     #0x01
-        bne     pixel_odd
-
-        pla
-        and     #0x0F
-        sta     value
-
-        lda     color
-        asl     a
-        asl     a
-        asl     a
-        asl     a
-        and     #0xF0
-        ora     value
-        sta     0xE12000,x
-        bra     done
-
-/* Modifier uniquement le nibble bas pour x impair. */
-pixel_odd:
-
-        pla
-        and     #0xF0
-        sta     value
-
-        lda     color
-        and     #0x0F
-        ora     value
-        sta     0xE12000,x
-
-/* Revenir au format d'accumulateur 16 bits attendu par le C. */
-done:
-        rep     #0x20
-    }
 }
 
 typedef UWORD16 SLZWord;
