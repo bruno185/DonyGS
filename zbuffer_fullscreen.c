@@ -383,6 +383,9 @@ typedef struct {
     UWORD16 z;
 } ZbPlane;
 
+/* Inverse de projection commun à tous les plans de la vue courante. */
+static float zbfs_inv_projection = 0.0f;
+
 static ZBufferVertexWork zbfs_vertices;
 
 static ZBufferFaceWork zbfs_faces;
@@ -515,62 +518,73 @@ static void ZBFS_FreeScratch(void)
  *    Préparer un plan affine de codes Z dans le repère écran.
  *
  *  Paramètres :
- *    [entrée] vtx/faces, f valide non vide, zsrc par sommet, nudge en codes
+ *    [entrée] vtx/faces : coordonnées et plans observateur à jour ; f valide.
+ *    [entrée] zsrc : codes des sommets pour le repli dégénéré ; nudge en codes.
+ *    [entrée] code_bias : biais déjà converti en codes, nul sans rapprochement.
  *
  *  Retour :
- *    Aucun.
- *
- *  Sorties et effets de bord :
- *    *p
+ *    Aucun ; écrit le plan *p, avec pan et gradients à douze bits fractionnaires.
  *
  *  Fonctionnement :
- *    Coordonnées avec pan et gradients à douze bits fractionnaires. Cherche
- *    un triangle projeté non dégénéré pour calculer gx/gy. Si aucun ne
- *    convient, garde la profondeur constante du premier sommet. Hypothèse :
- *    face plane ; les codes quantifiés des autres sommets peuvent ne pas
- *    appartenir exactement au même plan après arrondi.
+ *    Réutilise le plan de Newell calculé par calculateFaceDepths. Pour le rayon
+ *    écran (u,v,1), 1/z = -(a*u+b*v+c)/d ; cette fonction est affine avant
+ *    quantification. Les coordonnées arrondies des sommets servent uniquement
+ *    à choisir l'ancrage, jamais à reconstruire les gradients. Un plan nul ou
+ *    passant par l'observateur conserve la profondeur constante de repli.
+ *    Les quatre coefficients ont la même échelle : elle se simplifie dans
+ *    leurs rapports. Évite donc les conversions intermédiaires en double et
+ *    les divisions par 65536 ; l'inverse de projection est préparé par vue.
  *
  * ----------------------------------------------------------------------------
  */
 static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx,
                              FaceArrays3D *faces, int f, UWORD16 *zsrc,
-                             int nudge)
+                             int nudge, float code_bias)
 {
-    int n, off, a, b, c, k;
-    float ax, ay, az, bx, by, bz, det, gx, gy;
+    int off, vertex;
+    float a, b, c, d, factor, gradient_factor, gx, gy, code;
     off = faces->vertex_indices_ptr[f];
-    n = faces->vertex_count[f];
-    a = faces->vertex_indices_buffer[off] - 1;
-    /* Ancrer le plan sur le premier sommet avec la même réduction de biais
-     * que le remplissage.
+    vertex = faces->vertex_indices_buffer[off] - 1;
+    /* Préparer un repli constant pour les plans dégénérés, avec le même biais
+     * que les codes des sommets.
      */
-    p->x = (long)vtx->x2d[a] + (long)pan_dx;
-    p->y = (long)vtx->y2d[a] + (long)pan_dy;
-    p->z = (zsrc[a] > (UWORD16)nudge) ? (UWORD16)(zsrc[a] - nudge) : 0;
+    p->x = (long)vtx->x2d[vertex] + (long)pan_dx;
+    p->y = (long)vtx->y2d[vertex] + (long)pan_dy;
+    p->z = (zsrc[vertex] > (UWORD16)nudge) ?
+           (UWORD16)(zsrc[vertex] - nudge) : 0;
     p->gx = p->gy = 0L;
-    /* Chercher un déterminant non nul et calculer les gradients d'écran. */
-    for (k = 1; k + 1 < n; k++) {
-        b = faces->vertex_indices_buffer[off + k] - 1;
-        c = faces->vertex_indices_buffer[off + k + 1] - 1;
-        ax = (float)vtx->x2d[b] - (float)vtx->x2d[a];
-        ay = (float)vtx->y2d[b] - (float)vtx->y2d[a];
-        az = (float)zsrc[b] - (float)zsrc[a];
-        bx = (float)vtx->x2d[c] - (float)vtx->x2d[a];
-        by = (float)vtx->y2d[c] - (float)vtx->y2d[a];
-        bz = (float)zsrc[c] - (float)zsrc[a];
-        det = ax * by - ay * bx;
-        if (det == 0.0f) continue;
-        gx = ((az * by - ay * bz) / det) * 4096.0f;
-        gy = ((ax * bz - az * bx) / det) * 4096.0f;
+    d = (float)faces->plane_d[f];
+    if (d == 0.0f || zbfs_inv_projection <= 0.0f) return;
 
-        if (gx > 2147483000.0f) gx = 2147483000.0f;
-        if (gx < -2147483000.0f) gx = -2147483000.0f;
-        if (gy > 2147483000.0f) gy = 2147483000.0f;
-        if (gy < -2147483000.0f) gy = -2147483000.0f;
-        p->gx = (long)((gx < 0.0f) ? gx - 0.5f : gx + 0.5f);
-        p->gy = (long)((gy < 0.0f) ? gy - 0.5f : gy + 0.5f);
-        return;
-    }
+    /* Convertir le plan observateur en gradients de codes, sans ajustement
+     * sur un triangle projeté : un triangle presque aligné après arrondi peut
+     * donner une pente erronée pour toute la surface.
+     */
+    a = (float)faces->plane_a[f];
+    b = (float)faces->plane_b[f];
+    c = (float)faces->plane_c[f];
+    factor = zbuffer_scale / d;
+    gradient_factor = factor * zbfs_inv_projection;
+    gx = gradient_factor * a;
+    gy = -gradient_factor * b;
+    code = 65535.0f + factor * c +
+           gx * ((float)vtx->x2d[vertex] - (float)CENTRE_X) +
+           gy * ((float)vtx->y2d[vertex] - (float)CENTRE_Y) -
+           code_bias - (float)nudge;
+    /* Quantifier l'ancrage et les gradients seulement après le calcul du plan.
+     * Le pan déplace l'ancrage sans changer les profondeurs de la vue.
+     */
+    if (code < 0.0f) code = 0.0f;
+    if (code > 65535.0f) code = 65535.0f;
+    p->z = (UWORD16)(code + 0.5f);
+    gx *= 4096.0f;
+    gy *= 4096.0f;
+    if (gx > 2147483000.0f) gx = 2147483000.0f;
+    if (gx < -2147483000.0f) gx = -2147483000.0f;
+    if (gy > 2147483000.0f) gy = 2147483000.0f;
+    if (gy < -2147483000.0f) gy = -2147483000.0f;
+    p->gx = (long)((gx < 0.0f) ? gx - 0.5f : gx + 0.5f);
+    p->gy = (long)((gy < 0.0f) ? gy - 0.5f : gy + 0.5f);
 }
 
 /*
@@ -903,7 +917,7 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
     int y, f, i, k, ai, keep, active_count;
     int total_edges, end;
     int clip_x_min, clip_x_max, y_lo, y_hi;
-    float frame_max_inv_z;
+    float frame_max_inv_z, projection, frame_code_bias;
     ZbEdge* ed;
     ZbHit hits[MAX_SPAN_INTERSECTIONS];
 
@@ -942,6 +956,10 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
 
     frame_max_inv_z = ZBuffer_PrepareInvZ(vtx, vcount, zbfs_vertices.inv_z);
     ZBuffer_SetScaleForFrame(frame_max_inv_z);
+    /* Sortir des calculs par face les constantes de projection et de biais. */
+    projection = FIXED_TO_FLOAT(s_global_proj_scale_fixed);
+    zbfs_inv_projection = (projection > 0.0f) ? 1.0f / projection : 0.0f;
+    frame_code_bias = biased ? zbuffer_scale * ZB_Z_BIAS : 0.0f;
 
     for (i = 0; i < vcount; i++) {
 
@@ -975,7 +993,9 @@ static void ZBuffer_RenderCore(Model3D* model, int biased)
         n = faces->vertex_count[f];
         offt = faces->vertex_indices_ptr[f];
         zsrc = (biased && faces->plane_d[f] > 0) ? zbfs_vertices.vzq_b : zbfs_vertices.vzq;
-        ZBuffer_SetPlane(&zbfs_face_plane[f], vtx, faces, f, zsrc, zbfs_faces.face_nudge[f]);
+        ZBuffer_SetPlane(&zbfs_face_plane[f], vtx, faces, f, zsrc,
+                         zbfs_faces.face_nudge[f],
+                         (biased && faces->plane_d[f] > 0) ? frame_code_bias : 0.0f);
         ed = zbfs_edge_buf + offt;
 
         for (k = 0; k < n; k++, ed++) {

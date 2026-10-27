@@ -7860,10 +7860,10 @@ Appels internes directs : aucun repéré.
 
 ### ZBuffer_SetPlane
 
-Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 535.
+Définition : [zbuffer_fullscreen.c](zbuffer_fullscreen.c), ligne 534.
 
 ```c
-static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge)
+static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge, float code_bias)
 ```
 
 **Rôle :**
@@ -7872,23 +7872,15 @@ Préparer un plan affine de codes Z dans le repère écran.
 
 **Paramètres :**
 
-[entrée] vtx/faces, f valide non vide, zsrc par sommet, nudge en codes
+[entrée] vtx/faces : coordonnées et plans observateur à jour ; f valide. zsrc : codes des sommets pour le repli dégénéré ; nudge : rapprochement en codes ; code_bias : biais déjà converti en codes, nul sans rapprochement.
 
 **Retour :**
 
-Aucun.
-
-**Sorties et effets de bord :**
-
-*p
+Aucun ; écrit *p, avec pan et gradients à douze bits fractionnaires.
 
 **Fonctionnement :**
 
-Coordonnées avec pan et gradients à douze bits fractionnaires. Cherche un triangle projeté non dégénéré pour calculer gx/gy. Si aucun ne
-
-**convient, garde la profondeur constante du premier sommet. Hypothèse :**
-
-face plane ; les codes quantifiés des autres sommets peuvent ne pas appartenir exactement au même plan après arrondi.
+Réutilise le plan observateur de Newell calculé par calculateFaceDepths : pour le rayon écran (u,v,1), 1/z = -(a*u+b*v+c)/d. Les coordonnées projetées arrondies servent uniquement à choisir l’ancrage, jamais à reconstruire les gradients. Un plan passant par l’observateur ou une projection non positive conserve la profondeur constante de repli. Le biais et la quantification sont appliqués après le calcul du plan. Les coefficients conservent leur échelle entière commune, qui se simplifie dans les rapports : les conversions intermédiaires en double et les divisions par 65536 sont supprimées. L’inverse de projection et le biais en codes sont préparés une fois par vue ; il reste une division flottante par face.
 
 Appels internes directs : aucun repéré.
 

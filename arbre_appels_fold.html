@@ -3258,19 +3258,15 @@
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBuffer_Shutdown" title="Libérer les ressources du rendu plein écran direct."><code>ZBuffer_Shutdown</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_SetEdgeFlags">Contrat dans le dictionnaire</a></p></div></details>
-<details class="function" id="fn-ZBuffer_SetPlane"><summary><code>ZBuffer_SetPlane</code><span class="muted">zbuffer_fullscreen.c · ligne 535</span></summary><div class="body"><pre><code>static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge)</code></pre>
+<details class="function" id="fn-ZBuffer_SetPlane"><summary><code>ZBuffer_SetPlane</code><span class="muted">zbuffer_fullscreen.c · ligne 534</span></summary><div class="body"><pre><code>static void ZBuffer_SetPlane(ZbPlane *p, VertexArrays3D *vtx, FaceArrays3D *faces, int f, UWORD16 *zsrc, int nudge, float code_bias)</code></pre>
 <h4>Rôle :</h4>
 <p>Préparer un plan affine de codes Z dans le repère écran.</p>
 <h4>Paramètres :</h4>
-<p>[entrée] vtx/faces, f valide non vide, zsrc par sommet, nudge en codes</p>
+<p>[entrée] vtx/faces : coordonnées et plans observateur à jour ; f valide. zsrc : codes des sommets pour le repli dégénéré ; nudge : rapprochement en codes ; code_bias : biais déjà converti en codes, nul sans rapprochement.</p>
 <h4>Retour :</h4>
-<p>Aucun.</p>
-<h4>Sorties et effets de bord :</h4>
-<p>*p</p>
+<p>Aucun ; écrit *p, avec pan et gradients à douze bits fractionnaires.</p>
 <h4>Fonctionnement :</h4>
-<p>Coordonnées avec pan et gradients à douze bits fractionnaires. Cherche un triangle projeté non dégénéré pour calculer gx/gy. Si aucun ne</p>
-<h4>convient, garde la profondeur constante du premier sommet. Hypothèse :</h4>
-<p>face plane ; les codes quantifiés des autres sommets peuvent ne pas appartenir exactement au même plan après arrondi.</p>
+<p>Réutilise le plan observateur de Newell calculé par calculateFaceDepths : pour le rayon écran (u,v,1), 1/z = -(a*u+b*v+c)/d. Les coordonnées projetées arrondies servent uniquement à choisir l’ancrage, jamais à reconstruire les gradients. Un plan passant par l’observateur ou une projection non positive conserve la profondeur constante de repli. Le biais et la quantification sont appliqués après le calcul du plan. Les coefficients conservent leur échelle entière commune, qui se simplifie dans les rapports : les conversions intermédiaires en double et les divisions par 65536 sont supprimées. L’inverse de projection et le biais en codes sont préparés une fois par vue ; il reste une division flottante par face.</p>
 <h4>Appels internes directs :</h4><p>Aucun repéré dans le périmètre.</p>
 <h4>Appelants internes repérés :</h4><p><a href="#fn-ZBuffer_RenderCore" title="Rendre les surfaces par balayage plein écran direct."><code>ZBuffer_RenderCore</code></a></p>
 <p><a href="zbuffer_fullscreen.c">Consulter le fichier source</a> · <a href="dictionary.md#fn-ZBuffer_SetPlane">Contrat dans le dictionnaire</a></p></div></details>

@@ -163,6 +163,7 @@ This image couldn't have been generated with painters as they are implemented he
 - Back-face culling selects the fast or biased rendering path as appropriate
 - **`U`**: clears the offscreen framebuffer, calls `renderModelFullscreenZBuffer_offscreen(model)`, then copies the completed image to SHGR with `Offscreen_FlushToScreen()`
 - **`Open-Apple + U`**: calls `renderModelFullscreenZBuffer(model)` and renders directly to the SHGR screen instead of using the offscreen framebuffer
+- Direct rendering derives reciprocal-depth gradients from the existing observer-space Newell plane, rather than fitting quantized depths to rounded screen vertices. This avoids unstable depth slopes on thin projected faces; surfaces and outlines use the same plane. Common coefficient scaling cancels in the plane ratios; projection reciprocals and depth bias are prepared once per frame, leaving one floating-point division per face
 - **Memory**: the full depth buffer requires 128,000 bytes; offscreen output adds a 32,000-byte pixel buffer, in addition to preparation and scratch storage. Rendering speed must be measured on the target machine
 - All three renderers use `ZBuffer_SpanRun` in `zbuffer_common.c` for the depth test and packed-pixel output. Preparation, storage, edge handling, and output destination still differ; equal-depth fragments do not replace the existing pixel
 
