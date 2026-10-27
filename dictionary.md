@@ -165,7 +165,7 @@ Inclus conditionnellement par engine.c et dépend de GeoV3_Mul32x32. La somme se
 
 Fournir les méthodes de chevauchement des faces projetées et les points de comparaison employés par les outils d'ordre. Distinguer géométrie continue, heuristiques avec seuils et échantillonnage raster.
 
-Regroupe le cache de projection fractionnaire, les prédicats de points et segments, le clipping SH, les régions QuickDraw, les variantes Simple/V1/V2/Max/Fixed64/Raster et leur benchmark. Le choix runtime est indépendant du wrapper V2 à sélection compilée.
+Regroupe le cache de projection fractionnaire, les prédicats de points et segments, le clipping SH, les régions QuickDraw, les variantes Simple/V1/V2/Max/Fixed64/Raster. Le choix runtime est indépendant du wrapper V2 à sélection compilée.
 
 Inclus par engine.c ; utilise les types communs, les caches d'ordre et les routines de ray casting déclarées auparavant. Le clipping par demi-plans exige un clip convexe pour le cas général. Le chemin nommé centroïde QuickDraw rend un centre de bbox. Buffers et diagnostics partagés, non réentrants.
 
@@ -233,11 +233,48 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 
 À inclure après les types nécessaires du projet. Les coordonnées des primitives non clippées doivent être valides. Les pointeurs de lignes ne sont utilisables qu'après initialisation réussie ; le masque d'arêtes est emprunté, jamais possédé par le module.
 
+### animation.c
+
+Rotation horizontale précalculée : rectangle central adapté au modèle, de 28160 pixels au maximum, 4 à 60 images paires suivant la mémoire, rendu Z-buffer direct, transitions compilées 65C816 et arrêt clavier. La vue et l’ordre des faces sont restaurés à la sortie.
+
+Inclus à la fin de `engine.c`, segment `ANIM`. La touche `/` lance le précalcul puis la boucle ; toute frappe annule la préparation entre deux images ou arrête la lecture. Les angles V/W, couleurs, culling et shading courants sont conservés ; seul H parcourt un tour complet. Le cadrage temporaire choisit une largeur et une hauteur adaptées aux proportions projetées, sans modifier les sommets objet ni déformer le modèle.
+
+`AnimationFrame` possède deux handles verrouillés : les pixels (14080 octets au maximum) et le code de transition (49354 octets au maximum), avec les compteurs `blocks/bytes`. Les handles ne traversent pas de banque et excluent la mémoire spéciale. `ANIM_MIN_FRAMES=4`, `ANIM_MAX_FRAMES=60`, `ANIM_MEMORY_RESERVE=131072` gardent une réserve après allocation du moteur Z-buffer. Le budget est conservateur et peut diminuer en cas de fragmentation ; moins de quatre images annule la commande. Les pixels sont libérés avant la lecture.
+
+`ANIM_WORDS_PER_BLOCK=96` limite chaque bloc exécutable ; `ANIM_BLOCKS_PER_VBL=8` regroupe jusqu’à 768 mots par rafraîchissement. La lecture attend donc `max(2, ceil(blocks/8))` VBL au lieu de `max(2, blocks)`. `ANIM_HOLD_VBLS=2` conserve la cadence minimale. Les grandes transitions restent progressives : aucun basculement atomique de page écran. La première image est appliquée tant que l’écran texte masque le SHGR.
+
+Chaque transition compare les mots 16 bits en un seul parcours avec pointeurs et adresse vidéo incrémentaux. La recherche préalable de bbox est supprimée : elle relisait l’image sans réduire les écritures déjà limitées aux mots différents. Les effacements de l’ancienne silhouette restent inclus ; avec `previous=NULL`, seuls les mots non noirs sont émis sur un écran préalablement effacé. Le code émis, le découpage en blocs et le rendu sont identiques à la version précédente.
+
+Le code contient uniquement `LDA #mot`, `STA long` vers la zone centrale `$E1:2000`, puis `RTL`. Aucune pile détournée ni activation du shadowing ; interruptions masquées uniquement pendant l’exécution d’un bloc, pas pendant l’attente clavier/VBL. Le regroupement réduit les attentes mais ne garantit pas une transition entièrement invisible au balayage : la synchronisation doit être vérifiée sur GS ou émulateur.
+
+La progression utilise `WriteCString` après rétablissement du périphérique Text Tools capturé avant `startgraph` ; le périphérique graphique est rétabli avant la lecture et avant `endgraph`. Chaque image et chaque transition ont leur compteur. La cadence dépend des VBL et du nombre de blocs, pas directement de la fréquence CPU tant que chaque bloc termine à temps. Le cadrage agrandi consomme davantage de mémoire et peut réduire le nombre d’images retenues.
+
+Le délai visible est initialisé par `ANIM_VIEW_TICKS=12`, soit 0,2 seconde à 60 ticks/s, quel que soit le nombre de vues. `animation_hold_view` attend après chaque image complètement transférée, y compris la première une fois visible. Le transfert s’ajoute au délai ; aucune durée globale du tour n’est imposée. Le clavier reste scruté à chaque VBL et la soustraction non signée accepte le rebouclage du compteur. La préparation affiche le délai choisi.
+
+Après la réservation du maximum réellement possible, `animation_select_frames` propose un nombre pair entre 4 et ce maximum (60 au plus). Entrée choisit le maximum réellement alloué ; 0 annule. Les saisies impaires, hors limites, trop longues ou non numériques sont rejetées. Les handles excédentaires sont libérés avant le précalcul. L’agrandissement peut réduire ce maximum et la commande est refusée si quatre vues ne tiennent pas en mémoire : message d’impossibilité, attente d’une touche, libération et retour au programme. Le calcul de la réserve de code est promu en unsigned long dès la multiplication : le maximum de code dépasse un int signé ORCA/C.
+
+La saisie standard affiche une seule fois la plage disponible puis `Number of views [maximum]:`. Le maximum et la valeur proposée sont issus de la mémoire libre, de la marge de 128 Kio et des allocations effectivement réussies ; aucune valeur par défaut fixe de 12 vues. La capture se termine au plus à la ligne 181. La consigne graphique est placée en dessous, à la ligne de base 195, hors des transferts.
+
+Les sorties Text Tools utilisent CR/LF : CR seul revient en début de ligne sans descendre et provoque la superposition des messages. Le début de préparation et l’écran de saisie sont effacés par `WriteChar(12)` ; la réponse est suivie d’un CR/LF explicite.
+
+La saisie numérique utilise `getkeypress` avec écho explicite par `WriteChar`, sans `fgets` ni écho stdin. Retour arrière et Suppr effacent le dernier caractère ; Entrée valide ou accepte le maximum par défaut, Échap ou 0 annule. Le contexte graphique actif ne contrôle donc plus l’écho de ce champ.
+
+Pendant la lecture seulement, droite (21) et haut (11) diminuent le délai courant d’un tick ; gauche (8) et bas (10) l’augmentent. `animation_handle_key` sature entre `ANIM_MIN_VIEW_TICKS=1` et `ANIM_MAX_VIEW_TICKS=120`. Le délai est réinitialisé à 12 ticks à chaque commande. Les flèches sont traitées pendant les attentes VBL, y compris entre blocs ; elles ne déclenchent ni arrêt ni nouveau calcul. Toute autre touche arrête. En préparation, toute touche conserve le rôle d’annulation. Le nombre d’images ne modifie jamais le délai choisi.
+
+Contrainte ORCA/C des attentes clavier/VBL : après `SEP #$20`, placer `REP #$30` avant `PLP`. `PLP` restaure P à l’exécution mais ne rétablit pas l’état de largeur connu de l’assembleur. Sans REP explicite, l’épilogue C peut encoder un ADC immédiat sur un octet alors que le CPU lit deux octets, absorber le TCS suivant et corrompre le retour de pile. Régression reproduite en exécution 65816 sous iix avec signaux clavier/VBL injectés ; après correction, 1000 retours, chemins flèches/arrêt et 89 blocs exécutables passent. Ce test ne mesure pas la synchronisation vidéo réelle.
+
+Optimisation de préparation : réutiliser la vue zéro rendue pour initialiser les buffers avant le calcul du budget mémoire, au lieu de la rendre une seconde fois après la saisie. Les sorties texte ne modifient pas les pixels SHGR de cette vue. `animation_compile_transition` lit des UWORD16 alignés provenant des handles et émet les mêmes octets en un passage. Vérification de 2000 transitions avant/après ; test natif 65816 d’une transition dense, avec chemins VBL/clavier et exécution des blocs identiques : 17494521 → 6503852 cycles (−62,8 % sur ce test, pas sur toute la préparation). Les temps du rendu du modèle restent à mesurer sur GS.
+
+Le cadrage d’animation calcule les extrêmes projetés de chaque sommet sur un tour horizontal continu, pour les angles V/W courants. Le rayon sphérique ne sert plus qu’à garantir une distance sûre. Dans le repère tournant u/v, la perspective s’écrit (a*u+b*v+c)/(depth+g*u), sur le cercle u²+v²=x²+y² ; `animation_axis_extent` résout les tangences analytiquement. Pour chaque largeur multiple de huit entre 8 et 320, la hauteur paire maximale est limitée à 164 et à une surface de 28160 pixels. L’échelle candidate est le minimum des échelles admissibles en X et Y, avec deux pixels de marge ; retenir le rectangle offrant la plus grande échelle uniforme. Elle exploite ainsi au mieux le rectangle retenu sans déformer, avec deux pixels de marge. Aucun rendu ni boucle sur les angles n’est ajouté au cadrage ; les coordonnées objet restent identiques ; les réserves par image sont calculées avec les dimensions retenues. Les mots réellement modifiés peuvent être plus nombreux quand le modèle grandit. Vérifications : 1 080 000 projections fixes sur hôte et 10 800 en exécution native 65816, angles H complets et V/W variés, sans découpe.
+
+Les macros `ANIM_LEFT/TOP/ROW_BYTES/FRAME_BYTES/FRAME_WORDS/CODE_BYTES` utilisent `animation_width/animation_height`, choisis avant le rendu initial et les allocations. La surface maximale est réduite de 34816 à 28160 pixels (−19 %) et la hauteur de 184 à 164 lignes. La capture se termine au plus à 181 pour laisser la consigne à 195 hors du transfert. Sur `models/a`, V=20°, W=0°, D=150 et normalisation standard : capture 224 × 124, rendu H=30° de 189 × 83 pixels contre 214 × 94 avec le précédent cadrage ; H=110° de 191 × 103. Les réserves valent 13888+48681 octets par vue. Vérification des projections sur le tour complet, génération de code sur quatre formats et exécution native du rectangle de A (73 blocs).
+
+Pendant la lecture, `Arrows: up/right +, down/left -` est dessiné en blanc via le périphérique graphique après restauration de SHGR, à (3,195). Le modèle et les transitions restent dans le rectangle de capture ; aucun effacement d’image ne touche cette consigne. La réduction de surface diminue le volume maximal de pixels et de code par vue ; la réduction du balayage visible doit être confirmée sur cible.
+
 ## Index alphabétique des fonctions
 
 - [add_vertex](#fn-add_vertex) — `engine.c` : Ajouter un sommet au repère objet du modèle.
 - [applyPalette](#fn-applyPalette) — `engine.c` : Installer une palette logicielle dans la table matérielle active numéro zéro.
-- [benchmark_projected_overlap_all](#fn-benchmark_projected_overlap_all) — `overlap_raster.c` : Comparer six méthodes sur toutes les paires et plusieurs orientations.
 - [calculateFaceDepths](#fn-calculateFaceDepths) — `engine.c` : Recalculer les métriques et plans observateur des faces de la vue courante.
 - [check_intersect](#fn-check_intersect) — `engine.c` : Examiner les intersections objet et tenter des découpages avant la visualisation.
 - [cleanup_list](#fn-cleanup_list) — `engine.c` : Compacter une liste cyclique d'indices en retirant les répétitions adjacentes.
@@ -353,7 +390,6 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [ordering_winding_store](#fn-ordering_winding_store) — `ordering_cache.c` : Mémoriser le double de l'aire orientée d'une face projetée.
 - [ordering_workspace](#fn-ordering_workspace) — `ordering_cache.c` : Obtenir un espace de travail partagé pour le clipping.
 - [orient_ll](#fn-orient_ll) — `overlap_raster.c` : Calculer l'orientation signée de trois points entiers A, B et C.
-- [overlap_bench_call](#fn-overlap_bench_call) — `overlap_raster.c` : Appeler une des six méthodes chronométrées du benchmark.
 - [overlap_cross_double](#fn-overlap_cross_double) — `overlap_raster.c` : Calculer le déterminant orienté de AB et AP en double.
 - [overlap_v2_edge_probes](#fn-overlap_v2_edge_probes) — `overlap_raster.c` : Chercher un point intérieur commun près du milieu des arêtes des deux faces.
 - [overlap_v2_point_in_face](#fn-overlap_v2_point_in_face) — `overlap_raster.c` : Classer un point double par rapport au contour projeté entier d'une face.
@@ -484,6 +520,25 @@ Expose la table de pointeurs de lignes, le cycle de vie du Z-buffer, la quantifi
 - [evaluate_face_crossings](#fn-evaluate_face_crossings) — `engine.c` : Compter les traversées d’une face et signaler une traversée strictement intérieure, avec un seul plan et un seul contour projeté temporaires.
 - [quickdraw_polygon_handle](#fn-quickdraw_polygon_handle) — `engine.c` : Réserver puis verrouiller le polygone QuickDraw commun aux rendus.
 
+- [animate_model_rotation](#fn-animate_model_rotation) — `animation.c` : précalculer un tour complet puis jouer ses transitions jusqu’au clavier.
+- [animation_compile_transition](#fn-animation_compile_transition) — `animation.c` : compiler les mots différents entre deux images centrales.
+- [animation_execute_block](#fn-animation_execute_block) — `animation.c` : exécuter un bloc de transition compilé dans un handle verrouillé.
+- [animation_fit](#fn-animation_fit) — `animation.c` : adapter cadrage et proportions de capture sans tronquer la rotation.
+- [animation_free_frames](#fn-animation_free_frames) — `animation.c` : libérer toutes les images et tous les blocs exécutables temporaires.
+- [animation_play_transition](#fn-animation_play_transition) — `animation.c` : afficher une transition compilée et respecter la cadence minimale.
+- [animation_render_frame](#fn-animation_render_frame) — `animation.c` : préparer et rendre une orientation, sans classement automatique.
+- [animation_reserve_frames](#fn-animation_reserve_frames) — `animation.c` : réserver un nombre pair d’images adapté à la mémoire réellement allouable.
+- [animation_stop_requested](#fn-animation_stop_requested) — `animation.c` : lire le clavier sans attente et acquitter une demande d’arrêt.
+- [animation_wait_vbl](#fn-animation_wait_vbl) — `animation.c` : attendre une nouvelle VBL en surveillant une demande d’arrêt.
+
+- [animation_hold_view](#fn-animation_hold_view) — `animation.c` : laisser la vue complète visible pendant sa durée minimale en ticks.
+
+- [animation_select_frames](#fn-animation_select_frames) — `animation.c` : choisir en mode texte le nombre pair de vues réellement réservable.
+
+- [animation_handle_key](#fn-animation_handle_key) — `animation.c` : régler le délai entre vues ou reconnaître une demande d'arrêt.
+
+- [animation_axis_extent](#fn-animation_axis_extent) — `animation.c` : borner exactement un axe projeté pendant une rotation horizontale.
+
 ## Contrats des fonctions
 
 <a id="fn-add_vertex"></a>
@@ -549,34 +604,6 @@ SetColorTable ; requiert QuickDraw actif et palettes déjà préparées.
 Le numéro sélectionne la source logicielle, pas le numéro de table destination.
 
 Appels internes directs : aucun repéré.
-
-<a id="fn-benchmark_projected_overlap_all"></a>
-
-### benchmark_projected_overlap_all
-
-Définition : [overlap_raster.c](overlap_raster.c), ligne 3618.
-
-```c
-static void benchmark_projected_overlap_all(Model3D *model, ObserverParams *params, int angle_count)
-```
-
-**Rôle :**
-
-Comparer six méthodes sur toutes les paires et plusieurs orientations.
-
-**Paramètres :**
-
-[entrée] model, params, angle_count proposé (10 si non positif), modifiable au clavier entre 1 et 10000.
-
-**Retour :**
-
-Aucun.
-
-**Fonctionnement :**
-
-Écrase overlap.all.txt. Génère des angles déterministes, recalcule les projections et métriques, chronomètre des blocs répétés hors écritures disque puis exporte décisions et contours pour référence externe. Les désaccords ne désignent pas à eux seuls la méthode correcte ; aucun oracle géométrique n'est exécuté ici. Les angles params sont restaurés à la fin, mais les tableaux de la dernière vue ne sont pas recalculés pour ces angles restaurés dans cette fonction.
-
-Appels internes directs : [calculateFaceDepths](arbre_appels.html#fn-calculateFaceDepths), [cos_deg_int](arbre_appels.html#fn-cos_deg_int), [FIXED_ROUND_TO_INT](arbre_appels.html#fn-FIXED_ROUND_TO_INT), [overlap_bench_call](arbre_appels.html#fn-overlap_bench_call), [sin_deg_int](arbre_appels.html#fn-sin_deg_int).
 
 <a id="fn-calculateFaceDepths"></a>
 
@@ -3346,7 +3373,7 @@ Aucun paramètre explicite.
 
 Possède le modèle et coordonne QuickDraw, palettes, sauvegarde SHGR et Z-buffers. Les labels séparent chargement (newmodel), retraitement géométrique (bigloop), redessin (loopReDraw/draw), attente clavier (getakey) et libération (end). Les données numériques restent dans le moteur ; les chaînes visibles de l'interface ne sont pas traduites dans cette révision des commentaires.
 
-Appels internes directs : [applyPalette](arbre_appels.html#fn-applyPalette), [benchmark_projected_overlap_all](arbre_appels.html#fn-benchmark_projected_overlap_all), [check_intersect](arbre_appels.html#fn-check_intersect), [colorChooser](arbre_appels.html#fn-colorChooser), [compute2DFromObserver](arbre_appels.html#fn-compute2DFromObserver), [computeOrientationShading](arbre_appels.html#fn-computeOrientationShading), [createModel3D](arbre_appels.html#fn-createModel3D), [destroyModel3D](arbre_appels.html#fn-destroyModel3D), [display_model_face_ids](arbre_appels.html#fn-display_model_face_ids), [DoColor](arbre_appels.html#fn-DoColor), [DoText](arbre_appels.html#fn-DoText), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [dumpFace2DCoordinates](arbre_appels.html#fn-dumpFace2DCoordinates), [dumpFaceEquationsCSV](arbre_appels.html#fn-dumpFaceEquationsCSV), [dumpSortedFaceIndices](arbre_appels.html#fn-dumpSortedFaceIndices), [frameInconclusivePairs](arbre_appels.html#fn-frameInconclusivePairs), [generate_random_colors](arbre_appels.html#fn-generate_random_colors), [getkeypress_openA](arbre_appels.html#fn-getkeypress_openA), [getObserverParams](arbre_appels.html#fn-getObserverParams), [initPalettes](arbre_appels.html#fn-initPalettes), [initScreenSaveBuffer](arbre_appels.html#fn-initScreenSaveBuffer), [inspect_face_pair_ui](arbre_appels.html#fn-inspect_face_pair_ui), [inspect_faces_order](arbre_appels.html#fn-inspect_faces_order), [keypress](arbre_appels.html#fn-keypress), [loadModel3D](arbre_appels.html#fn-loadModel3D), [normalize_deg](arbre_appels.html#fn-normalize_deg), [normalizeAutoFitDistanceTo150](arbre_appels.html#fn-normalizeAutoFitDistanceTo150), [Offscreen_Clear](arbre_appels.html#fn-Offscreen_Clear), [Offscreen_FlushToScreen](arbre_appels.html#fn-Offscreen_FlushToScreen), [Offscreen_Init](arbre_appels.html#fn-Offscreen_Init), [Offscreen_Shutdown](arbre_appels.html#fn-Offscreen_Shutdown), [processModelFast](arbre_appels.html#fn-processModelFast), [ReadPalette](arbre_appels.html#fn-ReadPalette), [renderModelFullscreenZBuffer](arbre_appels.html#fn-renderModelFullscreenZBuffer), [renderModelFullscreenZBuffer_offscreen](arbre_appels.html#fn-renderModelFullscreenZBuffer_offscreen), [renderModelScanlineZBuffer](arbre_appels.html#fn-renderModelScanlineZBuffer), [repair_geov3](arbre_appels.html#fn-repair_geov3), [restoreScreen](arbre_appels.html#fn-restoreScreen), [saveNextScreenshot](arbre_appels.html#fn-saveNextScreenshot), [saveScreen](arbre_appels.html#fn-saveScreen), [screen2Black](arbre_appels.html#fn-screen2Black), [select_overlap_method](arbre_appels.html#fn-select_overlap_method), [shgroff](arbre_appels.html#fn-shgroff), [show_help_pager](arbre_appels.html#fn-show_help_pager), [showFace](arbre_appels.html#fn-showFace), [ZBuffer_Init](arbre_appels.html#fn-ZBuffer_Init), [ZBuffer_Shutdown](arbre_appels.html#fn-ZBuffer_Shutdown).
+Appels internes directs : [animate_model_rotation](arbre_appels.html#fn-animate_model_rotation), [applyPalette](arbre_appels.html#fn-applyPalette), [check_intersect](arbre_appels.html#fn-check_intersect), [colorChooser](arbre_appels.html#fn-colorChooser), [compute2DFromObserver](arbre_appels.html#fn-compute2DFromObserver), [computeOrientationShading](arbre_appels.html#fn-computeOrientationShading), [createModel3D](arbre_appels.html#fn-createModel3D), [destroyModel3D](arbre_appels.html#fn-destroyModel3D), [display_model_face_ids](arbre_appels.html#fn-display_model_face_ids), [DoColor](arbre_appels.html#fn-DoColor), [DoText](arbre_appels.html#fn-DoText), [drawPolygons](arbre_appels.html#fn-drawPolygons), [drawPolygons_jitter](arbre_appels.html#fn-drawPolygons_jitter), [dumpFace2DCoordinates](arbre_appels.html#fn-dumpFace2DCoordinates), [dumpFaceEquationsCSV](arbre_appels.html#fn-dumpFaceEquationsCSV), [dumpSortedFaceIndices](arbre_appels.html#fn-dumpSortedFaceIndices), [frameInconclusivePairs](arbre_appels.html#fn-frameInconclusivePairs), [generate_random_colors](arbre_appels.html#fn-generate_random_colors), [getkeypress_openA](arbre_appels.html#fn-getkeypress_openA), [getObserverParams](arbre_appels.html#fn-getObserverParams), [initPalettes](arbre_appels.html#fn-initPalettes), [initScreenSaveBuffer](arbre_appels.html#fn-initScreenSaveBuffer), [inspect_face_pair_ui](arbre_appels.html#fn-inspect_face_pair_ui), [inspect_faces_order](arbre_appels.html#fn-inspect_faces_order), [keypress](arbre_appels.html#fn-keypress), [loadModel3D](arbre_appels.html#fn-loadModel3D), [normalize_deg](arbre_appels.html#fn-normalize_deg), [normalizeAutoFitDistanceTo150](arbre_appels.html#fn-normalizeAutoFitDistanceTo150), [Offscreen_Clear](arbre_appels.html#fn-Offscreen_Clear), [Offscreen_FlushToScreen](arbre_appels.html#fn-Offscreen_FlushToScreen), [Offscreen_Init](arbre_appels.html#fn-Offscreen_Init), [Offscreen_Shutdown](arbre_appels.html#fn-Offscreen_Shutdown), [processModelFast](arbre_appels.html#fn-processModelFast), [ReadPalette](arbre_appels.html#fn-ReadPalette), [renderModelFullscreenZBuffer](arbre_appels.html#fn-renderModelFullscreenZBuffer), [renderModelFullscreenZBuffer_offscreen](arbre_appels.html#fn-renderModelFullscreenZBuffer_offscreen), [renderModelScanlineZBuffer](arbre_appels.html#fn-renderModelScanlineZBuffer), [repair_geov3](arbre_appels.html#fn-repair_geov3), [restoreScreen](arbre_appels.html#fn-restoreScreen), [saveNextScreenshot](arbre_appels.html#fn-saveNextScreenshot), [saveScreen](arbre_appels.html#fn-saveScreen), [screen2Black](arbre_appels.html#fn-screen2Black), [select_overlap_method](arbre_appels.html#fn-select_overlap_method), [shgroff](arbre_appels.html#fn-shgroff), [show_help_pager](arbre_appels.html#fn-show_help_pager), [showFace](arbre_appels.html#fn-showFace), [ZBuffer_Init](arbre_appels.html#fn-ZBuffer_Init), [ZBuffer_Shutdown](arbre_appels.html#fn-ZBuffer_Shutdown).
 
 <a id="fn-move_element_remove_and_insert"></a>
 
@@ -4177,34 +4204,6 @@ Déterminant 64 bits, nul si colinéaires.
 Utilise le multiplicateur partagé de produits bruts ; signe positif pour C à gauche de AB dans le repère des coordonnées fournies.
 
 Appels internes directs : [fixed_product32_fast](arbre_appels.html#fn-fixed_product32_fast).
-
-<a id="fn-overlap_bench_call"></a>
-
-### overlap_bench_call
-
-Définition : [overlap_raster.c](overlap_raster.c), ligne 3578.
-
-```c
-static int overlap_bench_call(Model3D *model, int f1, int f2, int algorithm)
-```
-
-**Rôle :**
-
-Appeler une des six méthodes chronométrées du benchmark.
-
-**Paramètres :**
-
-[entrée] model, f1/f2 ; algorithm 0..5 : V1, original, Max, Fixed64, Raster, Raster x10.
-
-**Retour :**
-
-Booléen normalisé ; 0 pour numéro invalide.
-
-**Fonctionnement :**
-
-Cette numérotation diffère du menu runtime à sept choix qui inclut Simple.
-
-Appels internes directs : [projected_polygons_overlap_raster](arbre_appels.html#fn-projected_polygons_overlap_raster), [projected_polygons_overlap_raster_x10](arbre_appels.html#fn-projected_polygons_overlap_raster_x10), [projected_polygons_overlap_v1](arbre_appels.html#fn-projected_polygons_overlap_v1), [projected_polygons_overlap_v2_fixed64](arbre_appels.html#fn-projected_polygons_overlap_v2_fixed64), [projected_polygons_overlap_v2_max](arbre_appels.html#fn-projected_polygons_overlap_v2_max), [projected_polygons_overlap_v2_original](arbre_appels.html#fn-projected_polygons_overlap_v2_original).
 
 <a id="fn-overlap_cross_double"></a>
 
@@ -8033,3 +8032,393 @@ Handle verrouillé, ou NULL après le message d’échec historique.
 Réserve MAX_FACE_VERTICES points, y compris pour une première face isolée. Conserve la séquence de déverrouillage/verrouillage ; ne change ni le crayon, ni le port, ni le contenu du polygone. Appelé une seule fois par entrée de rendu, jamais dans le parcours des sommets.
 
 Appels internes directs : aucun repéré.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<a id="fn-animate_model_rotation"></a>
+
+### animate_model_rotation
+
+Définition : [animation.c](animation.c), ligne 593.
+
+```c
+static void animate_model_rotation(Model3D *model, const ObserverParams *params)
+```
+
+**Rôle :**
+
+précalculer un tour complet puis jouer ses transitions jusqu’au clavier.
+
+**Paramètres :**
+
+[entrée-sortie] model ; [entrée] params, vue initiale inchangée.
+
+**Retour :**
+
+aucun ; revient en texte, prêt pour le redessin normal.
+
+**Fonctionnement :**
+
+sauvegarder visibilité, pan, projection et distance ; réduire temporairement le modèle, ouvrir QuickDraw sans afficher les calculs, réserver les images selon la mémoire disponible et compiler chaque transition, y compris le retour de la dernière à la première. Libérer toutes les réserves sur chaque sortie et recalculer la vue initiale sans toucher à l’ordre corrigé des faces.
+
+Appels internes directs : [animation_compile_transition](arbre_appels.html#fn-animation_compile_transition), [animation_fit](arbre_appels.html#fn-animation_fit), [animation_free_frames](arbre_appels.html#fn-animation_free_frames), [animation_hold_view](arbre_appels.html#fn-animation_hold_view), [animation_play_transition](arbre_appels.html#fn-animation_play_transition), [animation_render_frame](arbre_appels.html#fn-animation_render_frame), [animation_reserve_frames](arbre_appels.html#fn-animation_reserve_frames), [animation_select_frames](arbre_appels.html#fn-animation_select_frames), [animation_stop_requested](arbre_appels.html#fn-animation_stop_requested), [DoText](arbre_appels.html#fn-DoText), [inspection_view_begin](arbre_appels.html#fn-inspection_view_begin), [inspection_view_end](arbre_appels.html#fn-inspection_view_end), [keypress](arbre_appels.html#fn-keypress), [normalize_deg](arbre_appels.html#fn-normalize_deg), [processModelFast](arbre_appels.html#fn-processModelFast), [screenClearTopLines](arbre_appels.html#fn-screenClearTopLines), [shgroff](arbre_appels.html#fn-shgroff), [ZBuffer_Init](arbre_appels.html#fn-ZBuffer_Init).
+
+<a id="fn-animation_axis_extent"></a>
+
+### animation_axis_extent
+
+Définition : [animation.c](animation.c), ligne 458.
+
+```c
+static float animation_axis_extent(float radial2, float depth, float a, float b, float c, float g)
+```
+
+**Rôle :**
+
+borner exactement un axe projeté pendant une rotation horizontale.
+
+**Paramètres :**
+
+[entrée] radial2=x*x+y*y ; depth=distance-sin(V)*z ; a, b, c définissent le numérateur a*u+b*v+c ; g définit le dénominateur depth+g*u.
+
+**Retour :**
+
+maximum de la valeur absolue du quotient pour u*u+v*v=radial2, ou -1 si la trajectoire peut atteindre le plan de l'observateur.
+
+**Fonctionnement :**
+
+les tangences du quotient au cercle donnent une équation quadratique. Avec A=depth²-radial2*g², la plus grande valeur absolue vaut (|depth*c-radial2*a*g| + sqrt(radial2*((depth*a-c*g)²+b²*A)))/A. Aucun échantillonnage angulaire ni traitement complet du modèle.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-animation_compile_transition"></a>
+
+### animation_compile_transition
+
+Définition : [animation.c](animation.c), ligne 226.
+
+```c
+static void animation_compile_transition(const unsigned char *previous, const unsigned char *next, AnimationFrame *frame)
+```
+
+**Rôle :**
+
+compiler les mots différents entre deux images centrales.
+
+**Paramètres :**
+
+[entrée] previous, ANIM_FRAME_BYTES octets, ou NULL pour un fond noir déjà effacé ; next, nouvelle image ; [entrée-sortie] frame, code réservé.
+
+**Retour :**
+
+aucun ; renseigne blocks et bytes dans frame.
+
+**Fonctionnement :**
+
+émettre A9 lo hi / 8F adresse24, soit LDA #mot / STA long. Conserver aussi les mots devenus noirs pour effacer l’ancienne silhouette. Comparer les mots 16 bits en un seul parcours, avec pointeurs et adresse vidéo incrémentaux. Chaque bloc plein occupe ANIM_BLOCK_BYTES ; zéro différence ne produit aucun bloc. Les réserves ANIM_CODE_BYTES couvrent le pire cas.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-animation_execute_block"></a>
+
+### animation_execute_block
+
+Définition : [animation.c](animation.c), ligne 188.
+
+```c
+static void animation_execute_block(unsigned long address)
+```
+
+**Rôle :**
+
+exécuter un bloc de transition compilé dans un handle verrouillé.
+
+**Paramètres :**
+
+[entrée] address, adresse far du début d’un bloc valide.
+
+**Retour :**
+
+aucun ; écrit uniquement les mots vidéo encodés dans le bloc.
+
+**Fonctionnement :**
+
+préparer un JSL auto-modifiant, imposer A/X/Y 16 bits, exécuter au plus ANIM_WORDS_PER_BLOCK écritures, puis restaurer le contexte. P, D et DBR préservés ; A/X/Y volatils. Interruptions masquées uniquement pendant ce court bloc. Le code généré termine par RTL et ne change pas S.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-animation_fit"></a>
+
+### animation_fit
+
+Définition : [animation.c](animation.c), ligne 484.
+
+```c
+static Fixed32 animation_fit(Model3D *model, ObserverParams *view)
+```
+
+**Rôle :**
+
+adapter cadrage et proportions de capture sans tronquer la rotation.
+
+**Paramètres :**
+
+[entrée] model ; [entrée-sortie] view, copie locale des paramètres.
+
+**Retour :**
+
+échelle 16.16, ou 0 pour géométrie nulle ou distance non représentable.
+
+**Fonctionnement :**
+
+le rayon maximal garantit une distance sûre. Pour chaque sommet, borner ensuite analytiquement x/z et y/z sur le tour complet avec les angles V/W courants. Parmi les rectangles de largeur multiple de huit, hauteur paire ≤164 et surface ≤28160 pixels, choisir la plus grande échelle uniforme avec deux pixels de marge. Ne pas déformer la géométrie objet.
+
+Appels internes directs : [animation_axis_extent](arbre_appels.html#fn-animation_axis_extent), [cos_deg_int](arbre_appels.html#fn-cos_deg_int), [sin_deg_int](arbre_appels.html#fn-sin_deg_int).
+
+<a id="fn-animation_free_frames"></a>
+
+### animation_free_frames
+
+Définition : [animation.c](animation.c), ligne 322.
+
+```c
+static void animation_free_frames(void)
+```
+
+**Rôle :**
+
+libérer toutes les images et tous les blocs exécutables temporaires.
+
+**Paramètres :**
+
+aucun. Retour : aucun.
+
+**Fonctionnement :**
+
+accepte les réserves partielles et remet chaque entrée à zéro.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-animation_handle_key"></a>
+
+### animation_handle_key
+
+Définition : [animation.c](animation.c), ligne 76.
+
+```c
+static int animation_handle_key(int key)
+```
+
+**Rôle :**
+
+régler le délai entre vues ou reconnaître une demande d'arrêt.
+
+**Paramètres :**
+
+[entrée] key, code clavier sur sept bits pendant la lecture.
+
+**Retour :**
+
+0 pour une flèche traitée, 1 pour toute autre touche (arrêt).
+
+**Fonctionnement :**
+
+droite/haut diminuent le délai d'un tick, gauche/bas l'augmentent ; saturer entre ANIM_MIN_VIEW_TICKS et ANIM_MAX_VIEW_TICKS. La modification prend effet pendant l'attente courante, sans recalcul 3D.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-animation_hold_view"></a>
+
+### animation_hold_view
+
+Définition : [animation.c](animation.c), ligne 304.
+
+```c
+static int animation_hold_view(void)
+```
+
+**Rôle :**
+
+laisser la vue complète visible pendant sa durée minimale en ticks.
+
+**Paramètres :**
+
+aucun ; animation_view_ticks définit le délai courant par vue.
+
+**Retour :**
+
+0 sur touche d'arrêt, 1 lorsque le délai est écoulé.
+
+**Fonctionnement :**
+
+mesurer les ticks réels, indépendamment de la fréquence CPU. Attendre les VBL en scrutant le clavier ; soustraction non signée pour accepter le rebouclage du compteur. Aucun temps de transfert n'est déduit de la durée pendant laquelle la vue terminée doit rester visible.
+
+Appels internes directs : [animation_wait_vbl](arbre_appels.html#fn-animation_wait_vbl).
+
+<a id="fn-animation_play_transition"></a>
+
+### animation_play_transition
+
+Définition : [animation.c](animation.c), ligne 277.
+
+```c
+static int animation_play_transition(const AnimationFrame *frame)
+```
+
+**Rôle :**
+
+afficher une transition compilée et respecter la cadence minimale.
+
+**Paramètres :**
+
+[entrée] frame, code et nombre de blocs valides.
+
+**Retour :**
+
+0 sur arrêt clavier, 1 après la transition.
+
+**Fonctionnement :**
+
+jusqu'à ANIM_BLOCKS_PER_VBL blocs par nouvelle VBL, puis attente pour atteindre ANIM_HOLD_VBLS. La borne limite les écritures à 768 mots par rafraîchissement ; les grandes transitions restent progressives.
+
+Appels internes directs : [animation_execute_block](arbre_appels.html#fn-animation_execute_block), [animation_wait_vbl](arbre_appels.html#fn-animation_wait_vbl).
+
+<a id="fn-animation_render_frame"></a>
+
+### animation_render_frame
+
+Définition : [animation.c](animation.c), ligne 555.
+
+```c
+static int animation_render_frame(Model3D *model, ObserverParams *view)
+```
+
+**Rôle :**
+
+préparer et rendre une orientation, sans classement automatique.
+
+**Paramètres :**
+
+[entrée-sortie] model ; [entrée] view, paramètres temporaires.
+
+**Retour :**
+
+1 si les bornes et les réserves du moteur sont valides, 0 sinon.
+
+**Fonctionnement :**
+
+vérifier le format des arêtes et le rectangle choisi, puis employer le Z-buffer direct existant. L’appelant maintient framePolyOnly=1 pour préserver la permutation du modèle pendant processModelFast.
+
+Appels internes directs : [processModelFast](arbre_appels.html#fn-processModelFast), [renderModelFullscreenZBuffer](arbre_appels.html#fn-renderModelFullscreenZBuffer), [screenClearTopLines](arbre_appels.html#fn-screenClearTopLines).
+
+<a id="fn-animation_reserve_frames"></a>
+
+### animation_reserve_frames
+
+Définition : [animation.c](animation.c), ligne 345.
+
+```c
+static int animation_reserve_frames(void)
+```
+
+**Rôle :**
+
+réserver un nombre pair d’images adapté à la mémoire réellement allouable.
+
+**Paramètres :**
+
+aucun. Retour : nombre pair de 4 à 60, ou 0 sur réserve insuffisante.
+
+**Fonctionnement :**
+
+conserver ANIM_MEMORY_RESERVE octets libres, prévoir le code maximal de chaque transition et réduire le nombre prévu si un handle échoue. Les réserves partielles restent possédées jusqu’à animation_free_frames.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-animation_select_frames"></a>
+
+### animation_select_frames
+
+Définition : [animation.c](animation.c), ligne 392.
+
+```c
+static int animation_select_frames(int maximum)
+```
+
+**Rôle :**
+
+choisir en mode texte le nombre pair de vues réellement réservable.
+
+**Paramètres :**
+
+[entrée] maximum, nombre pair de handles déjà alloués, au moins 4.
+
+**Retour :**
+
+nombre choisi entre 4 et maximum ; 0 pour annulation (0 ou Échap).
+
+**Fonctionnement :**
+
+proposer le maximum réellement réservé, accepter Entrée pour ce maximum, 0 pour annuler ; rejeter les nombres impairs et les saisies hors bornes ou contenant du texte résiduel. Effacer l'écran avant saisie ; séparer les lignes Text Tools par CR/LF. Lire getkeypress et afficher explicitement les caractères : ne pas dépendre de l'écho stdin pendant le contexte graphique. Retour arrière corrige, Échap annule. Ne possède aucun handle.
+
+Appels internes directs : [getkeypress](arbre_appels.html#fn-getkeypress).
+
+<a id="fn-animation_stop_requested"></a>
+
+### animation_stop_requested
+
+Définition : [animation.c](animation.c), ligne 101.
+
+```c
+static int animation_stop_requested(void)
+```
+
+**Rôle :**
+
+lire le clavier sans attente et acquitter une demande d’arrêt.
+
+**Paramètres :**
+
+aucun. Retour : 1 sur frappe, 0 sinon.
+
+**Fonctionnement :**
+
+accès matériels en 8 bits ; P est préservé, A volatil.
+
+Appels internes directs : aucun repéré.
+
+<a id="fn-animation_wait_vbl"></a>
+
+### animation_wait_vbl
+
+Définition : [animation.c](animation.c), ligne 137.
+
+```c
+static int animation_wait_vbl(void)
+```
+
+**Rôle :**
+
+attendre une nouvelle VBL en surveillant une demande d’arrêt.
+
+**Paramètres :**
+
+aucun. Retour : 1 si arrêt, 0 au début de la VBL suivante.
+
+**Fonctionnement :**
+
+en lecture, traiter les flèches puis reprendre l'attente ; toute autre touche arrête. En préparation, toute frappe annule. Sur GS, $C019 bit 7 vaut 1 à partir de la ligne 192. La zone animée se termine au plus à 181, avant le texte et ce signal. Attendre la fin d’une VBL déjà en cours ; ne pas compter plusieurs fois la même. P préservé, A volatil ; les interruptions restent autorisées en attente.
+
+Appels internes directs : [animation_handle_key](arbre_appels.html#fn-animation_handle_key).

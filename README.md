@@ -31,6 +31,8 @@ It is built around the painter's algorithm: faces are sorted and drawn back-to-f
 10. **Repair ordering**: Press `;` to review overlapping face pairs and accept or skip each correction proposed by the same core used by GEO V3.
 11. **Use Z-buffer rendering**: Press `O` for scanline rendering, `U` for full-screen offscreen rendering, or `Open-Apple + U` for direct full-screen rendering.
 
+12. **Animate a rotation**: Press `/`, choose the number of views allowed by available memory, then precompute and loop a horizontal turn. Right/Up speeds up playback, Left/Down slows it down, and any other key stops; any key cancels preparation between frames; your original view is restored.
+
 ### Why use this explorer/viewer?
 
 - It is optimized for the Apple IIGS hardware and demonstrates fixed-point 3D rendering techniques.
@@ -57,6 +59,7 @@ This image couldn't have been generated with painters as they are implemented he
 - `O`: optimized scanline Z-buffer mode
 - `U`: optimized full-screen Z-buffer mode using the offscreen framebuffer
 - `Open-Apple + U`: optimized full-screen Z-buffer mode rendered directly onscreen
+- `/`: precompute and loop a small horizontal rotation; arrows adjust speed, other keys stop
 - `8`: enable random fill colors and regenerate random color arrays; preserve the frame-color selection
 - `>`: choose fill color (interactive color chooser)
 - `<`: choose frame color, including "same as fill color" = no separate border (interactive color chooser)
@@ -170,6 +173,10 @@ This image couldn't have been generated with painters as they are implemented he
 - **Memory**: the full depth buffer requires 128,000 bytes; offscreen output adds a 32,000-byte pixel buffer, in addition to preparation and scratch storage. Rendering speed must be measured on the target machine
 - All three renderers use `ZBuffer_SpanRun` in `zbuffer_common.c` for the depth test and packed-pixel output. Preparation, storage, edge handling, and output destination still differ; equal-depth fragments do not replace the existing pixel
 
+Press `/` to precompute a full horizontal rotation using the direct Z-buffer renderer and the current colors, shading, culling, vertical angle, and screen rotation. The temporary capture is a centered rectangle fitted to the model’s projected proportions over the entire horizontal turn. Forty candidate widths (multiples of eight, up to 320 pixels) compete under a 164-line height limit and a 28,160-pixel area budget; the best uniform scale retains two pixels of safety margin. This avoids constraining wide models to a square. For `models/a` at default parameters, the chosen capture is 224 × 124: the H=30° model is about 189 × 83 pixels, reduced from the previous 214 × 94 to ease visible sweeping. The graphics screen shows `Arrows: up/right +, down/left -` at the bottom, outside the captured/transferred area. More pixels may change between frames. The original view, scale, pan, visibility and face ordering are restored afterward. Preparation reports every frame and transition on the text screen through Text Tools, with the text output device explicitly restored while QuickDraw remains active; any key cancels between frames. Playback loops until a key other than an arrow is pressed.
+
+Before precomputation, the text screen asks for an even frame count between **4 and the maximum actually allocated** (up to 60), allowing a conservative 128 KiB reserve after renderer allocation. Keyboard input uses the existing hardware key reader with explicit Text Tools echo, independent of stdin: Backspace/Delete edits the last character, Enter validates, and Escape cancels. The input screen is cleared first and Text Tools lines use explicit CR/LF separators to avoid overwriting preceding messages. The standard `Number of views [maximum]:` prompt defaults to that memory-derived maximum; press Enter to accept it, or enter 0 to cancel. There is no fixed 12-view default. Invalid counts are rejected, and unused handles are released immediately. If fewer than four views can be reserved, an explanatory message waits for a keypress before returning to the original view. A complete image needs at most 14080 bytes; each transition reserves at most 49354 bytes, with actual reservations computed from the chosen rectangle of executable code. Transition compilation compares 16-bit words in one pass using advancing pointers and video addresses, skipping every unchanged word while retaining erasures. This replaces a redundant bounding-box scan and emits identical 65C816 immediate loads and direct video stores. The initial render used to allocate renderer scratch storage is reused as view zero, eliminating one complete rendering pass per command. The initial image assumes a cleared black screen and writes only nonblack words, while still hidden behind the text screen. Pixel copies are freed before playback. Up to eight blocks of 96 words are applied per refresh, rather than one block per refresh. Each transition takes at least two VBLs; changes exceeding 768 words can still span several refreshes. No geometry is computed during playback. Each completed view initially stays visible for `ANIM_VIEW_TICKS=12` ticks (0.2 seconds), regardless of the number of frames. During playback, Right/Up decreases the hold by one tick, Left/Down increases it, within 1 to 120 ticks; changes take effect during the current wait without recomputation. Each new animation resets the hold to 12 ticks. Transfer time is additional; no fixed total rotation duration is imposed. Other keys interrupt the hold and stop playback. The chosen delay is printed during preparation. The larger capture uses more memory and can reduce the selected frame count. The keyboard/VBL assembly explicitly restores 16-bit assembler mode before returning to C, so ORCA encodes the C epilogue with the correct operand widths. Playback is tied to the video refresh, so changing the emulated CPU speed does not change its rate while each block completes in time. This is not an atomic screen-page flip; target testing is required to assess smoothness. The transfer strategy follows the change-list approach discussed in [Apple IIGS Technical Note 70](https://apple2.gs/technotes/tn-iigs-070/).
+
 ### Mathematical Implementation
 
 **Fixed-Point Arithmetic:**
@@ -222,7 +229,7 @@ Observer-space culling eliminates faces oriented away from the viewer:
 
 4. **Shared Kernels and Caches**: Candidate filtering, cached pair/overlap results, fixed-point assembly helpers, and a common Z-buffer span kernel avoid repeated work
 
-The batch CSV benchmark of the ten rendering methods has been archived as disabled code in `old/chutier.c`, together with its 50 KiB limit and repetition settings. It is no longer compiled or mapped to a key. Existing CSV files and analysis reports remain available.
+The batch CSV benchmark of the ten rendering methods has been archived as disabled code in `old/chutier.c`, together with its 50 KiB limit and repetition settings. It is no longer compiled or mapped to a key. Existing CSV files and analysis reports remain available. The six-method projected-overlap benchmark, its private helper and its former `/` benchmark command are also archived in `old/chutier.c`; the overlap algorithms remain available through `(`.
 
 ## User Guide
 
@@ -281,6 +288,7 @@ The batch CSV benchmark of the ten rendering methods has been archived as disabl
 | `O` | SCANLINE Z-BUFFER | Optimized 16-bit Z-buffer renderer using a single 320-pixel depth line |
 | `U` | FULLSCREEN Z-BUFFER | Optimized full-screen Z-buffer rendered through the offscreen framebuffer, then copied to SHGR |
 | `Open-Apple + U` | FULLSCREEN Z-BUFFER (ONSCREEN) | Optimized full-screen Z-buffer rendered directly to SHGR |
+| `/` | PRECOMPUTED ROTATION | Horizontal rotation loop; Right/Up faster, Left/Down slower; other keys stop; any key cancels preparation |
 
 #### Color Management
 | Key | Action | Description |
@@ -312,7 +320,6 @@ Pressing `>` or `<` opens an on-screen color picker over a black background:
 | `Q` | Inspect Face Pair | Interactive face-pair inspector for ordering anomalies |
 | `;` | Repair Face Order | Review and accept/skip exchanges proposed by the GEO V3 core |
 | `(` | Select Overlap Method | Choose Simple, V1, V2 original, V2Max, Fixed64, Raster, or Raster ×10 |
-| `/` | Benchmark Overlap | Compare the six non-Simple overlap methods |
 | `I` | Toggle Inconclusive | Show/hide inconclusive face pairs with frames |
 | `L` | Face ID Labels | Display face numbers centered on each polygon |
 | `F` | Export Debug Data | Dump `Faces3D.csv`, `Faces2D.txt`, and `FacesOrder.txt` |
@@ -428,6 +435,7 @@ Below is a summary table of the most useful keys and the **C functions** they in
 | `O` | Optimized scanline Z-buffer render | `renderModelScanlineZBuffer` |
 | `U` | Full-screen Z-buffer via offscreen buffer | `Offscreen_Clear` → `renderModelFullscreenZBuffer_offscreen` → `Offscreen_FlushToScreen` |
 | `Open-Apple + U` | Full-screen Z-buffer directly onscreen | `renderModelFullscreenZBuffer` |
+| `/` | Precompute and play horizontal rotation | `animate_model_rotation` in `animation.c`, included by `engine.c` |
 | `>` | Choose fill color | `colorChooser(0, &palette, ...)` — sets `user_fill_color`; also triggers `generate_random_colors` if random is chosen |
 | `<` | Choose frame color | `colorChooser(1, &palette, ...)` — sets `user_frame_color`; also triggers `generate_random_colors` if random is chosen |
 | `8` | Random fill colors | sets `user_fill_color` to random mode + `generate_random_colors`; keeps frame selection |
@@ -446,7 +454,7 @@ Below is a summary table of the most useful keys and the **C functions** they in
 | `D` / `S` | Inspect faces before / after | `inspect_faces_order(model, &params, 0)` / `inspect_faces_order(model, &params, 1)` |
 | `Q` | Inspect face pair | `inspect_face_pair_ui` |
 | `;` | Interactive repair | `repair_geov3` → `geov3_run` with confirmation callback |
-| `(` / `/` | Select / benchmark overlap | Runtime overlap-method selection / benchmark |
+| `(` | Select overlap method | Runtime overlap-method selection |
 | `F` | Debug CSV export | `dumpFaceEquationsCSV` + `dumpFace2DCoordinates` + `dumpSortedFaceIndices` |
 | `N` | Load new model | `destroyModel3D` + model creation/loading; resets FAST mode and initial view settings |
 | `H` | Paged help | `show_help_pager` |
@@ -520,6 +528,7 @@ python DEPLOY.py
 - **Geometry and Ordering**: `engine.c`, `declare.c`, `ordering_cache.c`, `dony.c`, and `overlap_raster.c` hold structures, transforms, sorting, relation tests, and overlap implementations. `geo_relation_asm.c`, `face_depth_asm.c`, and `dony_scan_asm.c` supply specialized 65C816 kernels.
 - **Rendering**: `color.c` manages palettes and color selection. `zbuffer_common.c` shares preparation and span rendering across `zbuffer_scanline.c`, `zbuffer_fullscreen.c`, and `zbuffer_fullscreen_offscreen.c`. `screen_save_restore.c` shares screen/view support.
 - **Inspection**: S/D, Q, V, repair, and face labels share inspection-state save/restore helpers. The old pair-debug mode has been removed; normal inspection and file exports remain.
+- **Animation**: `animation.c`, included at the end of `engine.c`, owns temporary frame handles and compiled direct-video transitions; the `ANIM` segment keeps the command separate from rendering kernels.
 - **Segments**: Named segments such as `transform`, `ordering`, `rendering`, `inspection`, and `ZBUF` organize target memory banks. `#pragma optimize 1` enables compiler optimization.
 - **Companion Documentation**: [dictionary.md](dictionary.md), [call tree](arbre_appels.html), and [foldable call tree](arbre_appels_fold.html) describe the current functions and call relationships in French.
 

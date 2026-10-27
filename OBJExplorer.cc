@@ -480,6 +480,11 @@ segment "main";
                 goto getakey;
 
 
+            /* Précalculer une rotation compacte, puis la lire jusqu’au clavier. */
+            case '/': /* Touche : / */
+                animate_model_rotation(model, &params);
+                goto loopReDraw;
+
             /* Inspecter les échanges GEO V3 depuis la permutation courante. */
             case 59: /* Touche : ; */
                 if (model == NULL) { printf("No model loaded\n"); goto loopReDraw; }

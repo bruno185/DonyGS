@@ -8280,6 +8280,7 @@ static void show_help_pager(void) {
         "6: Painter = CORRECT (homebrew implementation)",
         "7: Painter = CORRECTV2 (homebrew implementation V2)",
         "O: Render scanline Z-Buffer (alternative to painter algorithm)",
+        "/: Rotation; arrows adjust speed, other keys stop playback",
         "8: Both colors RANDOM mode (quick)",
         "9: Reset colors, palette 0, and shading OFF",
         ">: Choose fill color",
@@ -8481,3 +8482,6 @@ void saveNextScreenshot(void) {
     }
     saveSHGRAsRawPic(fname);
 }
+
+/* Animation temporaire : dépend des moteurs et sauvegardes définis ci-dessus. */
+#include "animation.c"
